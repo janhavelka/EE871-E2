@@ -13,7 +13,7 @@
 
 #include <stdint.h>
 
-#include "examples/common/I2cTransport.h"
+#include "examples/common/E2Transport.h"
 
 namespace board {
 
@@ -25,25 +25,33 @@ namespace board {
 // passing explicit values to Config structs in your application.
 // ====================================================================
 
-/// @brief I2C SDA pin (data line). Example default for ESP32-S2/S3.
-static constexpr int I2C_SDA = 8;
+/// @brief E2 DATA pin. Example default for ESP32-S2/S3.
+static constexpr int E2_DATA = 8;
 
-/// @brief I2C SCL pin (clock line). Example default for ESP32-S2/S3.
-static constexpr int I2C_SCL = 9;
+/// @brief E2 CLOCK pin. Example default for ESP32-S2/S3.
+static constexpr int E2_CLOCK = 9;
 
-/// @brief I2C clock frequency in Hz.
-static constexpr uint32_t I2C_FREQ_HZ = 400000;
-
-/// @brief I2C timeout in milliseconds for example transactions.
-static constexpr uint16_t I2C_TIMEOUT_MS = 50;
+/// @brief E2 timing defaults (spec: >=100 us high/low).
+static constexpr uint16_t E2_CLOCK_LOW_US = 100;
+static constexpr uint16_t E2_CLOCK_HIGH_US = 100;
+static constexpr uint32_t E2_BIT_TIMEOUT_US = 25000;
+static constexpr uint32_t E2_BYTE_TIMEOUT_US = 35000;
+static constexpr uint32_t E2_WRITE_DELAY_MS = 150;
+static constexpr uint32_t E2_INTERVAL_WRITE_DELAY_MS = 300;
 
 /// @brief LED pin. Example default for ESP32-S3 (RGB LED on GPIO48).
 /// Set to -1 to disable.
 static constexpr int LED = 48;
 
-/// @brief Initialize I2C for examples using the default config.
-inline bool initI2c() {
-  return transport::initWire(I2C_SDA, I2C_SCL, I2C_FREQ_HZ, I2C_TIMEOUT_MS);
+/// @brief Access to E2 pin storage.
+inline transport::E2Pins& e2Pins() {
+  static transport::E2Pins pins{E2_CLOCK, E2_DATA};
+  return pins;
+}
+
+/// @brief Initialize E2 pins for examples using the default config.
+inline bool initE2() {
+  return transport::initE2(e2Pins(), E2_CLOCK, E2_DATA);
 }
 
 }  // namespace board

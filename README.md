@@ -1,13 +1,13 @@
-# {DEVICE_NAME} Driver Library
+# EE871 E2 Driver Library
 
-Production-grade {DEVICE_NAME} I2C driver for ESP32 (Arduino/PlatformIO).
+Production-grade EE871 CO2 sensor driver for the E2 bus on ESP32 (Arduino/PlatformIO).
 
 ## Features
 
-- **Injected I2C transport** — no Wire dependency in library code
-- **Health monitoring** — automatic state tracking (READY/DEGRADED/OFFLINE)
-- **Deterministic behavior** — no unbounded loops, no heap allocations
-- **Non-blocking architecture** — tick-based state machine for async operations
+- **E2 bus HAL injection** - no Wire/I2C dependency in library code
+- **Health monitoring** - READY/DEGRADED/OFFLINE tracking
+- **Deterministic behavior** - bounded loops, explicit timeouts
+- **Managed synchronous** - blocking transfers with spec-compliant limits
 
 ## Installation
 
@@ -16,128 +16,106 @@ Production-grade {DEVICE_NAME} I2C driver for ESP32 (Arduino/PlatformIO).
 Add to `platformio.ini`:
 
 ```ini
-lib_deps = 
-  https://github.com/your-username/{DEVICE}.git
+lib_deps =
+  https://github.com/your-username/ee871-e2.git
 ```
 
 ### Manual
 
-Copy `include/{DEVICE}/` and `src/` to your project.
+Copy `include/EE871/` and `src/` to your project.
 
 ## Quick Start
 
 ```cpp
-#include <Wire.h>
-#include "{DEVICE}/{DEVICE}.h"
+#include <Arduino.h>
+#include "EE871/EE871.h"
 
-// Transport callbacks
-{NAMESPACE}::Status i2cWrite(uint8_t addr, const uint8_t* data, size_t len,
-                             uint32_t timeoutMs, void* user) {
-  Wire.beginTransmission(addr);
-  Wire.write(data, len);
-  return Wire.endTransmission() == 0 
-    ? {NAMESPACE}::Status::Ok() 
-    : {NAMESPACE}::Status::Error({NAMESPACE}::Err::I2C_ERROR, "Write failed");
+struct E2BusPins {
+  int scl;
+  int sda;
+};
+
+static E2BusPins bus{9, 8};
+
+static void setScl(bool level, void* user) {
+  auto* pins = static_cast<E2BusPins*>(user);
+  digitalWrite(pins->scl, level ? HIGH : LOW);
 }
 
-{NAMESPACE}::Status i2cWriteRead(uint8_t addr, const uint8_t* tx, size_t txLen,
-                                 uint8_t* rx, size_t rxLen, uint32_t timeoutMs, void* user) {
-  Wire.beginTransmission(addr);
-  Wire.write(tx, txLen);
-  if (Wire.endTransmission(false) != 0) {
-    return {NAMESPACE}::Status::Error({NAMESPACE}::Err::I2C_ERROR, "Write failed");
-  }
-  if (Wire.requestFrom(addr, rxLen) != rxLen) {
-    return {NAMESPACE}::Status::Error({NAMESPACE}::Err::I2C_ERROR, "Read failed");
-  }
-  for (size_t i = 0; i < rxLen; i++) {
-    rx[i] = Wire.read();
-  }
-  return {NAMESPACE}::Status::Ok();
+static void setSda(bool level, void* user) {
+  auto* pins = static_cast<E2BusPins*>(user);
+  digitalWrite(pins->sda, level ? HIGH : LOW);
 }
 
-{NAMESPACE}::{DEVICE} device;
+static bool readScl(void* user) {
+  auto* pins = static_cast<E2BusPins*>(user);
+  return digitalRead(pins->scl) != 0;
+}
+
+static bool readSda(void* user) {
+  auto* pins = static_cast<E2BusPins*>(user);
+  return digitalRead(pins->sda) != 0;
+}
+
+static void delayUs(uint32_t us, void* user) {
+  (void)user;
+  delayMicroseconds(us);
+}
+
+ee871::EE871 sensor;
 
 void setup() {
   Serial.begin(115200);
-  Wire.begin(8, 9);  // SDA, SCL
-  
-  {NAMESPACE}::Config cfg;
-  cfg.i2cWrite = i2cWrite;
-  cfg.i2cWriteRead = i2cWriteRead;
-  cfg.i2cAddress = 0x00;  // Your device address
-  
-  auto status = device.begin(cfg);
+  pinMode(bus.scl, OUTPUT_OPEN_DRAIN);
+  pinMode(bus.sda, OUTPUT_OPEN_DRAIN);
+  digitalWrite(bus.scl, HIGH);
+  digitalWrite(bus.sda, HIGH);
+
+  ee871::Config cfg;
+  cfg.setScl = setScl;
+  cfg.setSda = setSda;
+  cfg.readScl = readScl;
+  cfg.readSda = readSda;
+  cfg.delayUs = delayUs;
+  cfg.busUser = &bus;
+  cfg.deviceAddress = 0;
+
+  auto status = sensor.begin(cfg);
   if (!status.ok()) {
     Serial.printf("Init failed: %s\n", status.msg);
     return;
   }
-  
-  Serial.println("Device initialized!");
+
+  Serial.println("Device initialized");
 }
 
 void loop() {
-  device.tick(millis());
-  
-  // Your code here
+  sensor.tick(millis());
+
+  uint16_t ppm = 0;
+  if (sensor.readCo2Average(ppm).ok()) {
+    Serial.printf("CO2: %u ppm\n", ppm);
+  }
+
+  delay(1000);
 }
 ```
 
 ## Health Monitoring
 
-The driver tracks I2C communication health:
-
 ```cpp
-// Check state
-if (device.state() == {NAMESPACE}::DriverState::OFFLINE) {
-  Serial.println("Device offline!");
-  device.recover();  // Try to reconnect
+if (sensor.state() == ee871::DriverState::OFFLINE) {
+  sensor.recover();
 }
 
-// Get statistics
 Serial.printf("Failures: %u consecutive, %lu total\n",
-              device.consecutiveFailures(), device.totalFailures());
+              sensor.consecutiveFailures(),
+              static_cast<unsigned long>(sensor.totalFailures()));
 ```
-
-### Driver States
-
-| State | Description |
-|-------|-------------|
-| `UNINIT` | `begin()` not called or `end()` called |
-| `READY` | Operational, no recent failures |
-| `DEGRADED` | 1+ failures, below offline threshold |
-| `OFFLINE` | Too many consecutive failures |
-
-## API Reference
-
-### Lifecycle
-
-- `Status begin(const Config& config)` — Initialize driver
-- `void tick(uint32_t nowMs)` — Process pending operations
-- `void end()` — Shutdown driver
-
-### Diagnostics
-
-- `Status probe()` — Check device presence (no health tracking)
-- `Status recover()` — Attempt recovery from DEGRADED/OFFLINE
-
-### State
-
-- `DriverState state()` — Current driver state
-- `bool isOnline()` — True if READY or DEGRADED
-
-### Health
-
-- `uint32_t lastOkMs()` — Timestamp of last success
-- `uint32_t lastErrorMs()` — Timestamp of last failure
-- `Status lastError()` — Most recent error
-- `uint8_t consecutiveFailures()` — Failures since last success
-- `uint32_t totalFailures()` — Lifetime failure count
-- `uint32_t totalSuccess()` — Lifetime success count
 
 ## Examples
 
-- `01_basic_bringup_cli/` — Interactive CLI for testing
+- `examples/01_basic_bringup_cli/` - Interactive CLI for testing
 
 ## License
 

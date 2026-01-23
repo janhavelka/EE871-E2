@@ -1,0 +1,637 @@
+/// @file EE871.cpp
+/// @brief Implementation of the EE871 E2 driver
+
+#include "EE871/EE871.h"
+
+#include <limits>
+
+namespace ee871 {
+namespace {
+
+static constexpr uint32_t kPollStepUs = 5;
+
+inline void setScl(const Config& cfg, bool level) {
+  cfg.setScl(level, cfg.busUser);
+}
+
+inline void setSda(const Config& cfg, bool level) {
+  cfg.setSda(level, cfg.busUser);
+}
+
+inline bool readScl(const Config& cfg) {
+  return cfg.readScl(cfg.busUser);
+}
+
+inline bool readSda(const Config& cfg) {
+  return cfg.readSda(cfg.busUser);
+}
+
+inline void delayUs(const Config& cfg, uint32_t us, uint32_t* elapsedUs) {
+  cfg.delayUs(us, cfg.busUser);
+  if (elapsedUs != nullptr) {
+    *elapsedUs += us;
+  }
+}
+
+static Status waitSclHigh(const Config& cfg, uint32_t* elapsedUs) {
+  uint32_t waitedUs = 0;
+  while (!readScl(cfg)) {
+    if (waitedUs >= cfg.bitTimeoutUs) {
+      return Status::Error(Err::TIMEOUT, "Clock stretch timeout", static_cast<int32_t>(waitedUs));
+    }
+    if (elapsedUs != nullptr && (*elapsedUs + kPollStepUs) > cfg.byteTimeoutUs) {
+      return Status::Error(Err::TIMEOUT, "Byte timeout", static_cast<int32_t>(*elapsedUs));
+    }
+    delayUs(cfg, kPollStepUs, elapsedUs);
+    waitedUs += kPollStepUs;
+  }
+  return Status::Ok();
+}
+
+static Status e2Start(const Config& cfg) {
+  setSda(cfg, true);
+  setScl(cfg, true);
+  Status st = waitSclHigh(cfg, nullptr);
+  if (!st.ok()) {
+    return st;
+  }
+  delayUs(cfg, cfg.startHoldUs, nullptr);
+  setSda(cfg, false);
+  delayUs(cfg, cfg.startHoldUs, nullptr);
+  setScl(cfg, false);
+  delayUs(cfg, cfg.clockLowUs, nullptr);
+  return Status::Ok();
+}
+
+static Status e2Stop(const Config& cfg) {
+  setScl(cfg, false);
+  delayUs(cfg, cfg.clockLowUs, nullptr);
+  setSda(cfg, false);
+  delayUs(cfg, cfg.stopHoldUs, nullptr);
+  setScl(cfg, true);
+  Status st = waitSclHigh(cfg, nullptr);
+  if (!st.ok()) {
+    return st;
+  }
+  delayUs(cfg, cfg.stopHoldUs, nullptr);
+  setSda(cfg, true);
+  delayUs(cfg, cfg.stopHoldUs, nullptr);
+  return Status::Ok();
+}
+
+static Status writeBit(const Config& cfg, bool bit, uint32_t* elapsedUs) {
+  setScl(cfg, false);
+  setSda(cfg, bit);
+  delayUs(cfg, cfg.clockLowUs, elapsedUs);
+  setScl(cfg, true);
+  Status st = waitSclHigh(cfg, elapsedUs);
+  if (!st.ok()) {
+    return st;
+  }
+  delayUs(cfg, cfg.clockHighUs, elapsedUs);
+  setScl(cfg, false);
+  return Status::Ok();
+}
+
+static Status readBit(const Config& cfg, bool& bit, uint32_t* elapsedUs) {
+  setScl(cfg, false);
+  setSda(cfg, true);
+  delayUs(cfg, cfg.clockLowUs, elapsedUs);
+  setScl(cfg, true);
+  Status st = waitSclHigh(cfg, elapsedUs);
+  if (!st.ok()) {
+    return st;
+  }
+  const uint32_t sampleDelay = cfg.clockHighUs / 2;
+  delayUs(cfg, sampleDelay, elapsedUs);
+  bit = readSda(cfg);
+  delayUs(cfg, cfg.clockHighUs - sampleDelay, elapsedUs);
+  setScl(cfg, false);
+  return Status::Ok();
+}
+
+static Status writeByte(const Config& cfg, uint8_t value, uint32_t* elapsedUs) {
+  for (uint8_t mask = 0x80; mask != 0; mask >>= 1) {
+    Status st = writeBit(cfg, (value & mask) != 0, elapsedUs);
+    if (!st.ok()) {
+      return st;
+    }
+  }
+  return Status::Ok();
+}
+
+static Status readByte(const Config& cfg, uint8_t& value, uint32_t* elapsedUs) {
+  value = 0;
+  for (uint8_t mask = 0x80; mask != 0; mask >>= 1) {
+    bool bit = false;
+    Status st = readBit(cfg, bit, elapsedUs);
+    if (!st.ok()) {
+      return st;
+    }
+    if (bit) {
+      value |= mask;
+    }
+  }
+  return Status::Ok();
+}
+
+static Status readAck(const Config& cfg, bool& acked, uint32_t* elapsedUs) {
+  setScl(cfg, false);
+  setSda(cfg, true);
+  delayUs(cfg, cfg.clockLowUs, elapsedUs);
+  setScl(cfg, true);
+  Status st = waitSclHigh(cfg, elapsedUs);
+  if (!st.ok()) {
+    return st;
+  }
+  const uint32_t sampleDelay = cfg.clockHighUs / 2;
+  delayUs(cfg, sampleDelay, elapsedUs);
+  acked = !readSda(cfg);
+  delayUs(cfg, cfg.clockHighUs - sampleDelay, elapsedUs);
+  setScl(cfg, false);
+  return Status::Ok();
+}
+
+static Status sendAck(const Config& cfg, bool ack, uint32_t* elapsedUs) {
+  setScl(cfg, false);
+  setSda(cfg, !ack);
+  delayUs(cfg, cfg.clockLowUs, elapsedUs);
+  setScl(cfg, true);
+  Status st = waitSclHigh(cfg, elapsedUs);
+  if (!st.ok()) {
+    return st;
+  }
+  delayUs(cfg, cfg.clockHighUs, elapsedUs);
+  setScl(cfg, false);
+  setSda(cfg, true);
+  return Status::Ok();
+}
+
+static uint8_t calcPecRead(uint8_t controlByte, uint8_t dataByte) {
+  return static_cast<uint8_t>((controlByte + dataByte) & 0xFF);
+}
+
+static uint8_t calcPecWrite(uint8_t controlByte, uint8_t addressByte, uint8_t dataByte) {
+  return static_cast<uint8_t>((controlByte + addressByte + dataByte) & 0xFF);
+}
+
+static void sleepMs(const Config& cfg, uint32_t delayMs) {
+  for (uint32_t i = 0; i < delayMs; ++i) {
+    cfg.delayUs(1000, cfg.busUser);
+  }
+}
+
+} // namespace
+
+Status EE871::begin(const Config& config) {
+  if (config.setScl == nullptr || config.setSda == nullptr ||
+      config.readScl == nullptr || config.readSda == nullptr ||
+      config.delayUs == nullptr) {
+    return Status::Error(Err::INVALID_CONFIG, "Missing E2 callbacks");
+  }
+  if (config.deviceAddress > cmd::DEVICE_ADDRESS_MAX) {
+    return Status::Error(Err::INVALID_CONFIG, "Invalid device address");
+  }
+  if (config.clockLowUs < 100 || config.clockHighUs < 100) {
+    return Status::Error(Err::INVALID_CONFIG, "Clock timing below spec");
+  }
+  if (config.bitTimeoutUs == 0 || config.byteTimeoutUs == 0) {
+    return Status::Error(Err::INVALID_CONFIG, "Timeouts must be non-zero");
+  }
+
+  _config = config;
+  _initialized = false;
+  _driverState = DriverState::UNINIT;
+  _nowMs = 0;
+  _lastOkMs = 0;
+  _lastErrorMs = 0;
+  _lastError = Status::Ok();
+  _consecutiveFailures = 0;
+  _totalFailures = 0;
+  _totalSuccess = 0;
+
+  uint8_t low = 0;
+  uint8_t high = 0;
+  const uint8_t controlLow = cmd::makeControlRead(cmd::MAIN_TYPE_LO, _config.deviceAddress);
+  const uint8_t controlHigh = cmd::makeControlRead(cmd::MAIN_TYPE_HI, _config.deviceAddress);
+
+  Status st = _readControlByteRaw(controlLow, low);
+  if (!st.ok()) {
+    return st;
+  }
+  st = _readControlByteRaw(controlHigh, high);
+  if (!st.ok()) {
+    return st;
+  }
+
+  const uint16_t group = static_cast<uint16_t>(low) | (static_cast<uint16_t>(high) << 8);
+  if (group != cmd::SENSOR_GROUP_ID) {
+    return Status::Error(Err::DEVICE_NOT_FOUND, "Unexpected group id", group);
+  }
+
+  _initialized = true;
+  _driverState = DriverState::READY;
+  return Status::Ok();
+}
+
+void EE871::tick(uint32_t nowMs) {
+  _nowMs = nowMs;
+}
+
+void EE871::end() {
+  _initialized = false;
+  _driverState = DriverState::UNINIT;
+}
+
+Status EE871::probe() {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
+
+  uint8_t low = 0;
+  uint8_t high = 0;
+  const uint8_t controlLow = cmd::makeControlRead(cmd::MAIN_TYPE_LO, _config.deviceAddress);
+  const uint8_t controlHigh = cmd::makeControlRead(cmd::MAIN_TYPE_HI, _config.deviceAddress);
+
+  Status st = _readControlByteRaw(controlLow, low);
+  if (!st.ok()) {
+    return st;
+  }
+  st = _readControlByteRaw(controlHigh, high);
+  if (!st.ok()) {
+    return st;
+  }
+
+  const uint16_t group = static_cast<uint16_t>(low) | (static_cast<uint16_t>(high) << 8);
+  if (group != cmd::SENSOR_GROUP_ID) {
+    return Status::Error(Err::DEVICE_NOT_FOUND, "Unexpected group id", group);
+  }
+  return Status::Ok();
+}
+
+Status EE871::recover() {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
+  uint16_t group = 0;
+  Status st = readGroup(group);
+  if (st.ok()) {
+    return Status::Ok();
+  }
+  return st;
+}
+
+Status EE871::readControlByte(uint8_t mainCommandNibble, uint8_t& data) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
+  if (mainCommandNibble > 0x0F) {
+    return Status::Error(Err::INVALID_PARAM, "Invalid main command");
+  }
+  const uint8_t control = cmd::makeControlRead(mainCommandNibble, _config.deviceAddress);
+  return _readControlByteTracked(control, data);
+}
+
+Status EE871::readU16(uint8_t mainCommandLow, uint8_t mainCommandHigh, uint16_t& value) {
+  uint8_t low = 0;
+  uint8_t high = 0;
+  Status st = readControlByte(mainCommandLow, low);
+  if (!st.ok()) {
+    return st;
+  }
+  st = readControlByte(mainCommandHigh, high);
+  if (!st.ok()) {
+    return st;
+  }
+  value = static_cast<uint16_t>(low) | (static_cast<uint16_t>(high) << 8);
+  return Status::Ok();
+}
+
+Status EE871::setCustomPointer(uint16_t address) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
+  const uint8_t control = cmd::makeControlWrite(cmd::MAIN_CUSTOM_PTR, _config.deviceAddress);
+  const uint8_t addrHigh = static_cast<uint8_t>(address >> 8);
+  const uint8_t addrLow = static_cast<uint8_t>(address & 0xFF);
+  return _writeCommandTracked(control, addrHigh, addrLow);
+}
+
+Status EE871::customRead(uint8_t address, uint8_t& data) {
+  return customRead(address, &data, 1);
+}
+
+Status EE871::customRead(uint8_t address, uint8_t* buf, size_t len) {
+  if (buf == nullptr || len == 0) {
+    return Status::Error(Err::INVALID_PARAM, "Invalid buffer");
+  }
+  Status st = setCustomPointer(address);
+  if (!st.ok()) {
+    return st;
+  }
+
+  for (size_t i = 0; i < len; ++i) {
+    st = readControlByte(cmd::MAIN_CUSTOM_PTR, buf[i]);
+    if (!st.ok()) {
+      return st;
+    }
+  }
+  return Status::Ok();
+}
+
+Status EE871::customWrite(uint8_t address, uint8_t value) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
+  if (address == cmd::CUSTOM_INTERVAL_L || address == cmd::CUSTOM_INTERVAL_H) {
+    uint8_t other = 0;
+    const uint8_t otherAddr = (address == cmd::CUSTOM_INTERVAL_L)
+                                  ? cmd::CUSTOM_INTERVAL_H
+                                  : cmd::CUSTOM_INTERVAL_L;
+    Status st = customRead(otherAddr, other);
+    if (!st.ok()) {
+      return st;
+    }
+    const uint16_t interval = (address == cmd::CUSTOM_INTERVAL_L)
+                                  ? static_cast<uint16_t>(value) |
+                                        (static_cast<uint16_t>(other) << 8)
+                                  : static_cast<uint16_t>(other) |
+                                        (static_cast<uint16_t>(value) << 8);
+    return writeMeasurementInterval(interval);
+  }
+
+  const uint8_t control = cmd::makeControlWrite(cmd::MAIN_CUSTOM_WRITE, _config.deviceAddress);
+  Status st = _writeCommandTracked(control, address, value);
+  if (!st.ok()) {
+    return st;
+  }
+
+  sleepMs(_config, _config.writeDelayMs);
+
+  uint8_t verify = 0;
+  st = customRead(address, verify);
+  if (!st.ok()) {
+    return st;
+  }
+  if (verify != value) {
+    return Status::Error(Err::E2_ERROR, "Write verify failed", verify);
+  }
+  return Status::Ok();
+}
+
+Status EE871::writeMeasurementInterval(uint16_t intervalDeciSeconds) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
+
+  const uint8_t control = cmd::makeControlWrite(cmd::MAIN_CUSTOM_WRITE, _config.deviceAddress);
+  const uint8_t low = static_cast<uint8_t>(intervalDeciSeconds & 0xFF);
+  const uint8_t high = static_cast<uint8_t>(intervalDeciSeconds >> 8);
+
+  Status st = _writeCommandTracked(control, cmd::CUSTOM_INTERVAL_L, low);
+  if (!st.ok()) {
+    return st;
+  }
+  st = _writeCommandTracked(control, cmd::CUSTOM_INTERVAL_H, high);
+  if (!st.ok()) {
+    return st;
+  }
+
+  sleepMs(_config, _config.intervalWriteDelayMs);
+
+  uint8_t verifyLow = 0;
+  uint8_t verifyHigh = 0;
+  st = customRead(cmd::CUSTOM_INTERVAL_L, verifyLow);
+  if (!st.ok()) {
+    return st;
+  }
+  st = customRead(cmd::CUSTOM_INTERVAL_H, verifyHigh);
+  if (!st.ok()) {
+    return st;
+  }
+  const uint16_t verify = static_cast<uint16_t>(verifyLow) |
+                          (static_cast<uint16_t>(verifyHigh) << 8);
+  if (verify != intervalDeciSeconds) {
+    return Status::Error(Err::E2_ERROR, "Interval verify failed", verify);
+  }
+  return Status::Ok();
+}
+
+Status EE871::readGroup(uint16_t& group) {
+  Status st = readU16(cmd::MAIN_TYPE_LO, cmd::MAIN_TYPE_HI, group);
+  if (!st.ok()) {
+    return st;
+  }
+  if (group != cmd::SENSOR_GROUP_ID) {
+    return Status::Error(Err::DEVICE_NOT_FOUND, "Unexpected group id", group);
+  }
+  return Status::Ok();
+}
+
+Status EE871::readSubgroup(uint8_t& subgroup) {
+  Status st = readControlByte(cmd::MAIN_TYPE_SUB, subgroup);
+  if (!st.ok()) {
+    return st;
+  }
+  if (subgroup != cmd::SENSOR_SUBGROUP_ID) {
+    return Status::Error(Err::DEVICE_NOT_FOUND, "Unexpected subgroup id", subgroup);
+  }
+  return Status::Ok();
+}
+
+Status EE871::readAvailableMeasurements(uint8_t& bits) {
+  return readControlByte(cmd::MAIN_AVAIL_MEAS, bits);
+}
+
+Status EE871::readStatus(uint8_t& status) {
+  return readControlByte(cmd::MAIN_STATUS, status);
+}
+
+Status EE871::readErrorCode(uint8_t& code) {
+  return customRead(cmd::CUSTOM_ERROR_CODE, code);
+}
+
+Status EE871::readCo2Fast(uint16_t& ppm) {
+  return readU16(cmd::MAIN_MV3_LO, cmd::MAIN_MV3_HI, ppm);
+}
+
+Status EE871::readCo2Average(uint16_t& ppm) {
+  return readU16(cmd::MAIN_MV4_LO, cmd::MAIN_MV4_HI, ppm);
+}
+
+Status EE871::_readControlByteRaw(uint8_t controlByte, uint8_t& data) {
+  Status st = e2Start(_config);
+  if (!st.ok()) {
+    return st;
+  }
+
+  uint32_t elapsedUs = 0;
+  st = writeByte(_config, controlByte, &elapsedUs);
+  if (!st.ok()) {
+    e2Stop(_config);
+    return st;
+  }
+
+  bool acked = false;
+  st = readAck(_config, acked, &elapsedUs);
+  if (!st.ok()) {
+    e2Stop(_config);
+    return st;
+  }
+  if (!acked) {
+    e2Stop(_config);
+    return Status::Error(Err::NACK, "Control byte NACK");
+  }
+
+  elapsedUs = 0;
+  st = readByte(_config, data, &elapsedUs);
+  if (!st.ok()) {
+    e2Stop(_config);
+    return st;
+  }
+  st = sendAck(_config, true, &elapsedUs);
+  if (!st.ok()) {
+    e2Stop(_config);
+    return st;
+  }
+
+  uint8_t pec = 0;
+  elapsedUs = 0;
+  st = readByte(_config, pec, &elapsedUs);
+  if (!st.ok()) {
+    e2Stop(_config);
+    return st;
+  }
+  st = sendAck(_config, false, &elapsedUs);
+  if (!st.ok()) {
+    e2Stop(_config);
+    return st;
+  }
+
+  e2Stop(_config);
+
+  const uint8_t expected = calcPecRead(controlByte, data);
+  if (pec != expected) {
+    return Status::Error(Err::PEC_MISMATCH, "PEC mismatch", pec);
+  }
+  return Status::Ok();
+}
+
+Status EE871::_readControlByteTracked(uint8_t controlByte, uint8_t& data) {
+  Status st = _readControlByteRaw(controlByte, data);
+  return _updateHealth(st);
+}
+
+Status EE871::_writeCommandRaw(uint8_t controlByte, uint8_t addressByte, uint8_t dataByte) {
+  Status st = e2Start(_config);
+  if (!st.ok()) {
+    return st;
+  }
+
+  uint32_t elapsedUs = 0;
+  st = writeByte(_config, controlByte, &elapsedUs);
+  if (!st.ok()) {
+    e2Stop(_config);
+    return st;
+  }
+  bool acked = false;
+  st = readAck(_config, acked, &elapsedUs);
+  if (!st.ok()) {
+    e2Stop(_config);
+    return st;
+  }
+  if (!acked) {
+    e2Stop(_config);
+    return Status::Error(Err::NACK, "Control byte NACK");
+  }
+
+  elapsedUs = 0;
+  st = writeByte(_config, addressByte, &elapsedUs);
+  if (!st.ok()) {
+    e2Stop(_config);
+    return st;
+  }
+  st = readAck(_config, acked, &elapsedUs);
+  if (!st.ok()) {
+    e2Stop(_config);
+    return st;
+  }
+  if (!acked) {
+    e2Stop(_config);
+    return Status::Error(Err::NACK, "Address byte NACK");
+  }
+
+  elapsedUs = 0;
+  st = writeByte(_config, dataByte, &elapsedUs);
+  if (!st.ok()) {
+    e2Stop(_config);
+    return st;
+  }
+  st = readAck(_config, acked, &elapsedUs);
+  if (!st.ok()) {
+    e2Stop(_config);
+    return st;
+  }
+  if (!acked) {
+    e2Stop(_config);
+    return Status::Error(Err::NACK, "Data byte NACK");
+  }
+
+  const uint8_t pec = calcPecWrite(controlByte, addressByte, dataByte);
+  elapsedUs = 0;
+  st = writeByte(_config, pec, &elapsedUs);
+  if (!st.ok()) {
+    e2Stop(_config);
+    return st;
+  }
+  st = readAck(_config, acked, &elapsedUs);
+  if (!st.ok()) {
+    e2Stop(_config);
+    return st;
+  }
+  if (!acked) {
+    e2Stop(_config);
+    return Status::Error(Err::NACK, "PEC NACK");
+  }
+
+  e2Stop(_config);
+  return Status::Ok();
+}
+
+Status EE871::_writeCommandTracked(uint8_t controlByte, uint8_t addressByte, uint8_t dataByte) {
+  Status st = _writeCommandRaw(controlByte, addressByte, dataByte);
+  return _updateHealth(st);
+}
+
+Status EE871::_updateHealth(const Status& st) {
+  if (!_initialized) {
+    return st;
+  }
+
+  if (st.ok()) {
+    _lastOkMs = _nowMs;
+    _consecutiveFailures = 0;
+    if (_totalSuccess != std::numeric_limits<uint32_t>::max()) {
+      _totalSuccess++;
+    }
+    _driverState = DriverState::READY;
+  } else {
+    _lastErrorMs = _nowMs;
+    _lastError = st;
+    if (_totalFailures != std::numeric_limits<uint32_t>::max()) {
+      _totalFailures++;
+    }
+    if (_consecutiveFailures != std::numeric_limits<uint8_t>::max()) {
+      _consecutiveFailures++;
+    }
+    if (_consecutiveFailures >= _config.offlineThreshold) {
+      _driverState = DriverState::OFFLINE;
+    } else {
+      _driverState = DriverState::DEGRADED;
+    }
+  }
+
+  return st;
+}
+
+} // namespace ee871

@@ -22,7 +22,7 @@ src/                    - Implementation (.cpp)
 examples/
   01_*/
   common/               - Example-only helpers (Log.h, BoardConfig.h, E2Transport.h,
-                          E2Scanner.h, CommandHandler.h)
+                          E2Diagnostics.h, BuildConfig.h)
 platformio.ini
 library.json
 README.md

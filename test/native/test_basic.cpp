@@ -1,5 +1,5 @@
 /// @file test_basic.cpp
-/// @brief Basic unit tests for {DEVICE_NAME} driver
+/// @brief Basic unit tests for EE871 driver
 
 #include <cstdio>
 #include <cassert>
@@ -13,10 +13,10 @@ SerialClass Serial;
 TwoWire Wire;
 
 // Include driver
-#include "{NAMESPACE}/Status.h"
-#include "{NAMESPACE}/Config.h"
+#include "EE871/Status.h"
+#include "EE871/Config.h"
 
-using namespace {NAMESPACE};
+using namespace ee871;
 
 // ============================================================================
 // Test Helpers
@@ -52,9 +52,9 @@ TEST(status_ok) {
 }
 
 TEST(status_error) {
-  Status st = Status::Error(Err::I2C_ERROR, "Test error", 42);
+  Status st = Status::Error(Err::E2_ERROR, "Test error", 42);
   ASSERT_FALSE(st.ok());
-  ASSERT_EQ(st.code, Err::I2C_ERROR);
+  ASSERT_EQ(st.code, Err::E2_ERROR);
   ASSERT_EQ(st.detail, 42);
 }
 
@@ -66,9 +66,18 @@ TEST(status_in_progress) {
 
 TEST(config_defaults) {
   Config cfg;
-  ASSERT_EQ(cfg.i2cWrite, nullptr);
-  ASSERT_EQ(cfg.i2cWriteRead, nullptr);
-  ASSERT_EQ(cfg.i2cTimeoutMs, 50);
+  ASSERT_EQ(cfg.setScl, nullptr);
+  ASSERT_EQ(cfg.setSda, nullptr);
+  ASSERT_EQ(cfg.readScl, nullptr);
+  ASSERT_EQ(cfg.readSda, nullptr);
+  ASSERT_EQ(cfg.delayUs, nullptr);
+  ASSERT_EQ(cfg.deviceAddress, 0);
+  ASSERT_EQ(cfg.clockLowUs, 100);
+  ASSERT_EQ(cfg.clockHighUs, 100);
+  ASSERT_EQ(cfg.bitTimeoutUs, 25000u);
+  ASSERT_EQ(cfg.byteTimeoutUs, 35000u);
+  ASSERT_EQ(cfg.writeDelayMs, 150u);
+  ASSERT_EQ(cfg.intervalWriteDelayMs, 300u);
   ASSERT_EQ(cfg.offlineThreshold, 5);
 }
 
@@ -77,7 +86,7 @@ TEST(config_defaults) {
 // ============================================================================
 
 int main() {
-  printf("\n=== {DEVICE_NAME} Unit Tests ===\n\n");
+  printf("\n=== EE871 Unit Tests ===\n\n");
   
   RUN_TEST(status_ok);
   RUN_TEST(status_error);
