@@ -18,6 +18,152 @@ ee871::EE871 device;
 bool verboseMode = false;
 
 // ============================================================================
+// Bus Trace (example-only)
+// ============================================================================
+
+namespace buslog {
+
+enum class EventType : uint8_t {
+  SET_SCL = 0,
+  SET_SDA = 1,
+  READ_SCL = 2,
+  READ_SDA = 3,
+  DELAY_US = 4
+};
+
+struct Event {
+  uint32_t tsUs;
+  uint16_t data;
+  uint8_t type;
+  uint8_t value;
+};
+
+static constexpr size_t TRACE_CAPACITY = 512;
+static constexpr size_t TRACE_MAX_FLUSH_PER_LOOP = 24;
+static constexpr size_t TRACE_LINE_MAX = 40;
+
+static Event traceBuffer[TRACE_CAPACITY];
+static size_t traceHead = 0;
+static size_t traceTail = 0;
+static size_t traceCount = 0;
+static uint32_t traceDropped = 0;
+static bool traceEnabled = false;
+
+inline void clear() {
+  traceHead = 0;
+  traceTail = 0;
+  traceCount = 0;
+  traceDropped = 0;
+}
+
+inline void setEnabled(bool enabled) {
+  traceEnabled = enabled;
+}
+
+inline void push(EventType type, uint8_t value, uint16_t data) {
+  if (!traceEnabled) {
+    return;
+  }
+  if (traceCount >= TRACE_CAPACITY) {
+    traceDropped++;
+    return;
+  }
+  traceBuffer[traceHead] = { micros(), data, static_cast<uint8_t>(type), value };
+  traceHead = (traceHead + 1) % TRACE_CAPACITY;
+  traceCount++;
+}
+
+inline size_t boundedLen(int len, size_t cap) {
+  if (len <= 0) {
+    return 0;
+  }
+  const size_t ulen = static_cast<size_t>(len);
+  return (ulen >= cap) ? (cap - 1U) : ulen;
+}
+
+inline size_t formatEvent(const Event& ev, char* out, size_t cap) {
+  const unsigned long ts = static_cast<unsigned long>(ev.tsUs);
+  switch (static_cast<EventType>(ev.type)) {
+    case EventType::SET_SCL:
+      return boundedLen(snprintf(out, cap, "[BUS] %10lu us SCL=%u\n", ts, ev.value), cap);
+    case EventType::SET_SDA:
+      return boundedLen(snprintf(out, cap, "[BUS] %10lu us SDA=%u\n", ts, ev.value), cap);
+    case EventType::READ_SCL:
+      return boundedLen(snprintf(out, cap, "[BUS] %10lu us SCL?=%u\n", ts, ev.value), cap);
+    case EventType::READ_SDA:
+      return boundedLen(snprintf(out, cap, "[BUS] %10lu us SDA?=%u\n", ts, ev.value), cap);
+    case EventType::DELAY_US:
+      return boundedLen(snprintf(out, cap, "[BUS] %10lu us delay %u us\n", ts, ev.data), cap);
+    default:
+      return boundedLen(snprintf(out, cap, "[BUS] %10lu us ???\n", ts), cap);
+  }
+}
+
+inline void flush() {
+  if (!traceEnabled) {
+    return;
+  }
+  size_t emitted = 0;
+  while (emitted < TRACE_MAX_FLUSH_PER_LOOP && traceCount > 0) {
+    if (Serial.availableForWrite() < static_cast<int>(TRACE_LINE_MAX)) {
+      break;
+    }
+    const Event ev = traceBuffer[traceTail];
+    traceTail = (traceTail + 1) % TRACE_CAPACITY;
+    traceCount--;
+
+    char line[TRACE_LINE_MAX];
+    const size_t len = formatEvent(ev, line, sizeof(line));
+    if (len > 0) {
+      Serial.write(reinterpret_cast<const uint8_t*>(line), len);
+    }
+    emitted++;
+  }
+}
+
+inline void printStats() {
+  Serial.println("=== Bus Trace ===");
+  Serial.printf("  Enabled: %s\n", traceEnabled ? "yes" : "no");
+  Serial.printf("  Pending: %u\n", static_cast<unsigned>(traceCount));
+  Serial.printf("  Dropped: %lu\n", static_cast<unsigned long>(traceDropped));
+  Serial.printf("  Capacity: %u\n", static_cast<unsigned>(TRACE_CAPACITY));
+}
+
+} // namespace buslog
+
+namespace trace {
+
+inline void setScl(bool level, void* user) {
+  transport::setScl(level, user);
+  buslog::push(buslog::EventType::SET_SCL, level ? 1U : 0U, 0);
+}
+
+inline void setSda(bool level, void* user) {
+  transport::setSda(level, user);
+  buslog::push(buslog::EventType::SET_SDA, level ? 1U : 0U, 0);
+}
+
+inline bool readScl(void* user) {
+  const bool level = transport::readScl(user);
+  buslog::push(buslog::EventType::READ_SCL, level ? 1U : 0U, 0);
+  return level;
+}
+
+inline bool readSda(void* user) {
+  const bool level = transport::readSda(user);
+  buslog::push(buslog::EventType::READ_SDA, level ? 1U : 0U, 0);
+  return level;
+}
+
+inline void delayUs(uint32_t us, void* user) {
+  const uint16_t clipped = (us > 0xFFFFu) ? 0xFFFFu : static_cast<uint16_t>(us);
+  buslog::push(buslog::EventType::DELAY_US, 0, clipped);
+  transport::delayUs(us, user);
+}
+
+} // namespace trace
+
+// ============================================================================
 // Helper Functions
 // ============================================================================
 
@@ -89,7 +235,9 @@ void printHelp() {
   Serial.println("  error             - Read error code (if status indicates error)");
   Serial.println("  drv               - Show driver state and health");
   Serial.println("  recover           - Attempt recovery");
-  Serial.println("  verbose 0|1       - Set verbose mode");
+  Serial.println("  verbose 0|1       - Toggle bus trace output (nonblocking)");
+  Serial.println("  trace stats       - Show bus trace buffer stats");
+  Serial.println("  trace clear       - Clear buffered trace events");
 }
 
 // ============================================================================
@@ -162,7 +310,16 @@ void processCommand(const String& cmd) {
   } else if (trimmed.startsWith("verbose ")) {
     int val = trimmed.substring(8).toInt();
     verboseMode = (val != 0);
+    if (verboseMode) {
+      buslog::clear();
+    }
+    buslog::setEnabled(verboseMode);
     LOGI("Verbose mode: %s", verboseMode ? "ON" : "OFF");
+  } else if (trimmed == "trace stats") {
+    buslog::printStats();
+  } else if (trimmed == "trace clear") {
+    buslog::clear();
+    LOGI("Bus trace cleared");
   } else {
     LOGW("Unknown command: %s", trimmed.c_str());
   }
@@ -186,11 +343,11 @@ void setup() {
   LOGI("E2 initialized (DATA=%d, CLOCK=%d)", board::E2_DATA, board::E2_CLOCK);
 
   ee871::Config cfg;
-  cfg.setScl = transport::setScl;
-  cfg.setSda = transport::setSda;
-  cfg.readScl = transport::readScl;
-  cfg.readSda = transport::readSda;
-  cfg.delayUs = transport::delayUs;
+  cfg.setScl = trace::setScl;
+  cfg.setSda = trace::setSda;
+  cfg.readScl = trace::readScl;
+  cfg.readSda = trace::readSda;
+  cfg.delayUs = trace::delayUs;
   cfg.busUser = &board::e2Pins();
   cfg.deviceAddress = ee871::cmd::DEFAULT_DEVICE_ADDRESS;
   cfg.clockLowUs = board::E2_CLOCK_LOW_US;
@@ -231,4 +388,6 @@ void loop() {
       inputBuffer += c;
     }
   }
+
+  buslog::flush();
 }
