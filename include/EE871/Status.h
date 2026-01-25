@@ -27,6 +27,10 @@ struct Status {
   int32_t detail = 0;        ///< Implementation-specific detail (e.g., E2 error code)
   const char* msg = "";      ///< Static string describing the error
 
+  constexpr Status() : code(Err::OK), detail(0), msg("") {}
+  constexpr Status(Err codeIn, int32_t detailIn, const char* msgIn)
+      : code(codeIn), detail(detailIn), msg(msgIn) {}
+
   /// @return true if operation succeeded
   constexpr bool ok() const { return code == Err::OK; }
   
