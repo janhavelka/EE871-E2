@@ -3,6 +3,7 @@
 /// @note This is an EXAMPLE, not part of the library
 
 #include <Arduino.h>
+#include <stdlib.h>
 #include "common/Log.h"
 #include "common/BoardConfig.h"
 #include "common/E2Transport.h"
@@ -167,6 +168,50 @@ inline void delayUs(uint32_t us, void* user) {
 // Helper Functions
 // ============================================================================
 
+static constexpr uint16_t CUSTOM_MEM_SIZE = 0x100;
+static constexpr size_t REG_DUMP_CHUNK_LEN = 16;
+
+bool splitToken(const String& in, String& head, String& tail) {
+  const int idx = in.indexOf(' ');
+  if (idx < 0) {
+    head = in;
+    head.trim();
+    tail = "";
+    return head.length() > 0;
+  }
+  head = in.substring(0, idx);
+  tail = in.substring(idx + 1);
+  head.trim();
+  tail.trim();
+  return head.length() > 0;
+}
+
+bool parseU8Token(const String& token, uint8_t& out) {
+  if (token.isEmpty()) {
+    return false;
+  }
+  char* end = nullptr;
+  const unsigned long value = strtoul(token.c_str(), &end, 0);
+  if (end == token.c_str() || *end != '\0' || value > 0xFFUL) {
+    return false;
+  }
+  out = static_cast<uint8_t>(value);
+  return true;
+}
+
+bool parseU16Token(const String& token, uint16_t& out) {
+  if (token.isEmpty()) {
+    return false;
+  }
+  char* end = nullptr;
+  const unsigned long value = strtoul(token.c_str(), &end, 0);
+  if (end == token.c_str() || *end != '\0' || value > 0xFFFFUL) {
+    return false;
+  }
+  out = static_cast<uint16_t>(value);
+  return true;
+}
+
 /// Convert error code to string
 const char* errToStr(ee871::Err err) {
   using ee871::Err;
@@ -209,6 +254,16 @@ void printStatus(const ee871::Status& st) {
   }
 }
 
+bool ensureProbeOk() {
+  auto st = device.probe();
+  if (!st.ok()) {
+    LOGW("Probe failed");
+    printStatus(st);
+    return false;
+  }
+  return true;
+}
+
 /// Print driver health information
 void printDriverHealth() {
   Serial.println("=== Driver State ===");
@@ -233,6 +288,9 @@ void printHelp() {
   Serial.println("  co2fast           - Read MV3 (fast response)");
   Serial.println("  co2avg            - Read MV4 (averaged)");
   Serial.println("  error             - Read error code (if status indicates error)");
+  Serial.println("  reg read <addr>   - Read custom register (addr: 0x00-0xFF)");
+  Serial.println("  reg write <addr> <value> - Write custom register and verify");
+  Serial.println("  reg dump [start] [len]   - Dump custom registers (default all)");
   Serial.println("  drv               - Show driver state and health");
   Serial.println("  recover           - Attempt recovery");
   Serial.println("  verbose 0|1       - Toggle bus trace output (nonblocking)");
@@ -299,6 +357,130 @@ void processCommand(const String& cmd) {
     printStatus(st);
     if (st.ok()) {
       Serial.printf("  Error code: %u\n", code);
+    }
+  } else if (trimmed.startsWith("reg ")) {
+    String args = trimmed.substring(4);
+    args.trim();
+
+    String subcmd;
+    String rest;
+    if (!splitToken(args, subcmd, rest)) {
+      LOGW("Usage: reg read|write|dump");
+      return;
+    }
+
+    if (subcmd == "read") {
+      String addrToken;
+      String extra;
+      if (!splitToken(rest, addrToken, extra) || extra.length() > 0) {
+        LOGW("Usage: reg read <addr>");
+        return;
+      }
+      uint8_t addr = 0;
+      if (!parseU8Token(addrToken, addr)) {
+        LOGW("Invalid address");
+        return;
+      }
+      if (!ensureProbeOk()) {
+        return;
+      }
+      uint8_t value = 0;
+      auto st = device.customRead(addr, value);
+      printStatus(st);
+      if (st.ok()) {
+        Serial.printf("  Reg[0x%02X] = 0x%02X (%u)\n",
+                      static_cast<unsigned>(addr),
+                      static_cast<unsigned>(value),
+                      static_cast<unsigned>(value));
+      }
+    } else if (subcmd == "write") {
+      String addrToken;
+      String restAfterAddr;
+      if (!splitToken(rest, addrToken, restAfterAddr)) {
+        LOGW("Usage: reg write <addr> <value>");
+        return;
+      }
+      String valueToken;
+      String extra;
+      if (!splitToken(restAfterAddr, valueToken, extra) || extra.length() > 0) {
+        LOGW("Usage: reg write <addr> <value>");
+        return;
+      }
+      uint8_t addr = 0;
+      uint8_t value = 0;
+      if (!parseU8Token(addrToken, addr) || !parseU8Token(valueToken, value)) {
+        LOGW("Invalid address/value");
+        return;
+      }
+      if (!ensureProbeOk()) {
+        return;
+      }
+      auto st = device.customWrite(addr, value);
+      printStatus(st);
+      if (st.ok()) {
+        Serial.printf("  Reg[0x%02X] <= 0x%02X\n",
+                      static_cast<unsigned>(addr),
+                      static_cast<unsigned>(value));
+      }
+    } else if (subcmd == "dump") {
+      uint8_t start = 0;
+      uint16_t len = CUSTOM_MEM_SIZE;
+      if (rest.length() > 0) {
+        String startToken;
+        String restAfterStart;
+        if (!splitToken(rest, startToken, restAfterStart)) {
+          LOGW("Usage: reg dump [start] [len]");
+          return;
+        }
+        if (!parseU8Token(startToken, start)) {
+          LOGW("Invalid start");
+          return;
+        }
+        if (restAfterStart.length() > 0) {
+          String lenToken;
+          String extra;
+          if (!splitToken(restAfterStart, lenToken, extra) || extra.length() > 0) {
+            LOGW("Usage: reg dump [start] [len]");
+            return;
+          }
+          if (!parseU16Token(lenToken, len)) {
+            LOGW("Invalid length");
+            return;
+          }
+        } else {
+          len = static_cast<uint16_t>(CUSTOM_MEM_SIZE - start);
+        }
+      }
+      if (len == 0 || (static_cast<uint16_t>(start) + len) > CUSTOM_MEM_SIZE) {
+        LOGW("Range out of bounds");
+        return;
+      }
+      if (!ensureProbeOk()) {
+        return;
+      }
+
+      uint16_t remaining = len;
+      uint16_t offset = start;
+      Serial.println("=== Custom Register Dump ===");
+      while (remaining > 0) {
+        const uint16_t chunk =
+            (remaining > REG_DUMP_CHUNK_LEN) ? REG_DUMP_CHUNK_LEN : remaining;
+        uint8_t buf[REG_DUMP_CHUNK_LEN] = {};
+        auto st = device.customRead(static_cast<uint8_t>(offset), buf, chunk);
+        if (!st.ok()) {
+          printStatus(st);
+          return;
+        }
+        Serial.printf("  0x%02X:", static_cast<unsigned>(offset & 0xFF));
+        for (uint16_t i = 0; i < chunk; ++i) {
+          Serial.printf(" %02X", static_cast<unsigned>(buf[i]));
+        }
+        Serial.println();
+        offset = static_cast<uint16_t>(offset + chunk);
+        remaining = static_cast<uint16_t>(remaining - chunk);
+      }
+    } else {
+      LOGW("Unknown reg subcommand: %s", subcmd.c_str());
     }
   } else if (trimmed == "drv") {
     printDriverHealth();
