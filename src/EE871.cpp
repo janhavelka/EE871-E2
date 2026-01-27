@@ -48,6 +48,9 @@ static Status waitSclHigh(const Config& cfg, uint32_t* elapsedUs) {
   return Status::Ok();
 }
 
+// Data setup time before SCL rises (minimum per E2 spec)
+static constexpr uint32_t kDataSetupUs = 10;
+
 static Status e2Start(const Config& cfg) {
   setSda(cfg, true);
   setScl(cfg, true);
@@ -64,10 +67,9 @@ static Status e2Start(const Config& cfg) {
 }
 
 static Status e2Stop(const Config& cfg) {
-  setScl(cfg, false);
-  delayUs(cfg, cfg.clockLowUs, nullptr);
-  setSda(cfg, false);
-  delayUs(cfg, cfg.stopHoldUs, nullptr);
+  // SCL is already low with proper low time from last bit
+  setSda(cfg, false);  // Ensure SDA low before releasing SCL
+  delayUs(cfg, kDataSetupUs, nullptr);
   setScl(cfg, true);
   Status st = waitSclHigh(cfg, nullptr);
   if (!st.ok()) {
@@ -80,9 +82,9 @@ static Status e2Stop(const Config& cfg) {
 }
 
 static Status writeBit(const Config& cfg, bool bit, uint32_t* elapsedUs) {
-  setScl(cfg, false);
+  // SCL is already low from previous bit or START
   setSda(cfg, bit);
-  delayUs(cfg, cfg.clockLowUs, elapsedUs);
+  delayUs(cfg, kDataSetupUs, elapsedUs);  // Data setup time
   setScl(cfg, true);
   Status st = waitSclHigh(cfg, elapsedUs);
   if (!st.ok()) {
@@ -90,13 +92,14 @@ static Status writeBit(const Config& cfg, bool bit, uint32_t* elapsedUs) {
   }
   delayUs(cfg, cfg.clockHighUs, elapsedUs);
   setScl(cfg, false);
+  delayUs(cfg, cfg.clockLowUs, elapsedUs);  // Clock low time AFTER pulling low
   return Status::Ok();
 }
 
 static Status readBit(const Config& cfg, bool& bit, uint32_t* elapsedUs) {
-  setScl(cfg, false);
-  setSda(cfg, true);
-  delayUs(cfg, cfg.clockLowUs, elapsedUs);
+  // SCL is already low from previous bit
+  setSda(cfg, true);  // Release SDA for slave to drive
+  delayUs(cfg, kDataSetupUs, elapsedUs);  // Setup time
   setScl(cfg, true);
   Status st = waitSclHigh(cfg, elapsedUs);
   if (!st.ok()) {
@@ -107,6 +110,7 @@ static Status readBit(const Config& cfg, bool& bit, uint32_t* elapsedUs) {
   bit = readSda(cfg);
   delayUs(cfg, cfg.clockHighUs - sampleDelay, elapsedUs);
   setScl(cfg, false);
+  delayUs(cfg, cfg.clockLowUs, elapsedUs);  // Clock low time AFTER pulling low
   return Status::Ok();
 }
 
@@ -136,9 +140,9 @@ static Status readByte(const Config& cfg, uint8_t& value, uint32_t* elapsedUs) {
 }
 
 static Status readAck(const Config& cfg, bool& acked, uint32_t* elapsedUs) {
-  setScl(cfg, false);
-  setSda(cfg, true);
-  delayUs(cfg, cfg.clockLowUs, elapsedUs);
+  // SCL is already low from last data bit
+  setSda(cfg, true);  // Release SDA for slave to drive ACK
+  delayUs(cfg, kDataSetupUs, elapsedUs);
   setScl(cfg, true);
   Status st = waitSclHigh(cfg, elapsedUs);
   if (!st.ok()) {
@@ -146,16 +150,17 @@ static Status readAck(const Config& cfg, bool& acked, uint32_t* elapsedUs) {
   }
   const uint32_t sampleDelay = cfg.clockHighUs / 2;
   delayUs(cfg, sampleDelay, elapsedUs);
-  acked = !readSda(cfg);
+  acked = !readSda(cfg);  // ACK = SDA low
   delayUs(cfg, cfg.clockHighUs - sampleDelay, elapsedUs);
   setScl(cfg, false);
+  delayUs(cfg, cfg.clockLowUs, elapsedUs);  // Low time for next phase
   return Status::Ok();
 }
 
 static Status sendAck(const Config& cfg, bool ack, uint32_t* elapsedUs) {
-  setScl(cfg, false);
-  setSda(cfg, !ack);
-  delayUs(cfg, cfg.clockLowUs, elapsedUs);
+  // SCL is already low from last data bit
+  setSda(cfg, !ack);  // ACK = SDA low, NACK = SDA high
+  delayUs(cfg, kDataSetupUs, elapsedUs);
   setScl(cfg, true);
   Status st = waitSclHigh(cfg, elapsedUs);
   if (!st.ok()) {
@@ -163,7 +168,8 @@ static Status sendAck(const Config& cfg, bool ack, uint32_t* elapsedUs) {
   }
   delayUs(cfg, cfg.clockHighUs, elapsedUs);
   setScl(cfg, false);
-  setSda(cfg, true);
+  delayUs(cfg, cfg.clockLowUs, elapsedUs);  // Low time for next phase
+  setSda(cfg, true);  // Release SDA
   return Status::Ok();
 }
 

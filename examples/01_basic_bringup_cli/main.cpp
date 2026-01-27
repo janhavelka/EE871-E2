@@ -15,6 +15,7 @@
 // ============================================================================
 
 ee871::EE871 device;
+ee871::Config deviceCfg;  // Stored for diagnostics
 bool verboseMode = false;
 
 // ============================================================================
@@ -79,8 +80,7 @@ void printDriverHealth() {
 
 /// Print help
 void printHelp() {
-  Serial.println("=== Commands ===");
-  Serial.println("  help              - Show this help");
+  Serial.println("=== Device Commands ===");
   Serial.println("  probe             - Probe device (no health tracking)");
   Serial.println("  id                - Read group/subgroup/available bits");
   Serial.println("  status            - Read status byte (starts measurement)");
@@ -89,6 +89,22 @@ void printHelp() {
   Serial.println("  error             - Read error code (if status indicates error)");
   Serial.println("  drv               - Show driver state and health");
   Serial.println("  recover           - Attempt recovery");
+  Serial.println();
+  Serial.println("=== Diagnostics ===");
+  Serial.println("  diag              - Run FULL diagnostic suite");
+  Serial.println("  levels            - Read current bus levels");
+  Serial.println("  pintest           - Test pin toggle (can MCU control bus?)");
+  Serial.println("  clocktest         - Generate clock pulses and verify");
+  Serial.println("  sniff 1           - Start background sniffer (non-blocking)");
+  Serial.println("  sniff 0           - Stop background sniffer");
+  Serial.println("  scan              - Scan all 8 E2 addresses");
+  Serial.println("  timing            - Try different clock frequencies");
+  Serial.println("  busreset          - Send 9 clocks to recover stuck bus");
+  Serial.println("  tx <hex>          - Test transaction with control byte");
+  Serial.println("  libtest           - Test all library commands (begin uses)");
+  Serial.println();
+  Serial.println("=== Other ===");
+  Serial.println("  help              - Show this help");
   Serial.println("  verbose 0|1       - Set verbose mode");
 }
 
@@ -163,6 +179,34 @@ void processCommand(const String& cmd) {
     int val = trimmed.substring(8).toInt();
     verboseMode = (val != 0);
     LOGI("Verbose mode: %s", verboseMode ? "ON" : "OFF");
+  
+  // === Diagnostic Commands ===
+  } else if (trimmed == "diag") {
+    e2diag::runFullDiagnostics(deviceCfg);
+  } else if (trimmed == "levels") {
+    e2diag::printBusLevels(deviceCfg);
+  } else if (trimmed == "pintest") {
+    e2diag::testPinToggle(deviceCfg);
+  } else if (trimmed == "clocktest") {
+    e2diag::testClockPulses(deviceCfg, 10);
+  } else if (trimmed == "sniff 1") {
+    e2diag::sniffer().start(&deviceCfg);
+  } else if (trimmed == "sniff 0") {
+    e2diag::sniffer().stop();
+  } else if (trimmed == "scan") {
+    e2diag::scanAddresses(deviceCfg);
+  } else if (trimmed == "timing") {
+    e2diag::discoverTiming(deviceCfg);
+  } else if (trimmed == "busreset") {
+    e2diag::sendRecoveryClocks(deviceCfg);
+  } else if (trimmed.startsWith("tx ")) {
+    String hexStr = trimmed.substring(3);
+    hexStr.trim();
+    uint8_t ctrlByte = (uint8_t)strtol(hexStr.c_str(), nullptr, 16);
+    e2diag::testTransaction(deviceCfg, ctrlByte);
+  } else if (trimmed == "libtest") {
+    e2diag::testLibraryCommands(deviceCfg);
+  
   } else {
     LOGW("Unknown command: %s", trimmed.c_str());
   }
@@ -186,31 +230,35 @@ void setup() {
 
   Serial.printf("[I] E2 initialized (DATA=%d, CLOCK=%d)\n", board::E2_DATA, board::E2_CLOCK);
 
-  ee871::Config cfg;
-  cfg.setScl = transport::setScl;
-  cfg.setSda = transport::setSda;
-  cfg.readScl = transport::readScl;
-  cfg.readSda = transport::readSda;
-  cfg.delayUs = transport::delayUs;
-  cfg.busUser = &board::e2Pins();
-  cfg.deviceAddress = ee871::cmd::DEFAULT_DEVICE_ADDRESS;
-  cfg.clockLowUs = board::E2_CLOCK_LOW_US;
-  cfg.clockHighUs = board::E2_CLOCK_HIGH_US;
-  cfg.bitTimeoutUs = board::E2_BIT_TIMEOUT_US;
-  cfg.byteTimeoutUs = board::E2_BYTE_TIMEOUT_US;
-  cfg.writeDelayMs = board::E2_WRITE_DELAY_MS;
-  cfg.intervalWriteDelayMs = board::E2_INTERVAL_WRITE_DELAY_MS;
-  cfg.offlineThreshold = 5;
+  // Configure and store for diagnostics
+  deviceCfg.setScl = transport::setScl;
+  deviceCfg.setSda = transport::setSda;
+  deviceCfg.readScl = transport::readScl;
+  deviceCfg.readSda = transport::readSda;
+  deviceCfg.delayUs = transport::delayUs;
+  deviceCfg.busUser = &board::e2Pins();
+  deviceCfg.deviceAddress = ee871::cmd::DEFAULT_DEVICE_ADDRESS;
+  deviceCfg.clockLowUs = board::E2_CLOCK_LOW_US;
+  deviceCfg.clockHighUs = board::E2_CLOCK_HIGH_US;
+  deviceCfg.bitTimeoutUs = board::E2_BIT_TIMEOUT_US;
+  deviceCfg.byteTimeoutUs = board::E2_BYTE_TIMEOUT_US;
+  deviceCfg.writeDelayMs = board::E2_WRITE_DELAY_MS;
+  deviceCfg.intervalWriteDelayMs = board::E2_INTERVAL_WRITE_DELAY_MS;
+  deviceCfg.offlineThreshold = 5;
 
-  auto st = device.begin(cfg);
+  auto st = device.begin(deviceCfg);
   if (!st.ok()) {
     Serial.println("[E] Failed to initialize device");
     printStatus(st);
-    return;
+    Serial.println("\n[I] Running basic bus diagnostics...\n");
+    e2diag::printBusLevels(deviceCfg);
+    Serial.println();
+    e2diag::testPinToggle(deviceCfg);
+    Serial.println("\n[I] Type 'diag' for full diagnostics, 'help' for commands\n");
+  } else {
+    Serial.println("[I] Device initialized successfully");
+    printDriverHealth();
   }
-
-  Serial.println("[I] Device initialized successfully");
-  printDriverHealth();
 
   Serial.println("\nType 'help' for commands");
   Serial.print("> ");
@@ -218,6 +266,7 @@ void setup() {
 
 void loop() {
   device.tick(millis());
+  e2diag::sniffer().tick();  // Background sniffer (if active)
 
   static String inputBuffer;
   while (Serial.available()) {
