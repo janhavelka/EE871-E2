@@ -6,6 +6,7 @@
 #include <Arduino.h>
 #include "EE871/CommandTable.h"
 #include "EE871/Config.h"
+#include "E2Transport.h"
 #include "Log.h"
 
 namespace e2diag {
@@ -647,69 +648,152 @@ inline void runFullDiagnostics(const ee871::Config& cfg) {
 }
 
 // ============================================================================
-// Background Bus Sniffer (non-blocking)
+// Background Bus Sniffer (hooks into transport layer) - Protocol Decoder
 // ============================================================================
 
-/// Background sniffer state - call tick() from loop()
+/// Sniffer state - global for callback access
+struct SnifferState {
+  bool active = false;
+  bool lastScl = true;
+  bool lastSda = true;
+  
+  // Protocol state
+  enum class State { IDLE, RECEIVING_BYTE, WAITING_ACK } state = State::IDLE;
+  uint8_t currentByte = 0;
+  uint8_t bitCount = 0;
+  bool isFirstByte = true;  // First byte after START is control byte
+  bool isReadMode = false;
+  uint8_t byteIndex = 0;    // Byte number in transaction
+  
+  uint32_t transitions = 0;
+  uint32_t startMs = 0;
+};
+
+inline SnifferState& snifferState() {
+  static SnifferState state;
+  return state;
+}
+
+/// Decode control byte for display
+inline void decodeControlByte(uint8_t ctrl) {
+  uint8_t mainCmd = (ctrl >> 4) & 0x0F;
+  uint8_t addr = (ctrl >> 1) & 0x07;
+  bool read = ctrl & 0x01;
+  
+  const char* cmdName = "???";
+  switch (mainCmd) {
+    case 0x1: cmdName = read ? "TYPE_LO" : "CUST_WR"; break;
+    case 0x2: cmdName = "SUBGRP"; break;
+    case 0x3: cmdName = "AVAIL"; break;
+    case 0x4: cmdName = "TYPE_HI"; break;
+    case 0x5: cmdName = read ? "CUST_RD" : "CUST_PTR"; break;
+    case 0x7: cmdName = "STATUS"; break;
+    case 0xC: cmdName = "MV3_LO"; break;
+    case 0xD: cmdName = "MV3_HI"; break;
+    case 0xE: cmdName = "MV4_LO"; break;
+    case 0xF: cmdName = "MV4_HI"; break;
+  }
+  Serial.printf(" [%s addr=%d %s]", cmdName, addr, read ? "R" : "W");
+}
+
+/// Callback invoked by transport on every line change
+inline void snifferCallback(bool scl, bool sda) {
+  auto& s = snifferState();
+  if (!s.active) return;
+  
+  // Detect START: SDA falls while SCL high
+  if (s.lastScl && scl && s.lastSda && !sda) {
+    Serial.print("\n[SNIFF] START");
+    s.state = SnifferState::State::RECEIVING_BYTE;
+    s.currentByte = 0;
+    s.bitCount = 0;
+    s.isFirstByte = true;
+    s.byteIndex = 0;
+    s.transitions++;
+  }
+  // Detect STOP: SDA rises while SCL high  
+  else if (s.lastScl && scl && !s.lastSda && sda) {
+    Serial.println("\n[SNIFF] STOP");
+    s.state = SnifferState::State::IDLE;
+    s.transitions++;
+  }
+  // SCL rising edge - sample data bit
+  else if (!s.lastScl && scl) {
+    s.transitions++;
+    
+    if (s.state == SnifferState::State::RECEIVING_BYTE) {
+      // Shift in data bit (MSB first)
+      s.currentByte = (s.currentByte << 1) | (sda ? 1 : 0);
+      s.bitCount++;
+      
+      if (s.bitCount == 8) {
+        // Byte complete, next clock is ACK
+        s.state = SnifferState::State::WAITING_ACK;
+      }
+    }
+    else if (s.state == SnifferState::State::WAITING_ACK) {
+      bool ack = !sda;  // ACK = SDA low
+      
+      // Print the byte
+      if (s.isFirstByte) {
+        // Control byte
+        s.isReadMode = (s.currentByte & 0x01);
+        Serial.printf("\n[SNIFF] TX: 0x%02X %s", s.currentByte, ack ? "ACK" : "NAK");
+        decodeControlByte(s.currentByte);
+        s.isFirstByte = false;
+      } else {
+        // Data byte
+        const char* dir = s.isReadMode ? "RX" : "TX";
+        Serial.printf("\n[SNIFF] %s: 0x%02X %s", dir, s.currentByte, ack ? "ACK" : "NAK");
+      }
+      
+      s.byteIndex++;
+      
+      // Reset for next byte
+      s.currentByte = 0;
+      s.bitCount = 0;
+      s.state = SnifferState::State::RECEIVING_BYTE;
+    }
+  }
+  
+  s.lastScl = scl;
+  s.lastSda = sda;
+}
+
+/// Sniffer control class
 class BusSniffer {
 public:
   void start(const ee871::Config* cfg) {
-    _cfg = cfg;
-    _active = true;
-    _lastScl = _cfg->readScl(_cfg->busUser);
-    _lastSda = _cfg->readSda(_cfg->busUser);
-    _transitions = 0;
-    _startMs = millis();
-    Serial.println("[SNIFF] Started - type 'sniffoff' to stop");
-    Serial.printf("[SNIFF] Initial: SCL=%d SDA=%d\n", _lastScl ? 1 : 0, _lastSda ? 1 : 0);
+    auto& s = snifferState();
+    s.lastScl = cfg->readScl(cfg->busUser);
+    s.lastSda = cfg->readSda(cfg->busUser);
+    s.transitions = 0;
+    s.startMs = millis();
+    s.state = SnifferState::State::IDLE;
+    s.currentByte = 0;
+    s.bitCount = 0;
+    s.isFirstByte = true;
+    s.active = true;
+    
+    // Register callback with transport
+    transport::setSnifferCallback(snifferCallback);
+    
+    Serial.println("[SNIFF] Started - type 'sniff 0' to stop");
   }
   
   void stop() {
-    if (_active) {
-      _active = false;
-      uint32_t elapsed = millis() - _startMs;
-      Serial.printf("[SNIFF] Stopped after %lu ms, %lu transitions\n", elapsed, _transitions);
+    auto& s = snifferState();
+    if (s.active) {
+      s.active = false;
+      transport::setSnifferCallback(nullptr);
+      uint32_t elapsed = millis() - s.startMs;
+      Serial.printf("\n[SNIFF] Stopped after %lu ms, %lu transitions\n", elapsed, s.transitions);
     }
   }
   
-  bool isActive() const { return _active; }
+  bool isActive() const { return snifferState().active; }
   
-  /// Call this from loop() - very fast, non-blocking
-  void tick() {
-    if (!_active || !_cfg) return;
-    
-    bool scl = _cfg->readScl(_cfg->busUser);
-    bool sda = _cfg->readSda(_cfg->busUser);
-    
-    if (scl != _lastScl || sda != _lastSda) {
-      uint32_t now = micros();
-      
-      // Detect special conditions
-      char event = ' ';
-      if (_lastScl && scl && _lastSda && !sda) {
-        event = 'S';  // START: SDA falls while SCL high
-      } else if (_lastScl && scl && !_lastSda && sda) {
-        event = 'P';  // STOP: SDA rises while SCL high
-      }
-      
-      Serial.printf("[%10lu] SCL=%d SDA=%d", now, scl ? 1 : 0, sda ? 1 : 0);
-      if (event == 'S') Serial.print(" <START>");
-      if (event == 'P') Serial.print(" <STOP>");
-      Serial.println();
-      
-      _lastScl = scl;
-      _lastSda = sda;
-      _transitions++;
-    }
-  }
-
-private:
-  const ee871::Config* _cfg = nullptr;
-  bool _active = false;
-  bool _lastScl = true;
-  bool _lastSda = true;
-  uint32_t _transitions = 0;
-  uint32_t _startMs = 0;
+  void tick() {}
 };
 
 /// Global sniffer instance for use in examples
