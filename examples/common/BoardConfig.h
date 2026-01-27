@@ -26,10 +26,10 @@ namespace board {
 // ====================================================================
 
 /// @brief E2 DATA pin. Example default for ESP32-S2/S3.
-static constexpr int E2_DATA = 8;
+static constexpr int E2_DATA = 7;
 
 /// @brief E2 CLOCK pin. Example default for ESP32-S2/S3.
-static constexpr int E2_CLOCK = 9;
+static constexpr int E2_CLOCK = 6;
 
 /// @brief E2 timing defaults (spec: >=100 us high/low).
 static constexpr uint16_t E2_CLOCK_LOW_US = 100;
@@ -41,7 +41,7 @@ static constexpr uint32_t E2_INTERVAL_WRITE_DELAY_MS = 300;
 
 /// @brief LED pin. Example default for ESP32-S3 (RGB LED on GPIO48).
 /// Set to -1 to disable.
-static constexpr int LED = 48;
+static constexpr int LED = 10;
 
 /// @brief Access to E2 pin storage.
 inline transport::E2Pins& e2Pins() {

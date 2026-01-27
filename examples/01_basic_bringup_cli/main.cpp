@@ -173,17 +173,18 @@ void processCommand(const String& cmd) {
 // ============================================================================
 
 void setup() {
-  log_begin();
-  delay(100);
-
-  LOGI("=== EE871 Bringup Example ===");
+  Serial.begin(115200);
+  delay(2000);  // Give USB CDC time to enumerate
+  
+  Serial.println();
+  Serial.println("=== EE871 Bringup Example ===");
 
   if (!board::initE2()) {
-    LOGE("Failed to initialize E2 pins");
+    Serial.println("[E] Failed to initialize E2 pins");
     return;
   }
 
-  LOGI("E2 initialized (DATA=%d, CLOCK=%d)", board::E2_DATA, board::E2_CLOCK);
+  Serial.printf("[I] E2 initialized (DATA=%d, CLOCK=%d)\n", board::E2_DATA, board::E2_CLOCK);
 
   ee871::Config cfg;
   cfg.setScl = transport::setScl;
@@ -203,12 +204,12 @@ void setup() {
 
   auto st = device.begin(cfg);
   if (!st.ok()) {
-    LOGE("Failed to initialize device");
+    Serial.println("[E] Failed to initialize device");
     printStatus(st);
     return;
   }
 
-  LOGI("Device initialized successfully");
+  Serial.println("[I] Device initialized successfully");
   printDriverHealth();
 
   Serial.println("\nType 'help' for commands");

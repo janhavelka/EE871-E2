@@ -23,6 +23,11 @@
  */
 inline void log_begin(unsigned long baud = 115200) {
   Serial.begin(baud);
+  // Wait for USB CDC to be ready (up to 3 seconds)
+  unsigned long start = millis();
+  while (!Serial && (millis() - start) < 3000) {
+    delay(10);
+  }
 }
 
 /// @brief Log error message (level >= 1)

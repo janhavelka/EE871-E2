@@ -27,6 +27,12 @@ struct Status {
   int32_t detail = 0;        ///< Implementation-specific detail (e.g., E2 error code)
   const char* msg = "";      ///< Static string describing the error
 
+  /// Default constructor
+  constexpr Status() = default;
+
+  /// Explicit constructor for older GCC compatibility
+  constexpr Status(Err c, int32_t d, const char* m) : code(c), detail(d), msg(m) {}
+
   /// @return true if operation succeeded
   constexpr bool ok() const { return code == Err::OK; }
   
