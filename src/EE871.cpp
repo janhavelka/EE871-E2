@@ -599,9 +599,7 @@ Status EE871::writePartName(const uint8_t* buf) {
 // ============================================================================
 
 Status EE871::readBusAddress(uint8_t& address) {
-  if (!hasAddressConfig()) {
-    return Status::Error(Err::NOT_SUPPORTED, "Address config not supported");
-  }
+  // Address can always be read, guard only applies to write
   return customRead(cmd::CUSTOM_BUS_ADDRESS, address);
 }
 
@@ -620,9 +618,7 @@ Status EE871::writeBusAddress(uint8_t address) {
 // ============================================================================
 
 Status EE871::readMeasurementInterval(uint16_t& intervalDeciSeconds) {
-  if (!hasGlobalInterval()) {
-    return Status::Error(Err::NOT_SUPPORTED, "Global interval not supported");
-  }
+  // Interval can always be read, guard only applies to write
   uint8_t low = 0;
   uint8_t high = 0;
   Status st = customRead(cmd::CUSTOM_INTERVAL_L, low);
@@ -638,9 +634,7 @@ Status EE871::readMeasurementInterval(uint16_t& intervalDeciSeconds) {
 }
 
 Status EE871::readCo2IntervalFactor(int8_t& factor) {
-  if (!hasSpecificInterval()) {
-    return Status::Error(Err::NOT_SUPPORTED, "Specific interval not supported");
-  }
+  // Factor can always be read, guard only applies to write
   uint8_t raw = 0;
   Status st = customRead(cmd::CUSTOM_CO2_INTERVAL_FACTOR, raw);
   if (!st.ok()) {
@@ -662,9 +656,7 @@ Status EE871::writeCo2IntervalFactor(int8_t factor) {
 // ============================================================================
 
 Status EE871::readCo2Filter(uint8_t& filter) {
-  if (!hasFilterConfig()) {
-    return Status::Error(Err::NOT_SUPPORTED, "Filter config not supported");
-  }
+  // Filter can always be read, guard only applies to write
   return customRead(cmd::CUSTOM_FILTER_CO2, filter);
 }
 
@@ -676,10 +668,7 @@ Status EE871::writeCo2Filter(uint8_t filter) {
 }
 
 Status EE871::readOperatingMode(uint8_t& mode) {
-  // Mode register exists if either low power or E2 priority is supported
-  if (!hasLowPowerMode() && !hasE2Priority()) {
-    return Status::Error(Err::NOT_SUPPORTED, "Operating mode not supported");
-  }
+  // Mode can always be read, guard only applies to write
   return customRead(cmd::CUSTOM_OPERATING_MODE, mode);
 }
 
@@ -703,9 +692,7 @@ Status EE871::writeOperatingMode(uint8_t mode) {
 // ============================================================================
 
 Status EE871::readAutoAdjustStatus(bool& running) {
-  if (!hasAutoAdjust()) {
-    return Status::Error(Err::NOT_SUPPORTED, "Auto adjust not supported");
-  }
+  // Status can always be read, guard only applies to start
   uint8_t raw = 0;
   Status st = customRead(cmd::CUSTOM_AUTO_ADJUST, raw);
   if (!st.ok()) {

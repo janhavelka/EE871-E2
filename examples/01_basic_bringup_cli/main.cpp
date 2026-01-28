@@ -128,8 +128,6 @@ void printHelp() {
   Serial.println("  levels            - Read current bus levels");
   Serial.println("  pintest           - Test pin toggle (can MCU control bus?)");
   Serial.println("  clocktest         - Generate clock pulses and verify");
-  Serial.println("  sniff 1           - Start background sniffer (non-blocking)");
-  Serial.println("  sniff 0           - Stop background sniffer");
   Serial.println("  sniff             - Toggle sniffer on/off");
   Serial.println("  scan              - Scan all 8 E2 addresses");
   Serial.println("  timing            - Try different clock frequencies");
@@ -390,10 +388,6 @@ void processCommand(const String& cmd) {
     e2diag::testPinToggle(deviceCfg);
   } else if (trimmed == "clocktest") {
     e2diag::testClockPulses(deviceCfg, 10);
-  } else if (trimmed == "sniff 1") {
-    e2diag::sniffer().start(&deviceCfg);
-  } else if (trimmed == "sniff 0") {
-    e2diag::sniffer().stop();
   } else if (trimmed == "sniff") {
     // Toggle
     if (e2diag::sniffer().isActive()) {
