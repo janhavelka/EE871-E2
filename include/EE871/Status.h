@@ -21,7 +21,8 @@ enum class Err : uint8_t {
   IN_PROGRESS,               ///< Operation scheduled; call tick() to complete
   BUS_STUCK,                 ///< Bus lines stuck (SDA or SCL held low)
   ALREADY_INITIALIZED,       ///< begin() called without end()
-  OUT_OF_RANGE               ///< Value out of valid range
+  OUT_OF_RANGE,              ///< Value out of valid range
+  NOT_SUPPORTED              ///< Feature not supported by this device/firmware
 };
 
 /// Status structure returned by all fallible operations

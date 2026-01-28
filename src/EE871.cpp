@@ -256,6 +256,29 @@ Status EE871::begin(const Config& config) {
     return Status::Error(Err::DEVICE_NOT_FOUND, "Unexpected group id", group);
   }
 
+  // Cache feature flags for guards
+  // Use raw reads since we're not fully initialized yet
+  _operatingFunctions = 0;
+  _operatingModeSupport = 0;
+  _specialFeatures = 0;
+
+  // Set pointer to 0x07
+  const uint8_t ptrControl = cmd::makeControlWrite(cmd::MAIN_CUSTOM_PTR, _config.deviceAddress);
+  st = _writeCommandRaw(ptrControl, 0x00, cmd::CUSTOM_OPERATING_FUNCTIONS);
+  if (st.ok()) {
+    const uint8_t readControl = cmd::makeControlRead(cmd::MAIN_CUSTOM_PTR, _config.deviceAddress);
+    // Read 0x07, 0x08, 0x09 in sequence (auto-increment)
+    st = _readControlByteRaw(readControl, _operatingFunctions);
+    if (st.ok()) {
+      st = _readControlByteRaw(readControl, _operatingModeSupport);
+    }
+    if (st.ok()) {
+      st = _readControlByteRaw(readControl, _specialFeatures);
+    }
+  }
+  // If feature read fails, continue with defaults (all features disabled)
+  // This is non-fatal - the device still works, just with guards active
+
   _initialized = true;
   _driverState = DriverState::READY;
   return Status::Ok();
@@ -410,6 +433,9 @@ Status EE871::writeMeasurementInterval(uint16_t intervalDeciSeconds) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
   }
+  if (!hasGlobalInterval()) {
+    return Status::Error(Err::NOT_SUPPORTED, "Global interval not supported");
+  }
 
   // Validate range: 15.0s - 3600.0s (150 - 36000 deciseconds)
   if (intervalDeciSeconds < cmd::INTERVAL_MIN_DECISEC ||
@@ -482,6 +508,9 @@ Status EE871::readStatus(uint8_t& status) {
 }
 
 Status EE871::readErrorCode(uint8_t& code) {
+  if (!hasErrorCode()) {
+    return Status::Error(Err::NOT_SUPPORTED, "Error code not supported");
+  }
   return customRead(cmd::CUSTOM_ERROR_CODE, code);
 }
 
@@ -533,6 +562,9 @@ Status EE871::readSerialNumber(uint8_t* buf) {
   if (buf == nullptr) {
     return Status::Error(Err::INVALID_PARAM, "Null buffer");
   }
+  if (!hasSerialNumber()) {
+    return Status::Error(Err::NOT_SUPPORTED, "Serial number not supported");
+  }
   return customRead(cmd::CUSTOM_SERIAL_START, buf, cmd::CUSTOM_SERIAL_LEN);
 }
 
@@ -540,12 +572,18 @@ Status EE871::readPartName(uint8_t* buf) {
   if (buf == nullptr) {
     return Status::Error(Err::INVALID_PARAM, "Null buffer");
   }
+  if (!hasPartName()) {
+    return Status::Error(Err::NOT_SUPPORTED, "Part name not supported");
+  }
   return customRead(cmd::CUSTOM_PART_NAME_START, buf, cmd::CUSTOM_PART_NAME_LEN);
 }
 
 Status EE871::writePartName(const uint8_t* buf) {
   if (buf == nullptr) {
     return Status::Error(Err::INVALID_PARAM, "Null buffer");
+  }
+  if (!hasPartName()) {
+    return Status::Error(Err::NOT_SUPPORTED, "Part name not supported");
   }
   for (uint8_t i = 0; i < cmd::CUSTOM_PART_NAME_LEN; ++i) {
     Status st = customWrite(cmd::CUSTOM_PART_NAME_START + i, buf[i]);
@@ -561,10 +599,16 @@ Status EE871::writePartName(const uint8_t* buf) {
 // ============================================================================
 
 Status EE871::readBusAddress(uint8_t& address) {
+  if (!hasAddressConfig()) {
+    return Status::Error(Err::NOT_SUPPORTED, "Address config not supported");
+  }
   return customRead(cmd::CUSTOM_BUS_ADDRESS, address);
 }
 
 Status EE871::writeBusAddress(uint8_t address) {
+  if (!hasAddressConfig()) {
+    return Status::Error(Err::NOT_SUPPORTED, "Address config not supported");
+  }
   if (address > cmd::BUS_ADDRESS_MAX) {
     return Status::Error(Err::OUT_OF_RANGE, "Address must be 0-7", address);
   }
@@ -576,6 +620,9 @@ Status EE871::writeBusAddress(uint8_t address) {
 // ============================================================================
 
 Status EE871::readMeasurementInterval(uint16_t& intervalDeciSeconds) {
+  if (!hasGlobalInterval()) {
+    return Status::Error(Err::NOT_SUPPORTED, "Global interval not supported");
+  }
   uint8_t low = 0;
   uint8_t high = 0;
   Status st = customRead(cmd::CUSTOM_INTERVAL_L, low);
@@ -591,6 +638,9 @@ Status EE871::readMeasurementInterval(uint16_t& intervalDeciSeconds) {
 }
 
 Status EE871::readCo2IntervalFactor(int8_t& factor) {
+  if (!hasSpecificInterval()) {
+    return Status::Error(Err::NOT_SUPPORTED, "Specific interval not supported");
+  }
   uint8_t raw = 0;
   Status st = customRead(cmd::CUSTOM_CO2_INTERVAL_FACTOR, raw);
   if (!st.ok()) {
@@ -601,6 +651,9 @@ Status EE871::readCo2IntervalFactor(int8_t& factor) {
 }
 
 Status EE871::writeCo2IntervalFactor(int8_t factor) {
+  if (!hasSpecificInterval()) {
+    return Status::Error(Err::NOT_SUPPORTED, "Specific interval not supported");
+  }
   return customWrite(cmd::CUSTOM_CO2_INTERVAL_FACTOR, static_cast<uint8_t>(factor));
 }
 
@@ -609,18 +662,35 @@ Status EE871::writeCo2IntervalFactor(int8_t factor) {
 // ============================================================================
 
 Status EE871::readCo2Filter(uint8_t& filter) {
+  if (!hasFilterConfig()) {
+    return Status::Error(Err::NOT_SUPPORTED, "Filter config not supported");
+  }
   return customRead(cmd::CUSTOM_FILTER_CO2, filter);
 }
 
 Status EE871::writeCo2Filter(uint8_t filter) {
+  if (!hasFilterConfig()) {
+    return Status::Error(Err::NOT_SUPPORTED, "Filter config not supported");
+  }
   return customWrite(cmd::CUSTOM_FILTER_CO2, filter);
 }
 
 Status EE871::readOperatingMode(uint8_t& mode) {
+  // Mode register exists if either low power or E2 priority is supported
+  if (!hasLowPowerMode() && !hasE2Priority()) {
+    return Status::Error(Err::NOT_SUPPORTED, "Operating mode not supported");
+  }
   return customRead(cmd::CUSTOM_OPERATING_MODE, mode);
 }
 
 Status EE871::writeOperatingMode(uint8_t mode) {
+  // Check if requested mode bits are supported
+  if ((mode & cmd::OPERATING_MODE_MEASUREMODE_MASK) && !hasLowPowerMode()) {
+    return Status::Error(Err::NOT_SUPPORTED, "Low power mode not supported");
+  }
+  if ((mode & cmd::OPERATING_MODE_E2_PRIORITY_MASK) && !hasE2Priority()) {
+    return Status::Error(Err::NOT_SUPPORTED, "E2 priority not supported");
+  }
   // Only bits 0 and 1 are valid
   if (mode > 0x03) {
     return Status::Error(Err::OUT_OF_RANGE, "Invalid mode bits", mode);
@@ -633,6 +703,9 @@ Status EE871::writeOperatingMode(uint8_t mode) {
 // ============================================================================
 
 Status EE871::readAutoAdjustStatus(bool& running) {
+  if (!hasAutoAdjust()) {
+    return Status::Error(Err::NOT_SUPPORTED, "Auto adjust not supported");
+  }
   uint8_t raw = 0;
   Status st = customRead(cmd::CUSTOM_AUTO_ADJUST, raw);
   if (!st.ok()) {
@@ -643,6 +716,9 @@ Status EE871::readAutoAdjustStatus(bool& running) {
 }
 
 Status EE871::startAutoAdjust() {
+  if (!hasAutoAdjust()) {
+    return Status::Error(Err::NOT_SUPPORTED, "Auto adjust not supported");
+  }
   // Writing 1 starts auto adjustment (cannot be stopped)
   return customWrite(cmd::CUSTOM_AUTO_ADJUST, 0x01);
 }

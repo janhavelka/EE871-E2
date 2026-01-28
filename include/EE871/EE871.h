@@ -151,6 +151,40 @@ public:
   Status readSpecialFeatures(uint8_t& bits);
 
   // =========================================================================
+  // Feature Support Queries (use cached values from begin())
+  // =========================================================================
+
+  /// Check if serial number is readable
+  bool hasSerialNumber() const { return (_operatingFunctions & cmd::FEATURE_SERIAL_NUMBER) != 0; }
+
+  /// Check if part name is readable/writable
+  bool hasPartName() const { return (_operatingFunctions & cmd::FEATURE_PART_NAME) != 0; }
+
+  /// Check if bus address is configurable
+  bool hasAddressConfig() const { return (_operatingFunctions & cmd::FEATURE_ADDRESS_CONFIG) != 0; }
+
+  /// Check if global measurement interval is configurable
+  bool hasGlobalInterval() const { return (_operatingFunctions & cmd::FEATURE_GLOBAL_INTERVAL) != 0; }
+
+  /// Check if specific (per-quantity) interval is configurable
+  bool hasSpecificInterval() const { return (_operatingFunctions & cmd::FEATURE_SPECIFIC_INTERVAL) != 0; }
+
+  /// Check if measurement filter is configurable
+  bool hasFilterConfig() const { return (_operatingFunctions & cmd::FEATURE_FILTER_CONFIG) != 0; }
+
+  /// Check if error code register exists
+  bool hasErrorCode() const { return (_operatingFunctions & cmd::FEATURE_ERROR_CODE) != 0; }
+
+  /// Check if low power mode is supported
+  bool hasLowPowerMode() const { return (_operatingModeSupport & cmd::MODE_SUPPORT_LOW_POWER) != 0; }
+
+  /// Check if E2 priority mode is supported
+  bool hasE2Priority() const { return (_operatingModeSupport & cmd::MODE_SUPPORT_E2_PRIORITY) != 0; }
+
+  /// Check if auto adjustment is supported
+  bool hasAutoAdjust() const { return (_specialFeatures & cmd::SPECIAL_FEATURE_AUTO_ADJUST) != 0; }
+
+  // =========================================================================
   // Identity Strings
   // =========================================================================
 
@@ -298,6 +332,11 @@ private:
   bool _initialized = false;
   DriverState _driverState = DriverState::UNINIT;
   uint32_t _nowMs = 0;
+
+  // Feature flags (cached during begin())
+  uint8_t _operatingFunctions = 0;   ///< Cached 0x07
+  uint8_t _operatingModeSupport = 0; ///< Cached 0x08
+  uint8_t _specialFeatures = 0;      ///< Cached 0x09
 
   // Health counters
   uint32_t _lastOkMs = 0;

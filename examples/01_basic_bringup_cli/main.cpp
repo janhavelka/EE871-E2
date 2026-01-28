@@ -40,6 +40,7 @@ const char* errToStr(ee871::Err err) {
     case Err::BUS_STUCK:           return "BUS_STUCK";
     case Err::ALREADY_INITIALIZED: return "ALREADY_INITIALIZED";
     case Err::OUT_OF_RANGE:        return "OUT_OF_RANGE";
+    case Err::NOT_SUPPORTED:       return "NOT_SUPPORTED";
     default:                       return "UNKNOWN";
   }
 }
