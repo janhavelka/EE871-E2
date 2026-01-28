@@ -665,6 +665,13 @@ struct SnifferState {
   bool isReadMode = false;
   uint8_t byteIndex = 0;    // Byte number in transaction
   
+  // For value tracking
+  uint8_t lastMainCmd = 0;
+  uint8_t lastDataByte = 0;
+  uint8_t pendingLowByte = 0;
+  bool haveLowByte = false;
+  uint8_t lowByteCmd = 0;
+  
   uint32_t transitions = 0;
   uint32_t startMs = 0;
 };
@@ -675,25 +682,33 @@ inline SnifferState& snifferState() {
 }
 
 /// Decode control byte for display
-inline void decodeControlByte(uint8_t ctrl) {
-  uint8_t mainCmd = (ctrl >> 4) & 0x0F;
-  uint8_t addr = (ctrl >> 1) & 0x07;
-  bool read = ctrl & 0x01;
-  
-  const char* cmdName = "???";
+inline const char* getCmdName(uint8_t mainCmd, bool read) {
   switch (mainCmd) {
-    case 0x1: cmdName = read ? "TYPE_LO" : "CUST_WR"; break;
-    case 0x2: cmdName = "SUBGRP"; break;
-    case 0x3: cmdName = "AVAIL"; break;
-    case 0x4: cmdName = "TYPE_HI"; break;
-    case 0x5: cmdName = read ? "CUST_RD" : "CUST_PTR"; break;
-    case 0x7: cmdName = "STATUS"; break;
-    case 0xC: cmdName = "MV3_LO"; break;
-    case 0xD: cmdName = "MV3_HI"; break;
-    case 0xE: cmdName = "MV4_LO"; break;
-    case 0xF: cmdName = "MV4_HI"; break;
+    case 0x1: return read ? "TYPE_LO" : "CUST_WR";
+    case 0x2: return "SUBGRP";
+    case 0x3: return "AVAIL";
+    case 0x4: return "TYPE_HI";
+    case 0x5: return read ? "CUST_RD" : "CUST_PTR";
+    case 0x7: return "STATUS";
+    case 0xC: return "CO2fast_L";
+    case 0xD: return "CO2fast_H";
+    case 0xE: return "CO2avg_L";
+    case 0xF: return "CO2avg_H";
+    default: return "???";
   }
-  Serial.printf(" [%s addr=%d %s]", cmdName, addr, read ? "R" : "W");
+}
+
+/// Check if this is a low byte of a 16-bit value
+inline bool isLowByteCmd(uint8_t mainCmd) {
+  return mainCmd == 0xC || mainCmd == 0xE || mainCmd == 0x1;
+}
+
+/// Check if this is the matching high byte
+inline bool isMatchingHighByte(uint8_t lowCmd, uint8_t highCmd) {
+  if (lowCmd == 0xC && highCmd == 0xD) return true;  // MV3 (CO2 fast)
+  if (lowCmd == 0xE && highCmd == 0xF) return true;  // MV4 (CO2 avg)
+  if (lowCmd == 0x1 && highCmd == 0x4) return true;  // Type (group ID)
+  return false;
 }
 
 /// Callback invoked by transport on every line change
@@ -703,7 +718,7 @@ inline void snifferCallback(bool scl, bool sda) {
   
   // Detect START: SDA falls while SCL high
   if (s.lastScl && scl && s.lastSda && !sda) {
-    Serial.print("\n[SNIFF] START");
+    Serial.print("\n>START ");
     s.state = SnifferState::State::RECEIVING_BYTE;
     s.currentByte = 0;
     s.bitCount = 0;
@@ -713,7 +728,7 @@ inline void snifferCallback(bool scl, bool sda) {
   }
   // Detect STOP: SDA rises while SCL high  
   else if (s.lastScl && scl && !s.lastSda && sda) {
-    Serial.println("\n[SNIFF] STOP");
+    Serial.println(" STOP");
     s.state = SnifferState::State::IDLE;
     s.transitions++;
   }
@@ -738,13 +753,40 @@ inline void snifferCallback(bool scl, bool sda) {
       if (s.isFirstByte) {
         // Control byte
         s.isReadMode = (s.currentByte & 0x01);
-        Serial.printf("\n[SNIFF] TX: 0x%02X %s", s.currentByte, ack ? "ACK" : "NAK");
-        decodeControlByte(s.currentByte);
+        s.lastMainCmd = (s.currentByte >> 4) & 0x0F;
+        uint8_t addr = (s.currentByte >> 1) & 0x07;
+        
+        Serial.printf("[0x%02X %s a%d %s]", 
+                      s.currentByte,
+                      getCmdName(s.lastMainCmd, s.isReadMode),
+                      addr,
+                      ack ? "ACK" : "NAK");
         s.isFirstByte = false;
       } else {
-        // Data byte
-        const char* dir = s.isReadMode ? "RX" : "TX";
-        Serial.printf("\n[SNIFF] %s: 0x%02X %s", dir, s.currentByte, ack ? "ACK" : "NAK");
+        // Data byte - check if it's data or PEC
+        if (s.byteIndex == 1) {
+          // First data byte
+          s.lastDataByte = s.currentByte;
+          Serial.printf(" data=0x%02X(%u)", s.currentByte, s.currentByte);
+          
+          // Track for 16-bit assembly
+          if (s.isReadMode && isLowByteCmd(s.lastMainCmd)) {
+            s.pendingLowByte = s.currentByte;
+            s.haveLowByte = true;
+            s.lowByteCmd = s.lastMainCmd;
+          } else if (s.isReadMode && s.haveLowByte && isMatchingHighByte(s.lowByteCmd, s.lastMainCmd)) {
+            // We have both bytes - show combined value
+            uint16_t value = (static_cast<uint16_t>(s.currentByte) << 8) | s.pendingLowByte;
+            Serial.printf(" => %u", value);
+            if (s.lowByteCmd == 0xC || s.lowByteCmd == 0xE) {
+              Serial.print(" ppm");
+            }
+            s.haveLowByte = false;
+          }
+        } else if (s.byteIndex == 2) {
+          // PEC byte
+          Serial.printf(" pec=0x%02X", s.currentByte);
+        }
       }
       
       s.byteIndex++;
@@ -773,12 +815,13 @@ public:
     s.currentByte = 0;
     s.bitCount = 0;
     s.isFirstByte = true;
+    s.haveLowByte = false;
     s.active = true;
     
     // Register callback with transport
     transport::setSnifferCallback(snifferCallback);
     
-    Serial.println("[SNIFF] Started - type 'sniff 0' to stop");
+    Serial.println("[SNIFF] ON - 'sniff 0' to stop");
   }
   
   void stop() {
@@ -787,7 +830,7 @@ public:
       s.active = false;
       transport::setSnifferCallback(nullptr);
       uint32_t elapsed = millis() - s.startMs;
-      Serial.printf("\n[SNIFF] Stopped after %lu ms, %lu transitions\n", elapsed, s.transitions);
+      Serial.printf("\n[SNIFF] OFF (%lu ms, %lu edges)\n", elapsed, s.transitions);
     }
   }
   

@@ -18,7 +18,10 @@ enum class Err : uint8_t {
   PEC_MISMATCH,              ///< PEC validation failed
   NACK,                      ///< Missing ACK/NACK on bus
   BUSY,                      ///< Device is busy
-  IN_PROGRESS                ///< Operation scheduled; call tick() to complete
+  IN_PROGRESS,               ///< Operation scheduled; call tick() to complete
+  BUS_STUCK,                 ///< Bus lines stuck (SDA or SCL held low)
+  ALREADY_INITIALIZED,       ///< begin() called without end()
+  OUT_OF_RANGE               ///< Value out of valid range
 };
 
 /// Status structure returned by all fallible operations

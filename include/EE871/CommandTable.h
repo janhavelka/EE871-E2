@@ -115,6 +115,18 @@ static constexpr uint8_t CUSTOM_POINTER_LOW = 0xFE;
 static constexpr uint8_t CUSTOM_POINTER_HIGH = 0xFF;
 
 // ============================================================================
+// Interval / Range Limits
+// ============================================================================
+
+static constexpr uint16_t INTERVAL_MIN_DECISEC = 150;   // 15.0 s
+static constexpr uint16_t INTERVAL_MAX_DECISEC = 36000; // 3600.0 s
+static constexpr uint8_t BUS_ADDRESS_MIN = 0;
+static constexpr uint8_t BUS_ADDRESS_MAX = 7;
+
+// Bus reset: minimum clock pulses with SDA high to reset slave state machine
+static constexpr uint8_t BUS_RESET_CLOCKS = 9;
+
+// ============================================================================
 // Feature Flags
 // ============================================================================
 
