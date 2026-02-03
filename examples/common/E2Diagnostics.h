@@ -166,14 +166,14 @@ inline SniffResult sniffBus(const ee871::Config& cfg, uint32_t durationMs) {
 
 /// Sniff and print bus activity
 inline void sniffAndPrint(const ee871::Config& cfg, uint32_t durationMs = 2000) {
-  Serial.printf("=== Bus Sniffer (%lu ms) ===\n", durationMs);
+  Serial.printf("=== Bus Sniffer (%lu ms) ===\n", static_cast<unsigned long>(durationMs));
   Serial.println("Monitoring bus activity...");
   
   auto result = sniffBus(cfg, durationMs);
   
-  Serial.printf("\nResults over %lu ms:\n", result.durationMs);
-  Serial.printf("  SCL transitions: %lu\n", result.sclTransitions);
-  Serial.printf("  SDA transitions: %lu\n", result.sdaTransitions);
+  Serial.printf("\nResults over %lu ms:\n", static_cast<unsigned long>(result.durationMs));
+  Serial.printf("  SCL transitions: %lu\n", static_cast<unsigned long>(result.sclTransitions));
+  Serial.printf("  SDA transitions: %lu\n", static_cast<unsigned long>(result.sdaTransitions));
   
   if (result.sclTransitions > 0) {
     float sclFreq = (result.sclTransitions / 2.0f) / (result.durationMs / 1000.0f);
@@ -830,7 +830,9 @@ public:
       s.active = false;
       transport::setSnifferCallback(nullptr);
       uint32_t elapsed = millis() - s.startMs;
-      Serial.printf("\n[SNIFF] OFF (%lu ms, %lu edges)\n", elapsed, s.transitions);
+      Serial.printf("\n[SNIFF] OFF (%lu ms, %lu edges)\n",
+                    static_cast<unsigned long>(elapsed),
+                    static_cast<unsigned long>(s.transitions));
     }
   }
   
