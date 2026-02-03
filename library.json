@@ -1,6 +1,6 @@
 {
   "name": "ee871-e2",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "EE871 CO2 sensor driver for the E2 bus (ESP32 Arduino/PlatformIO).",
   "keywords": [
     "ee871",

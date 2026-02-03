@@ -8,14 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Initial library template structure
-- `begin(Config) -> Status`, `tick(now_ms)`, `end()` API pattern
-- Status/Err type with static error messages
-- Config injection pattern (no hardcoded pins)
-- Basic CLI example (`01_basic_bringup_cli`)
-- Compile-only skeleton example (`00_compile_only`)
-- GitHub Actions CI for ESP32-S2 and ESP32-S3
-- Doxygen-style documentation in public headers
+- Nothing yet
 
 ### Changed
 - Nothing yet
@@ -32,11 +25,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 - Nothing yet
 
+## [0.1.1] - 2026-02-03
+
+### Changed
+- Rename PlatformIO CLI example environments to `ex_cli_s2` and `ex_cli_s3`
+- Set default PlatformIO environment to `ex_cli_s3`
+
+### Removed
+- Compile-only CI environments
+
 ## [0.1.0] - 2026-01-10
 
 ### Added
 - Initial release with template structure
 - ESP32-S2 and ESP32-S3 support
 
-[Unreleased]: https://github.com/YOUR_USERNAME/esp32-platformio-library-template/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/YOUR_USERNAME/esp32-platformio-library-template/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/YOUR_USERNAME/esp32-platformio-library-template/releases/tag/v0.1.1
 [0.1.0]: https://github.com/YOUR_USERNAME/esp32-platformio-library-template/releases/tag/v0.1.0
