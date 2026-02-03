@@ -38,8 +38,8 @@ struct Config {
   // === Timing (E2 spec) ===
   uint16_t clockLowUs = 100;      ///< Minimum CLK low time
   uint16_t clockHighUs = 100;     ///< Minimum CLK high time
-  uint16_t startHoldUs = 4;       ///< START hold time
-  uint16_t stopHoldUs = 4;        ///< STOP hold time
+  uint16_t startHoldUs = 100;     ///< START hold time (spec min 4us, use clockHighUs for margin)
+  uint16_t stopHoldUs = 100;      ///< STOP hold time (spec min 4us, use clockHighUs for margin)
 
   uint32_t bitTimeoutUs = 25000;  ///< Clock-stretch timeout per bit
   uint32_t byteTimeoutUs = 35000; ///< Clock-stretch timeout per byte

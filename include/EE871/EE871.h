@@ -116,13 +116,194 @@ public:
   // EE871 Helpers
   // =========================================================================
 
+  // =========================================================================
+  // Identification
+  // =========================================================================
+
   Status readGroup(uint16_t& group);
   Status readSubgroup(uint8_t& subgroup);
   Status readAvailableMeasurements(uint8_t& bits);
+
+  // =========================================================================
+  // Firmware / Spec Version
+  // =========================================================================
+
+  /// Read firmware version (main.sub)
+  Status readFirmwareVersion(uint8_t& main, uint8_t& sub);
+
+  /// Read E2 specification version implemented by device
+  Status readE2SpecVersion(uint8_t& version);
+
+  // =========================================================================
+  // Feature Discovery
+  // =========================================================================
+
+  /// Read operating functions bitfield (0x07)
+  /// @see cmd::FEATURE_* constants for bit meanings
+  Status readOperatingFunctions(uint8_t& bits);
+
+  /// Read operating mode support bitfield (0x08)
+  /// @see cmd::MODE_SUPPORT_* constants
+  Status readOperatingModeSupport(uint8_t& bits);
+
+  /// Read special features bitfield (0x09)
+  /// @see cmd::SPECIAL_FEATURE_* constants
+  Status readSpecialFeatures(uint8_t& bits);
+
+  // =========================================================================
+  // Feature Support Queries (use cached values from begin())
+  // =========================================================================
+
+  /// Check if serial number is readable
+  bool hasSerialNumber() const { return (_operatingFunctions & cmd::FEATURE_SERIAL_NUMBER) != 0; }
+
+  /// Check if part name is readable/writable
+  bool hasPartName() const { return (_operatingFunctions & cmd::FEATURE_PART_NAME) != 0; }
+
+  /// Check if bus address is configurable
+  bool hasAddressConfig() const { return (_operatingFunctions & cmd::FEATURE_ADDRESS_CONFIG) != 0; }
+
+  /// Check if global measurement interval is configurable
+  bool hasGlobalInterval() const { return (_operatingFunctions & cmd::FEATURE_GLOBAL_INTERVAL) != 0; }
+
+  /// Check if specific (per-quantity) interval is configurable
+  bool hasSpecificInterval() const { return (_operatingFunctions & cmd::FEATURE_SPECIFIC_INTERVAL) != 0; }
+
+  /// Check if measurement filter is configurable
+  bool hasFilterConfig() const { return (_operatingFunctions & cmd::FEATURE_FILTER_CONFIG) != 0; }
+
+  /// Check if error code register exists
+  bool hasErrorCode() const { return (_operatingFunctions & cmd::FEATURE_ERROR_CODE) != 0; }
+
+  /// Check if low power mode is supported
+  bool hasLowPowerMode() const { return (_operatingModeSupport & cmd::MODE_SUPPORT_LOW_POWER) != 0; }
+
+  /// Check if E2 priority mode is supported
+  bool hasE2Priority() const { return (_operatingModeSupport & cmd::MODE_SUPPORT_E2_PRIORITY) != 0; }
+
+  /// Check if auto adjustment is supported
+  bool hasAutoAdjust() const { return (_specialFeatures & cmd::SPECIAL_FEATURE_AUTO_ADJUST) != 0; }
+
+  // =========================================================================
+  // Identity Strings
+  // =========================================================================
+
+  /// Read 16-byte serial number (0xA0-0xAF)
+  /// @param buf Buffer of at least 16 bytes
+  Status readSerialNumber(uint8_t* buf);
+
+  /// Read 16-byte part name (0xB0-0xBF)
+  /// @param buf Buffer of at least 16 bytes
+  Status readPartName(uint8_t* buf);
+
+  /// Write 16-byte part name (0xB0-0xBF)
+  /// @param buf Buffer of exactly 16 bytes
+  Status writePartName(const uint8_t* buf);
+
+  // =========================================================================
+  // Bus Address
+  // =========================================================================
+
+  /// Read current bus address (0xC0)
+  Status readBusAddress(uint8_t& address);
+
+  /// Write bus address (0xC0) - requires power cycle to take effect
+  /// @param address New address (0-7)
+  /// @return OUT_OF_RANGE if address > 7
+  Status writeBusAddress(uint8_t address);
+
+  // =========================================================================
+  // Measurement Interval
+  // =========================================================================
+
+  /// Read global measurement interval
+  /// @param intervalDeciSeconds Interval in 0.1 s units
+  Status readMeasurementInterval(uint16_t& intervalDeciSeconds);
+
+  /// Read CO2-specific interval factor (0xCB)
+  /// Positive = multiplier, Negative = divider
+  Status readCo2IntervalFactor(int8_t& factor);
+
+  /// Write CO2-specific interval factor (0xCB)
+  Status writeCo2IntervalFactor(int8_t factor);
+
+  // =========================================================================
+  // Filter / Operating Mode
+  // =========================================================================
+
+  /// Read CO2 filter setting (0xD3)
+  Status readCo2Filter(uint8_t& filter);
+
+  /// Write CO2 filter setting (0xD3)
+  Status writeCo2Filter(uint8_t filter);
+
+  /// Read operating mode (0xD8)
+  /// @see cmd::OPERATING_MODE_* constants
+  Status readOperatingMode(uint8_t& mode);
+
+  /// Write operating mode (0xD8)
+  /// bit0: 0=freerunning, 1=low power
+  /// bit1: 0=measurement priority, 1=E2 priority
+  Status writeOperatingMode(uint8_t mode);
+
+  // =========================================================================
+  // Auto Adjustment
+  // =========================================================================
+
+  /// Check if auto adjustment is running (0xD9 bit0)
+  Status readAutoAdjustStatus(bool& running);
+
+  /// Start auto adjustment (cannot be stopped once started)
+  /// Device will return 0x55 during adjustment (~5 min)
+  Status startAutoAdjust();
+
+  // =========================================================================
+  // Calibration (Advanced)
+  // =========================================================================
+
+  /// Read CO2 offset (signed, ppm)
+  Status readCo2Offset(int16_t& offset);
+
+  /// Write CO2 offset (signed, ppm)
+  Status writeCo2Offset(int16_t offset);
+
+  /// Read CO2 gain (gain = value / 32768)
+  Status readCo2Gain(uint16_t& gain);
+
+  /// Write CO2 gain (gain = value / 32768)
+  Status writeCo2Gain(uint16_t gain);
+
+  /// Read last calibration points (lower, upper in ppm)
+  Status readCo2CalPoints(uint16_t& lower, uint16_t& upper);
+
+  // =========================================================================
+  // Status / Measurements
+  // =========================================================================
+
+  /// Read status byte (also triggers measurement if interval > 15s)
   Status readStatus(uint8_t& status);
+
+  /// Read error code (0xC1) - valid when status bit3 is set
   Status readErrorCode(uint8_t& code);
+
+  /// Read CO2 fast response (MV3, raw/unfiltered)
   Status readCo2Fast(uint16_t& ppm);
+
+  /// Read CO2 averaged value (MV4, 11-sample moving average)
   Status readCo2Average(uint16_t& ppm);
+
+  // =========================================================================
+  // Bus Safety
+  // =========================================================================
+
+  /// Reset bus state by clocking with SDA high
+  /// Use after timeout/stuck bus conditions
+  /// @return Ok if bus lines are free after reset
+  Status busReset();
+
+  /// Check if bus lines are idle (both high)
+  /// @return Ok if idle, BUS_STUCK if either line is low
+  Status checkBusIdle();
 
 private:
   // =========================================================================
@@ -151,6 +332,11 @@ private:
   bool _initialized = false;
   DriverState _driverState = DriverState::UNINIT;
   uint32_t _nowMs = 0;
+
+  // Feature flags (cached during begin())
+  uint8_t _operatingFunctions = 0;   ///< Cached 0x07
+  uint8_t _operatingModeSupport = 0; ///< Cached 0x08
+  uint8_t _specialFeatures = 0;      ///< Cached 0x09
 
   // Health counters
   uint32_t _lastOkMs = 0;
