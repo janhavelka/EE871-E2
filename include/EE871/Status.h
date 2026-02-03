@@ -35,7 +35,8 @@ struct Status {
   constexpr Status() = default;
 
   /// Explicit constructor for older GCC compatibility
-  constexpr Status(Err c, int32_t d, const char* m) : code(c), detail(d), msg(m) {}
+  constexpr Status(Err codeIn, int32_t detailIn, const char* msgIn)
+      : code(codeIn), detail(detailIn), msg(msgIn) {}
 
   /// @return true if operation succeeded
   constexpr bool ok() const { return code == Err::OK; }

@@ -3,6 +3,7 @@
 /// @note This is an EXAMPLE, not part of the library
 
 #include <Arduino.h>
+#include <stdlib.h>
 #include "common/Log.h"
 #include "common/BoardConfig.h"
 #include "common/E2Transport.h"
@@ -19,8 +20,198 @@ ee871::Config deviceCfg;  // Stored for diagnostics
 bool verboseMode = false;
 
 // ============================================================================
+// Bus Trace (example-only)
+// ============================================================================
+
+namespace buslog {
+
+enum class EventType : uint8_t {
+  SET_SCL = 0,
+  SET_SDA = 1,
+  READ_SCL = 2,
+  READ_SDA = 3,
+  DELAY_US = 4
+};
+
+struct Event {
+  uint32_t tsUs;
+  uint16_t data;
+  uint8_t type;
+  uint8_t value;
+};
+
+static constexpr size_t TRACE_CAPACITY = 512;
+static constexpr size_t TRACE_MAX_FLUSH_PER_LOOP = 24;
+static constexpr size_t TRACE_LINE_MAX = 40;
+
+static Event traceBuffer[TRACE_CAPACITY];
+static size_t traceHead = 0;
+static size_t traceTail = 0;
+static size_t traceCount = 0;
+static uint32_t traceDropped = 0;
+static bool traceEnabled = false;
+
+inline void clear() {
+  traceHead = 0;
+  traceTail = 0;
+  traceCount = 0;
+  traceDropped = 0;
+}
+
+inline void setEnabled(bool enabled) {
+  traceEnabled = enabled;
+}
+
+inline void push(EventType type, uint8_t value, uint16_t data) {
+  if (!traceEnabled) {
+    return;
+  }
+  if (traceCount >= TRACE_CAPACITY) {
+    traceDropped++;
+    return;
+  }
+  traceBuffer[traceHead] = { micros(), data, static_cast<uint8_t>(type), value };
+  traceHead = (traceHead + 1) % TRACE_CAPACITY;
+  traceCount++;
+}
+
+inline size_t boundedLen(int len, size_t cap) {
+  if (len <= 0) {
+    return 0;
+  }
+  const size_t ulen = static_cast<size_t>(len);
+  return (ulen >= cap) ? (cap - 1U) : ulen;
+}
+
+inline size_t formatEvent(const Event& ev, char* out, size_t cap) {
+  const unsigned long ts = static_cast<unsigned long>(ev.tsUs);
+  switch (static_cast<EventType>(ev.type)) {
+    case EventType::SET_SCL:
+      return boundedLen(snprintf(out, cap, "[BUS] %10lu us SCL=%u\n", ts, ev.value), cap);
+    case EventType::SET_SDA:
+      return boundedLen(snprintf(out, cap, "[BUS] %10lu us SDA=%u\n", ts, ev.value), cap);
+    case EventType::READ_SCL:
+      return boundedLen(snprintf(out, cap, "[BUS] %10lu us SCL?=%u\n", ts, ev.value), cap);
+    case EventType::READ_SDA:
+      return boundedLen(snprintf(out, cap, "[BUS] %10lu us SDA?=%u\n", ts, ev.value), cap);
+    case EventType::DELAY_US:
+      return boundedLen(snprintf(out, cap, "[BUS] %10lu us delay %u us\n", ts, ev.data), cap);
+    default:
+      return boundedLen(snprintf(out, cap, "[BUS] %10lu us ???\n", ts), cap);
+  }
+}
+
+inline void flush() {
+  if (!traceEnabled) {
+    return;
+  }
+  size_t emitted = 0;
+  while (emitted < TRACE_MAX_FLUSH_PER_LOOP && traceCount > 0) {
+    if (Serial.availableForWrite() < static_cast<int>(TRACE_LINE_MAX)) {
+      break;
+    }
+    const Event ev = traceBuffer[traceTail];
+    traceTail = (traceTail + 1) % TRACE_CAPACITY;
+    traceCount--;
+
+    char line[TRACE_LINE_MAX];
+    const size_t len = formatEvent(ev, line, sizeof(line));
+    if (len > 0) {
+      Serial.write(reinterpret_cast<const uint8_t*>(line), len);
+    }
+    emitted++;
+  }
+}
+
+inline void printStats() {
+  Serial.println("=== Bus Trace ===");
+  Serial.printf("  Enabled: %s\n", traceEnabled ? "yes" : "no");
+  Serial.printf("  Pending: %u\n", static_cast<unsigned>(traceCount));
+  Serial.printf("  Dropped: %lu\n", static_cast<unsigned long>(traceDropped));
+  Serial.printf("  Capacity: %u\n", static_cast<unsigned>(TRACE_CAPACITY));
+}
+
+} // namespace buslog
+
+namespace trace {
+
+inline void setScl(bool level, void* user) {
+  transport::setScl(level, user);
+  buslog::push(buslog::EventType::SET_SCL, level ? 1U : 0U, 0);
+}
+
+inline void setSda(bool level, void* user) {
+  transport::setSda(level, user);
+  buslog::push(buslog::EventType::SET_SDA, level ? 1U : 0U, 0);
+}
+
+inline bool readScl(void* user) {
+  const bool level = transport::readScl(user);
+  buslog::push(buslog::EventType::READ_SCL, level ? 1U : 0U, 0);
+  return level;
+}
+
+inline bool readSda(void* user) {
+  const bool level = transport::readSda(user);
+  buslog::push(buslog::EventType::READ_SDA, level ? 1U : 0U, 0);
+  return level;
+}
+
+inline void delayUs(uint32_t us, void* user) {
+  const uint16_t clipped = (us > 0xFFFFu) ? 0xFFFFu : static_cast<uint16_t>(us);
+  buslog::push(buslog::EventType::DELAY_US, 0, clipped);
+  transport::delayUs(us, user);
+}
+
+} // namespace trace
+
+// ============================================================================
 // Helper Functions
 // ============================================================================
+
+static constexpr uint16_t CUSTOM_MEM_SIZE = 0x100;
+static constexpr size_t REG_DUMP_CHUNK_LEN = 16;
+
+bool splitToken(const String& in, String& head, String& tail) {
+  const int idx = in.indexOf(' ');
+  if (idx < 0) {
+    head = in;
+    head.trim();
+    tail = "";
+    return head.length() > 0;
+  }
+  head = in.substring(0, idx);
+  tail = in.substring(idx + 1);
+  head.trim();
+  tail.trim();
+  return head.length() > 0;
+}
+
+bool parseU8Token(const String& token, uint8_t& out) {
+  if (token.isEmpty()) {
+    return false;
+  }
+  char* end = nullptr;
+  const unsigned long value = strtoul(token.c_str(), &end, 0);
+  if (end == token.c_str() || *end != '\0' || value > 0xFFUL) {
+    return false;
+  }
+  out = static_cast<uint8_t>(value);
+  return true;
+}
+
+bool parseU16Token(const String& token, uint16_t& out) {
+  if (token.isEmpty()) {
+    return false;
+  }
+  char* end = nullptr;
+  const unsigned long value = strtoul(token.c_str(), &end, 0);
+  if (end == token.c_str() || *end != '\0' || value > 0xFFFFUL) {
+    return false;
+  }
+  out = static_cast<uint16_t>(value);
+  return true;
+}
 
 /// Convert error code to string
 const char* errToStr(ee871::Err err) {
@@ -68,6 +259,16 @@ void printStatus(const ee871::Status& st) {
   }
 }
 
+bool ensureProbeOk() {
+  auto st = device.probe();
+  if (!st.ok()) {
+    LOGW("Probe failed");
+    printStatus(st);
+    return false;
+  }
+  return true;
+}
+
 /// Print driver health information
 void printDriverHealth() {
   Serial.println("=== Driver State ===");
@@ -91,6 +292,9 @@ void printHelp() {
   Serial.println("  co2fast           - Read MV3 (fast response)");
   Serial.println("  co2avg            - Read MV4 (averaged)");
   Serial.println("  error             - Read error code (if status indicates error)");
+  Serial.println("  reg read <addr>   - Read custom register (addr: 0x00-0xFF)");
+  Serial.println("  reg write <addr> <value> - Write custom register and verify");
+  Serial.println("  reg dump [start] [len]   - Dump custom registers (default all)");
   Serial.println("  drv               - Show driver state and health");
   Serial.println("  recover           - Attempt recovery");
   Serial.println();
@@ -134,10 +338,12 @@ void printHelp() {
   Serial.println("  busreset          - Send 9 clocks to recover stuck bus");
   Serial.println("  tx <hex>          - Test transaction with control byte");
   Serial.println("  libtest           - Test all library commands (begin uses)");
+  Serial.println("  trace stats       - Show bus trace buffer stats");
+  Serial.println("  trace clear       - Clear buffered trace events");
   Serial.println();
   Serial.println("=== Other ===");
   Serial.println("  help              - Show this help");
-  Serial.println("  verbose 0|1       - Set verbose mode");
+  Serial.println("  verbose 0|1       - Toggle bus trace output");
 }
 
 // ============================================================================
@@ -199,6 +405,130 @@ void processCommand(const String& cmd) {
     printStatus(st);
     if (st.ok()) {
       Serial.printf("  Error code: %u\n", code);
+    }
+  } else if (trimmed.startsWith("reg ")) {
+    String args = trimmed.substring(4);
+    args.trim();
+
+    String subcmd;
+    String rest;
+    if (!splitToken(args, subcmd, rest)) {
+      LOGW("Usage: reg read|write|dump");
+      return;
+    }
+
+    if (subcmd == "read") {
+      String addrToken;
+      String extra;
+      if (!splitToken(rest, addrToken, extra) || extra.length() > 0) {
+        LOGW("Usage: reg read <addr>");
+        return;
+      }
+      uint8_t addr = 0;
+      if (!parseU8Token(addrToken, addr)) {
+        LOGW("Invalid address");
+        return;
+      }
+      if (!ensureProbeOk()) {
+        return;
+      }
+      uint8_t value = 0;
+      auto st = device.customRead(addr, value);
+      printStatus(st);
+      if (st.ok()) {
+        Serial.printf("  Reg[0x%02X] = 0x%02X (%u)\n",
+                      static_cast<unsigned>(addr),
+                      static_cast<unsigned>(value),
+                      static_cast<unsigned>(value));
+      }
+    } else if (subcmd == "write") {
+      String addrToken;
+      String restAfterAddr;
+      if (!splitToken(rest, addrToken, restAfterAddr)) {
+        LOGW("Usage: reg write <addr> <value>");
+        return;
+      }
+      String valueToken;
+      String extra;
+      if (!splitToken(restAfterAddr, valueToken, extra) || extra.length() > 0) {
+        LOGW("Usage: reg write <addr> <value>");
+        return;
+      }
+      uint8_t addr = 0;
+      uint8_t value = 0;
+      if (!parseU8Token(addrToken, addr) || !parseU8Token(valueToken, value)) {
+        LOGW("Invalid address/value");
+        return;
+      }
+      if (!ensureProbeOk()) {
+        return;
+      }
+      auto st = device.customWrite(addr, value);
+      printStatus(st);
+      if (st.ok()) {
+        Serial.printf("  Reg[0x%02X] <= 0x%02X\n",
+                      static_cast<unsigned>(addr),
+                      static_cast<unsigned>(value));
+      }
+    } else if (subcmd == "dump") {
+      uint8_t start = 0;
+      uint16_t len = CUSTOM_MEM_SIZE;
+      if (rest.length() > 0) {
+        String startToken;
+        String restAfterStart;
+        if (!splitToken(rest, startToken, restAfterStart)) {
+          LOGW("Usage: reg dump [start] [len]");
+          return;
+        }
+        if (!parseU8Token(startToken, start)) {
+          LOGW("Invalid start");
+          return;
+        }
+        if (restAfterStart.length() > 0) {
+          String lenToken;
+          String extra;
+          if (!splitToken(restAfterStart, lenToken, extra) || extra.length() > 0) {
+            LOGW("Usage: reg dump [start] [len]");
+            return;
+          }
+          if (!parseU16Token(lenToken, len)) {
+            LOGW("Invalid length");
+            return;
+          }
+        } else {
+          len = static_cast<uint16_t>(CUSTOM_MEM_SIZE - start);
+        }
+      }
+      if (len == 0 || (static_cast<uint16_t>(start) + len) > CUSTOM_MEM_SIZE) {
+        LOGW("Range out of bounds");
+        return;
+      }
+      if (!ensureProbeOk()) {
+        return;
+      }
+
+      uint16_t remaining = len;
+      uint16_t offset = start;
+      Serial.println("=== Custom Register Dump ===");
+      while (remaining > 0) {
+        const uint16_t chunk =
+            (remaining > REG_DUMP_CHUNK_LEN) ? REG_DUMP_CHUNK_LEN : remaining;
+        uint8_t buf[REG_DUMP_CHUNK_LEN] = {};
+        auto st = device.customRead(static_cast<uint8_t>(offset), buf, chunk);
+        if (!st.ok()) {
+          printStatus(st);
+          return;
+        }
+        Serial.printf("  0x%02X:", static_cast<unsigned>(offset & 0xFF));
+        for (uint16_t i = 0; i < chunk; ++i) {
+          Serial.printf(" %02X", static_cast<unsigned>(buf[i]));
+        }
+        Serial.println();
+        offset = static_cast<uint16_t>(offset + chunk);
+        remaining = static_cast<uint16_t>(remaining - chunk);
+      }
+    } else {
+      LOGW("Unknown reg subcommand: %s", subcmd.c_str());
     }
   } else if (trimmed == "drv") {
     printDriverHealth();
@@ -377,7 +707,16 @@ void processCommand(const String& cmd) {
   } else if (trimmed.startsWith("verbose ")) {
     int val = trimmed.substring(8).toInt();
     verboseMode = (val != 0);
+    if (verboseMode) {
+      buslog::clear();
+    }
+    buslog::setEnabled(verboseMode);
     LOGI("Verbose mode: %s", verboseMode ? "ON" : "OFF");
+  } else if (trimmed == "trace stats") {
+    buslog::printStats();
+  } else if (trimmed == "trace clear") {
+    buslog::clear();
+    LOGI("Bus trace cleared");
   
   // === Diagnostic Commands ===
   } else if (trimmed == "diag") {
@@ -408,7 +747,7 @@ void processCommand(const String& cmd) {
     e2diag::testTransaction(deviceCfg, ctrlByte);
   } else if (trimmed == "libtest") {
     e2diag::testLibraryCommands(deviceCfg);
-  
+
   } else {
     LOGW("Unknown command: %s", trimmed.c_str());
   }
@@ -432,12 +771,12 @@ void setup() {
 
   Serial.printf("[I] E2 initialized (DATA=%d, CLOCK=%d)\n", board::E2_DATA, board::E2_CLOCK);
 
-  // Configure and store for diagnostics
-  deviceCfg.setScl = transport::setScl;
-  deviceCfg.setSda = transport::setSda;
-  deviceCfg.readScl = transport::readScl;
-  deviceCfg.readSda = transport::readSda;
-  deviceCfg.delayUs = transport::delayUs;
+  // Configure and store for diagnostics (use trace wrappers for optional bus logging)
+  deviceCfg.setScl = trace::setScl;
+  deviceCfg.setSda = trace::setSda;
+  deviceCfg.readScl = trace::readScl;
+  deviceCfg.readSda = trace::readSda;
+  deviceCfg.delayUs = trace::delayUs;
   deviceCfg.busUser = &board::e2Pins();
   deviceCfg.deviceAddress = ee871::cmd::DEFAULT_DEVICE_ADDRESS;
   deviceCfg.clockLowUs = board::E2_CLOCK_LOW_US;
@@ -483,4 +822,6 @@ void loop() {
       inputBuffer += c;
     }
   }
+
+  buslog::flush();
 }
