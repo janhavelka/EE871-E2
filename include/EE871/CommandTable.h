@@ -113,6 +113,7 @@ static constexpr uint8_t CUSTOM_AUTO_ADJUST = 0xD9;
 
 static constexpr uint8_t CUSTOM_POINTER_LOW = 0xFE;
 static constexpr uint8_t CUSTOM_POINTER_HIGH = 0xFF;
+static constexpr uint16_t CUSTOM_MEMORY_SIZE = 256;
 
 // ============================================================================
 // Interval / Range Limits

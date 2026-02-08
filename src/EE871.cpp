@@ -206,8 +206,17 @@ Status EE871::begin(const Config& config) {
   if (config.clockLowUs < 100 || config.clockHighUs < 100) {
     return Status::Error(Err::INVALID_CONFIG, "Clock timing below spec");
   }
+  if (config.startHoldUs < 4 || config.stopHoldUs < 4) {
+    return Status::Error(Err::INVALID_CONFIG, "Start/stop hold below spec");
+  }
   if (config.bitTimeoutUs == 0 || config.byteTimeoutUs == 0) {
     return Status::Error(Err::INVALID_CONFIG, "Timeouts must be non-zero");
+  }
+  if (config.byteTimeoutUs < config.bitTimeoutUs) {
+    return Status::Error(Err::INVALID_CONFIG, "byteTimeoutUs must be >= bitTimeoutUs");
+  }
+  if (config.offlineThreshold == 0) {
+    return Status::Error(Err::INVALID_CONFIG, "offlineThreshold must be > 0");
   }
 
   _config = config;
@@ -374,6 +383,11 @@ Status EE871::customRead(uint8_t address, uint8_t& data) {
 Status EE871::customRead(uint8_t address, uint8_t* buf, size_t len) {
   if (buf == nullptr || len == 0) {
     return Status::Error(Err::INVALID_PARAM, "Invalid buffer");
+  }
+  const size_t maxLen = static_cast<size_t>(cmd::CUSTOM_MEMORY_SIZE) -
+                        static_cast<size_t>(address);
+  if (len > maxLen) {
+    return Status::Error(Err::OUT_OF_RANGE, "Read exceeds custom memory map");
   }
   Status st = setCustomPointer(address);
   if (!st.ok()) {
@@ -887,7 +901,10 @@ Status EE871::_readControlByteRaw(uint8_t controlByte, uint8_t& data) {
     return st;
   }
 
-  e2Stop(_config);
+  st = e2Stop(_config);
+  if (!st.ok()) {
+    return st;
+  }
 
   const uint8_t expected = calcPecRead(controlByte, data);
   if (pec != expected) {
@@ -973,8 +990,11 @@ Status EE871::_writeCommandRaw(uint8_t controlByte, uint8_t addressByte, uint8_t
     return Status::Error(Err::NACK, "PEC NACK");
   }
 
-  e2Stop(_config);
-  return Status::Ok();
+  st = e2Stop(_config);
+  if (!st.ok()) {
+    return st;
+  }
+  return st;
 }
 
 Status EE871::_writeCommandTracked(uint8_t controlByte, uint8_t addressByte, uint8_t dataByte) {
