@@ -39,3 +39,4 @@ wifi_credentials.h
 
 # Auto-generated files
 include/YourLibrary/Version.h
+compile_commands.json

@@ -127,6 +127,19 @@ static constexpr uint8_t BUS_ADDRESS_MAX = 7;
 // Bus reset: minimum clock pulses with SDA high to reset slave state machine
 static constexpr uint8_t BUS_RESET_CLOCKS = 9;
 
+// Maximum write delay limits (prevent unbounded blocking from misconfiguration)
+static constexpr uint32_t WRITE_DELAY_MAX_MS = 5000;
+static constexpr uint32_t INTERVAL_WRITE_DELAY_MAX_MS = 5000;
+
+// ============================================================================
+// CO2 Error Codes (read from custom memory 0xC1 when status bit3 set)
+// ============================================================================
+
+static constexpr uint8_t CO2_ERROR_SUPPLY_VOLTAGE_LOW = 1;
+static constexpr uint8_t CO2_ERROR_SENSOR_COUNTS_LOW = 200;
+static constexpr uint8_t CO2_ERROR_SENSOR_COUNTS_HIGH = 201;
+static constexpr uint8_t CO2_ERROR_SUPPLY_VOLTAGE_BREAKDOWN = 202;
+
 // ============================================================================
 // Feature Flags
 // ============================================================================

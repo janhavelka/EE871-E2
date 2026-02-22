@@ -7,23 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-02-22
+
 ### Added
-- Nothing yet
-
-### Changed
-- Nothing yet
-
-### Deprecated
-- Nothing yet
-
-### Removed
-- Nothing yet
+- CO2 error code constants: `CO2_ERROR_SUPPLY_VOLTAGE_LOW` (1), `CO2_ERROR_SENSOR_COUNTS_LOW` (200), `CO2_ERROR_SENSOR_COUNTS_HIGH` (201), `CO2_ERROR_SUPPLY_VOLTAGE_BREAKDOWN` (202)
+- `hasCo2Error(statusByte)` static convenience for checking status bit3
+- Config validation upper bounds for `writeDelayMs` and `intervalWriteDelayMs` (max 5000 ms)
+- `setCustomPointer()` address range validation (rejects > 0xFF)
+- Write delay safety limits in `CommandTable.h` (`WRITE_DELAY_MAX_MS`, `INTERVAL_WRITE_DELAY_MAX_MS`)
 
 ### Fixed
-- Nothing yet
-
-### Security
-- Nothing yet
+- `begin()` bus reset now handles clock stretching and generates proper STOP condition
+- `recover()` performs bus reset before probing to clear stuck bus states
 
 ## [0.1.1] - 2026-02-03
 
@@ -40,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial release with template structure
 - ESP32-S2 and ESP32-S3 support
 
-[Unreleased]: https://github.com/YOUR_USERNAME/esp32-platformio-library-template/compare/v0.1.1...HEAD
-[0.1.1]: https://github.com/YOUR_USERNAME/esp32-platformio-library-template/releases/tag/v0.1.1
-[0.1.0]: https://github.com/YOUR_USERNAME/esp32-platformio-library-template/releases/tag/v0.1.0
+[Unreleased]: https://github.com/janhavelka/EE871-E2/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/janhavelka/EE871-E2/compare/v0.1.1...v0.2.0
+[0.1.1]: https://github.com/janhavelka/EE871-E2/releases/tag/v0.1.1
+[0.1.0]: https://github.com/janhavelka/EE871-E2/releases/tag/v0.1.0

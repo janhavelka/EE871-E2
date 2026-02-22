@@ -218,6 +218,12 @@ Status EE871::begin(const Config& config) {
   if (config.offlineThreshold == 0) {
     return Status::Error(Err::INVALID_CONFIG, "offlineThreshold must be > 0");
   }
+  if (config.writeDelayMs > cmd::WRITE_DELAY_MAX_MS) {
+    return Status::Error(Err::INVALID_CONFIG, "writeDelayMs exceeds safe limit");
+  }
+  if (config.intervalWriteDelayMs > cmd::INTERVAL_WRITE_DELAY_MAX_MS) {
+    return Status::Error(Err::INVALID_CONFIG, "intervalWriteDelayMs exceeds safe limit");
+  }
 
   _config = config;
   _initialized = false;
@@ -232,14 +238,29 @@ Status EE871::begin(const Config& config) {
 
   // Check bus is idle before probing
   if (!readScl(_config) || !readSda(_config)) {
-    // Attempt bus reset
+    // Attempt bus reset - clock out pulses with SDA high
+    setSda(_config, true);
     for (uint8_t i = 0; i < cmd::BUS_RESET_CLOCKS; ++i) {
-      setSda(_config, true);
       setScl(_config, false);
       delayUs(_config, _config.clockLowUs, nullptr);
       setScl(_config, true);
+      // Wait for SCL to actually rise (handle clock stretching)
+      uint32_t waited = 0;
+      while (!readScl(_config) && waited < _config.bitTimeoutUs) {
+        delayUs(_config, kPollStepUs, nullptr);
+        waited += kPollStepUs;
+      }
       delayUs(_config, _config.clockHighUs, nullptr);
     }
+    // Generate STOP condition to leave bus in known state
+    setScl(_config, false);
+    delayUs(_config, _config.clockLowUs, nullptr);
+    setSda(_config, false);
+    delayUs(_config, kDataSetupUs, nullptr);
+    setScl(_config, true);
+    delayUs(_config, _config.stopHoldUs, nullptr);
+    setSda(_config, true);
+    delayUs(_config, _config.stopHoldUs, nullptr);
     // Check again
     if (!readScl(_config) || !readSda(_config)) {
       return Status::Error(Err::BUS_STUCK, "Bus stuck after reset");
@@ -332,6 +353,12 @@ Status EE871::recover() {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
   }
+
+  // Attempt bus reset first to clear any stuck state (no health tracking)
+  // Ignore result - still try to probe even if bus reset reports stuck
+  busReset();
+
+  // Probe device (tracked - updates health state)
   uint16_t group = 0;
   Status st = readGroup(group);
   if (st.ok()) {
@@ -369,6 +396,10 @@ Status EE871::readU16(uint8_t mainCommandLow, uint8_t mainCommandHigh, uint16_t&
 Status EE871::setCustomPointer(uint16_t address) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
+  if (address > 0xFF) {
+    return Status::Error(Err::OUT_OF_RANGE, "Custom pointer > 0xFF",
+                         static_cast<int32_t>(address));
   }
   const uint8_t control = cmd::makeControlWrite(cmd::MAIN_CUSTOM_PTR, _config.deviceAddress);
   const uint8_t addrHigh = static_cast<uint8_t>(address >> 8);

@@ -283,6 +283,13 @@ public:
   /// Read status byte (also triggers measurement if interval > 15s)
   Status readStatus(uint8_t& status);
 
+  /// Check if CO2 error bit is set in a status byte
+  /// @param statusByte Value previously read via readStatus()
+  /// @return true if bit3 (CO2 error) is set
+  static constexpr bool hasCo2Error(uint8_t statusByte) {
+    return (statusByte & cmd::STATUS_CO2_ERROR_MASK) != 0;
+  }
+
   /// Read error code (0xC1) - valid when status bit3 is set
   Status readErrorCode(uint8_t& code);
 
