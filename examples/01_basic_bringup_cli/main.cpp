@@ -15,8 +15,8 @@
 // Globals
 // ============================================================================
 
-ee871::EE871 device;
-ee871::Config deviceCfg;  // Stored for diagnostics
+EE871::EE871 device;
+EE871::Config deviceCfg;  // Stored for diagnostics
 bool verboseMode = false;
 
 // ============================================================================
@@ -214,8 +214,8 @@ bool parseU16Token(const String& token, uint16_t& out) {
 }
 
 /// Convert error code to string
-const char* errToStr(ee871::Err err) {
-  using ee871::Err;
+const char* errToStr(EE871::Err err) {
+  using EE871::Err;
   switch (err) {
     case Err::OK:                  return "OK";
     case Err::NOT_INITIALIZED:     return "NOT_INITIALIZED";
@@ -237,8 +237,8 @@ const char* errToStr(ee871::Err err) {
 }
 
 /// Convert driver state to string
-const char* stateToStr(ee871::DriverState st) {
-  using ee871::DriverState;
+const char* stateToStr(EE871::DriverState st) {
+  using EE871::DriverState;
   switch (st) {
     case DriverState::UNINIT:   return "UNINIT";
     case DriverState::READY:    return "READY";
@@ -248,14 +248,45 @@ const char* stateToStr(ee871::DriverState st) {
   }
 }
 
+const char* stateColor(EE871::DriverState st, bool online, uint8_t consecutiveFailures) {
+  if (st == EE871::DriverState::UNINIT) {
+    return LOG_COLOR_RESET;
+  }
+  return LOG_COLOR_STATE(online, consecutiveFailures);
+}
+
+const char* goodIfZeroColor(uint32_t value) {
+  return (value == 0U) ? LOG_COLOR_GREEN : LOG_COLOR_RED;
+}
+
+const char* goodIfNonZeroColor(uint32_t value) {
+  return (value > 0U) ? LOG_COLOR_GREEN : LOG_COLOR_YELLOW;
+}
+
+const char* onOffColor(bool enabled) {
+  return enabled ? LOG_COLOR_GREEN : LOG_COLOR_RESET;
+}
+
+const char* skipCountColor(uint32_t value) {
+  return (value > 0U) ? LOG_COLOR_YELLOW : LOG_COLOR_RESET;
+}
+
+const char* successRateColor(float pct) {
+  if (pct >= 99.9f) return LOG_COLOR_GREEN;
+  if (pct >= 80.0f) return LOG_COLOR_YELLOW;
+  return LOG_COLOR_RED;
+}
+
 /// Print status details
-void printStatus(const ee871::Status& st) {
-  Serial.printf("  Status: %s (code=%u, detail=%ld)\n",
+void printStatus(const EE871::Status& st) {
+  Serial.printf("  Status: %s%s%s (code=%u, detail=%ld)\n",
+                LOG_COLOR_RESULT(st.ok()),
                 errToStr(st.code),
+                LOG_COLOR_RESET,
                 static_cast<unsigned>(st.code),
                 static_cast<long>(st.detail));
   if (st.msg && st.msg[0]) {
-    Serial.printf("  Message: %s\n", st.msg);
+    Serial.printf("  Message: %s%s%s\n", LOG_COLOR_YELLOW, st.msg, LOG_COLOR_RESET);
   }
 }
 
@@ -271,79 +302,444 @@ bool ensureProbeOk() {
 
 /// Print driver health information
 void printDriverHealth() {
-  Serial.println("=== Driver State ===");
-  Serial.printf("  State: %s\n", stateToStr(device.state()));
-  Serial.printf("  Consecutive failures: %u\n", device.consecutiveFailures());
-  Serial.printf("  Total failures: %lu\n", static_cast<unsigned long>(device.totalFailures()));
-  Serial.printf("  Total success: %lu\n", static_cast<unsigned long>(device.totalSuccess()));
-  Serial.printf("  Last OK at: %lu ms\n", static_cast<unsigned long>(device.lastOkMs()));
-  Serial.printf("  Last error at: %lu ms\n", static_cast<unsigned long>(device.lastErrorMs()));
-  if (device.lastError().code != ee871::Err::OK) {
-    Serial.printf("  Last error: %s\n", errToStr(device.lastError().code));
+  const uint32_t now = millis();
+  const uint32_t totalOk = device.totalSuccess();
+  const uint32_t totalFail = device.totalFailures();
+  const uint32_t total = totalOk + totalFail;
+  const float successRate = (total > 0U)
+                                ? (100.0f * static_cast<float>(totalOk) / static_cast<float>(total))
+                                : 0.0f;
+  const EE871::Status lastErr = device.lastError();
+  const EE871::DriverState st = device.state();
+  const bool online = device.isOnline();
+
+  Serial.println("=== Driver Health ===");
+  Serial.printf("  State: %s%s%s\n",
+                stateColor(st, online, device.consecutiveFailures()),
+                stateToStr(st),
+                LOG_COLOR_RESET);
+  Serial.printf("  Online: %s%s%s\n",
+                online ? LOG_COLOR_GREEN : LOG_COLOR_RED,
+                log_bool_str(online),
+                LOG_COLOR_RESET);
+  Serial.printf("  Consecutive failures: %s%u%s\n",
+                goodIfZeroColor(device.consecutiveFailures()),
+                device.consecutiveFailures(),
+                LOG_COLOR_RESET);
+  Serial.printf("  Total success: %s%lu%s\n",
+                goodIfNonZeroColor(totalOk),
+                static_cast<unsigned long>(totalOk),
+                LOG_COLOR_RESET);
+  Serial.printf("  Total failures: %s%lu%s\n",
+                goodIfZeroColor(totalFail),
+                static_cast<unsigned long>(totalFail),
+                LOG_COLOR_RESET);
+  Serial.printf("  Success rate: %s%.1f%%%s\n",
+                successRateColor(successRate),
+                successRate,
+                LOG_COLOR_RESET);
+
+  const uint32_t lastOkMs = device.lastOkMs();
+  if (lastOkMs > 0U) {
+    Serial.printf("  Last OK: %lu ms ago (at %lu ms)\n",
+                  static_cast<unsigned long>(now - lastOkMs),
+                  static_cast<unsigned long>(lastOkMs));
+  } else {
+    Serial.println("  Last OK: never");
+  }
+
+  const uint32_t lastErrorMs = device.lastErrorMs();
+  if (lastErrorMs > 0U) {
+    Serial.printf("  Last error: %lu ms ago (at %lu ms)\n",
+                  static_cast<unsigned long>(now - lastErrorMs),
+                  static_cast<unsigned long>(lastErrorMs));
+  } else {
+    Serial.println("  Last error: never");
+  }
+
+  if (!lastErr.ok()) {
+    Serial.printf("  Error code: %s%s%s\n",
+                  LOG_COLOR_RED,
+                  errToStr(lastErr.code),
+                  LOG_COLOR_RESET);
+    Serial.printf("  Error detail: %ld\n", static_cast<long>(lastErr.detail));
+    if (lastErr.msg && lastErr.msg[0]) {
+      Serial.printf("  Error msg: %s\n", lastErr.msg);
+    }
   }
 }
 
 /// Print help
 void printHelp() {
-  Serial.println("=== Device Commands ===");
-  Serial.println("  probe             - Probe device (no health tracking)");
-  Serial.println("  id                - Read group/subgroup/available bits");
-  Serial.println("  status            - Read status byte (starts measurement)");
-  Serial.println("  co2fast           - Read MV3 (fast response)");
-  Serial.println("  co2avg            - Read MV4 (averaged)");
-  Serial.println("  error             - Read error code (if status indicates error)");
-  Serial.println("  reg read <addr>   - Read custom register (addr: 0x00-0xFF)");
-  Serial.println("  reg write <addr> <value> - Write custom register and verify");
-  Serial.println("  reg dump [start] [len]   - Dump custom registers (default all)");
-  Serial.println("  drv               - Show driver state and health");
-  Serial.println("  recover           - Attempt recovery");
+  auto helpSection = [](const char* title) {
+    Serial.printf("\n%s[%s]%s\n", LOG_COLOR_GREEN, title, LOG_COLOR_RESET);
+  };
+  auto helpItem = [](const char* cmd, const char* desc) {
+    Serial.printf("  %s%-32s%s - %s\n", LOG_COLOR_CYAN, cmd, LOG_COLOR_RESET, desc);
+  };
+
   Serial.println();
-  Serial.println("=== Device Info ===");
-  Serial.println("  fw                - Read firmware version");
-  Serial.println("  e2spec            - Read E2 spec version");
-  Serial.println("  features          - Read feature support flags");
-  Serial.println("  serial            - Read serial number");
-  Serial.println("  partname          - Read part name");
-  Serial.println();
-  Serial.println("=== Configuration ===");
-  Serial.println("  addr              - Read current bus address");
-  Serial.println("  addr <0-7>        - Write bus address (needs power cycle)");
-  Serial.println("  interval          - Read measurement interval");
-  Serial.println("  interval <dec>    - Write interval (150-36000 deciseconds)");
-  Serial.println("  filter            - Read CO2 filter setting");
-  Serial.println("  filter <val>      - Write CO2 filter");
-  Serial.println("  mode              - Read operating mode");
-  Serial.println("  mode <val>        - Write operating mode (0-3)");
-  Serial.println();
-  Serial.println("=== Calibration (Advanced) ===");
-  Serial.println("  offset            - Read CO2 offset (ppm)");
-  Serial.println("  offset <val>      - Write CO2 offset (signed)");
-  Serial.println("  gain              - Read CO2 gain");
-  Serial.println("  calpoints         - Read last cal points");
-  Serial.println("  autoadj           - Read auto-adjust status");
-  Serial.println("  autoadj start     - Start auto-adjustment (~5 min)");
-  Serial.println();
-  Serial.println("=== Bus Safety ===");
-  Serial.println("  buscheck          - Check if bus is idle");
-  Serial.println("  libreset          - Bus reset via library");
-  Serial.println();
-  Serial.println("=== Diagnostics ===");
-  Serial.println("  diag              - Run FULL diagnostic suite");
-  Serial.println("  levels            - Read current bus levels");
-  Serial.println("  pintest           - Test pin toggle (can MCU control bus?)");
-  Serial.println("  clocktest         - Generate clock pulses and verify");
-  Serial.println("  sniff             - Toggle sniffer on/off");
-  Serial.println("  scan              - Scan all 8 E2 addresses");
-  Serial.println("  timing            - Try different clock frequencies");
-  Serial.println("  busreset          - Send 9 clocks to recover stuck bus");
-  Serial.println("  tx <hex>          - Test transaction with control byte");
-  Serial.println("  libtest           - Test all library commands (begin uses)");
-  Serial.println("  trace stats       - Show bus trace buffer stats");
-  Serial.println("  trace clear       - Clear buffered trace events");
-  Serial.println();
-  Serial.println("=== Other ===");
-  Serial.println("  help              - Show this help");
-  Serial.println("  verbose 0|1       - Toggle bus trace output");
+  Serial.printf("%s=== EE871-E2 CLI Help ===%s\n", LOG_COLOR_CYAN, LOG_COLOR_RESET);
+
+  helpSection("Common");
+  helpItem("help / ?", "Show this help");
+  helpItem("scan", "Scan all 8 E2 addresses");
+  helpItem("probe", "Probe device (no health tracking)");
+  helpItem("recover", "Attempt recovery");
+  helpItem("drv", "Show driver state and health");
+  helpItem("read", "Read CO2 average");
+  helpItem("cfg / settings", "Show driver state and feature flags");
+  helpItem("verbose [0|1]", "Toggle bus trace output (no args = show)");
+  helpItem("stress [N]", "Repeated CO2 average reads");
+  helpItem("stress_mix [N]", "Mixed safe read operations");
+  helpItem("selftest", "Safe command self-test with report");
+
+  helpSection("Device Commands");
+  helpItem("id", "Read group/subgroup/available bits");
+  helpItem("status", "Read status byte (starts measurement)");
+  helpItem("co2fast", "Read MV3 (fast response)");
+  helpItem("co2avg", "Read MV4 (averaged)");
+  helpItem("error", "Read error code (if status indicates error)");
+  helpItem("reg read <addr>", "Read custom register (0x00..0xFF)");
+  helpItem("reg write <addr> <value>", "Write custom register and verify");
+  helpItem("reg dump [start] [len]", "Dump custom registers (default all)");
+  helpItem("ctrl <main_nibble>", "Raw readControlByte(main_nibble)");
+  helpItem("u16 <main_lo> <main_hi>", "Raw readU16(main_lo, main_hi)");
+  helpItem("ptr <addr16>", "Set custom pointer");
+
+  helpSection("Device Info");
+  helpItem("fw", "Read firmware version");
+  helpItem("e2spec", "Read E2 spec version");
+  helpItem("features", "Read feature support flags");
+  helpItem("serial", "Read serial number");
+  helpItem("partname", "Read part name");
+  helpItem("partname <text>", "Write part name (16 bytes max)");
+
+  helpSection("Configuration");
+  helpItem("addr", "Read current bus address");
+  helpItem("addr <0-7>", "Write bus address (needs power cycle)");
+  helpItem("interval", "Read measurement interval");
+  helpItem("interval <dec>", "Write interval (150..36000 deciseconds)");
+  helpItem("factor", "Read CO2 interval factor");
+  helpItem("factor <val>", "Write CO2 interval factor");
+  helpItem("filter", "Read CO2 filter setting");
+  helpItem("filter <val>", "Write CO2 filter");
+  helpItem("mode", "Read operating mode");
+  helpItem("mode <val>", "Write operating mode (0..3)");
+
+  helpSection("Calibration");
+  helpItem("offset", "Read CO2 offset (ppm)");
+  helpItem("offset <val>", "Write CO2 offset (signed)");
+  helpItem("gain", "Read CO2 gain");
+  helpItem("gain <val>", "Write CO2 gain");
+  helpItem("calpoints", "Read last calibration points");
+  helpItem("autoadj", "Read auto-adjust status");
+  helpItem("autoadj start", "Start auto-adjustment (~5 min)");
+
+  helpSection("Bus Safety");
+  helpItem("buscheck", "Check if bus is idle");
+  helpItem("libreset", "Bus reset via library");
+
+  helpSection("Diagnostics");
+  helpItem("diag", "Run full diagnostic suite");
+  helpItem("levels", "Read current bus levels");
+  helpItem("pintest", "Test pin toggle (MCU bus control)");
+  helpItem("clocktest", "Generate clock pulses and verify");
+  helpItem("sniff", "Toggle sniffer on/off");
+  helpItem("timing", "Try different clock frequencies");
+  helpItem("busreset", "Send 9 clocks to recover stuck bus");
+  helpItem("tx <hex>", "Test transaction with control byte");
+  helpItem("libtest", "Test all library commands (begin uses)");
+  helpItem("caps", "Print feature capability booleans");
+  helpItem("trace stats", "Show bus trace buffer stats");
+  helpItem("trace clear", "Clear buffered trace events");
+}
+
+void runStressMix(int count) {
+  struct OpStats {
+    const char* name;
+    uint32_t ok;
+    uint32_t fail;
+  };
+  OpStats stats[] = {
+      {"readStatus", 0, 0},
+      {"readCo2Fast", 0, 0},
+      {"readCo2Avg", 0, 0},
+      {"readGroup", 0, 0},
+      {"readSubgroup", 0, 0},
+      {"readAvail", 0, 0},
+      {"readFw", 0, 0},
+      {"readFeatures", 0, 0},
+  };
+  const int opCount = static_cast<int>(sizeof(stats) / sizeof(stats[0]));
+
+  const uint32_t succBefore = device.totalSuccess();
+  const uint32_t failBefore = device.totalFailures();
+  const uint32_t startMs = millis();
+
+  for (int i = 0; i < count; ++i) {
+    const int op = i % opCount;
+    EE871::Status st = EE871::Status::Ok();
+
+    switch (op) {
+      case 0: {
+        uint8_t status = 0;
+        st = device.readStatus(status);
+        break;
+      }
+      case 1: {
+        uint16_t ppm = 0;
+        st = device.readCo2Fast(ppm);
+        break;
+      }
+      case 2: {
+        uint16_t ppm = 0;
+        st = device.readCo2Average(ppm);
+        break;
+      }
+      case 3: {
+        uint16_t group = 0;
+        st = device.readGroup(group);
+        if (st.ok() && group != EE871::cmd::SENSOR_GROUP_ID) {
+          st = EE871::Status::Error(EE871::Err::DEVICE_NOT_FOUND, "unexpected group", group);
+        }
+        break;
+      }
+      case 4: {
+        uint8_t subgroup = 0;
+        st = device.readSubgroup(subgroup);
+        if (st.ok() && subgroup != EE871::cmd::SENSOR_SUBGROUP_ID) {
+          st = EE871::Status::Error(EE871::Err::DEVICE_NOT_FOUND, "unexpected subgroup", subgroup);
+        }
+        break;
+      }
+      case 5: {
+        uint8_t avail = 0;
+        st = device.readAvailableMeasurements(avail);
+        break;
+      }
+      case 6: {
+        uint8_t main = 0, sub = 0;
+        st = device.readFirmwareVersion(main, sub);
+        break;
+      }
+      case 7: {
+        uint8_t ops = 0;
+        st = device.readOperatingFunctions(ops);
+        break;
+      }
+      default:
+        break;
+    }
+
+    if (st.ok()) {
+      stats[op].ok++;
+    } else {
+      stats[op].fail++;
+      if (verboseMode) {
+        Serial.printf("  [%d] %s failed: %s\n", i, stats[op].name, errToStr(st.code));
+      }
+    }
+  }
+
+  const uint32_t elapsed = millis() - startMs;
+  uint32_t okTotal = 0;
+  uint32_t failTotal = 0;
+  for (int i = 0; i < opCount; ++i) {
+    okTotal += stats[i].ok;
+    failTotal += stats[i].fail;
+  }
+
+  Serial.println("=== stress_mix summary ===");
+  const float successPct =
+      (count > 0) ? (100.0f * static_cast<float>(okTotal) / static_cast<float>(count)) : 0.0f;
+  Serial.printf("  Total: %sok=%lu%s %sfail=%lu%s (%s%.2f%%%s)\n",
+                goodIfNonZeroColor(okTotal),
+                static_cast<unsigned long>(okTotal),
+                LOG_COLOR_RESET,
+                goodIfZeroColor(failTotal),
+                static_cast<unsigned long>(failTotal),
+                LOG_COLOR_RESET,
+                successRateColor(successPct),
+                successPct,
+                LOG_COLOR_RESET);
+  Serial.printf("  Duration: %lu ms\n", static_cast<unsigned long>(elapsed));
+  if (elapsed > 0) {
+    Serial.printf("  Rate: %.2f ops/s\n", (1000.0f * static_cast<float>(count)) / elapsed);
+  }
+  for (int i = 0; i < opCount; ++i) {
+    Serial.printf("  %-11s %sok=%lu%s %sfail=%lu%s\n",
+                  stats[i].name,
+                  goodIfNonZeroColor(stats[i].ok),
+                  static_cast<unsigned long>(stats[i].ok),
+                  LOG_COLOR_RESET,
+                  goodIfZeroColor(stats[i].fail),
+                  static_cast<unsigned long>(stats[i].fail),
+                  LOG_COLOR_RESET);
+  }
+  const uint32_t successDelta = device.totalSuccess() - succBefore;
+  const uint32_t failDelta = device.totalFailures() - failBefore;
+  Serial.printf("  Health delta: %ssuccess +%lu%s, %sfailures +%lu%s\n",
+                goodIfNonZeroColor(successDelta),
+                static_cast<unsigned long>(successDelta),
+                LOG_COLOR_RESET,
+                goodIfZeroColor(failDelta),
+                static_cast<unsigned long>(failDelta),
+                LOG_COLOR_RESET);
+}
+
+void runSelfTest() {
+  struct Result {
+    uint32_t pass = 0;
+    uint32_t fail = 0;
+    uint32_t skip = 0;
+  } result;
+
+  enum class SelftestOutcome : uint8_t { PASS, FAIL, SKIP };
+  auto report = [&](const char* name, SelftestOutcome outcome, const char* note) {
+    const bool ok = (outcome == SelftestOutcome::PASS);
+    const bool skip = (outcome == SelftestOutcome::SKIP);
+    const char* color = skip ? LOG_COLOR_YELLOW : LOG_COLOR_RESULT(ok);
+    const char* tag = skip ? "SKIP" : (ok ? "PASS" : "FAIL");
+    Serial.printf("  [%s%s%s] %s", color, tag, LOG_COLOR_RESET, name);
+    if (note && note[0]) {
+      Serial.printf(" - %s", note);
+    }
+    Serial.println();
+    if (skip) {
+      result.skip++;
+    } else if (ok) {
+      result.pass++;
+    } else {
+      result.fail++;
+    }
+  };
+  auto reportCheck = [&](const char* name, bool ok, const char* note) {
+    report(name, ok ? SelftestOutcome::PASS : SelftestOutcome::FAIL, note);
+  };
+  auto reportSkip = [&](const char* name, const char* note) {
+    report(name, SelftestOutcome::SKIP, note);
+  };
+
+  Serial.println("=== EE871 selftest (safe commands) ===");
+
+  const uint32_t succBefore = device.totalSuccess();
+  const uint32_t failBefore = device.totalFailures();
+  const uint8_t consBefore = device.consecutiveFailures();
+
+  EE871::Status st = device.probe();
+  if (st.code == EE871::Err::NOT_INITIALIZED) {
+    reportSkip("probe responds", "driver not initialized");
+    reportSkip("remaining checks", "selftest aborted");
+    Serial.printf("Selftest result: pass=%s%lu%s fail=%s%lu%s skip=%s%lu%s\n",
+                  goodIfNonZeroColor(result.pass), static_cast<unsigned long>(result.pass), LOG_COLOR_RESET,
+                  goodIfZeroColor(result.fail), static_cast<unsigned long>(result.fail), LOG_COLOR_RESET,
+                  skipCountColor(result.skip), static_cast<unsigned long>(result.skip), LOG_COLOR_RESET);
+    return;
+  }
+  reportCheck("probe responds", st.ok(), st.ok() ? "" : errToStr(st.code));
+  const bool probeNoTrack = device.totalSuccess() == succBefore &&
+                            device.totalFailures() == failBefore &&
+                            device.consecutiveFailures() == consBefore;
+  reportCheck("probe no-health-side-effects", probeNoTrack, "");
+
+  uint16_t group = 0;
+  st = device.readGroup(group);
+  reportCheck("readGroup", st.ok(), st.ok() ? "" : errToStr(st.code));
+  reportCheck("group matches", st.ok() && group == EE871::cmd::SENSOR_GROUP_ID, "");
+
+  uint8_t subgroup = 0;
+  st = device.readSubgroup(subgroup);
+  reportCheck("readSubgroup", st.ok(), st.ok() ? "" : errToStr(st.code));
+  reportCheck("subgroup matches", st.ok() && subgroup == EE871::cmd::SENSOR_SUBGROUP_ID, "");
+
+  uint8_t avail = 0;
+  st = device.readAvailableMeasurements(avail);
+  reportCheck("readAvailableMeasurements", st.ok(), st.ok() ? "" : errToStr(st.code));
+  reportCheck("CO2 measurement bit present", st.ok() && (avail & EE871::cmd::AVAILABLE_MEAS_MASK) != 0, "");
+
+  uint8_t fwMain = 0, fwSub = 0;
+  st = device.readFirmwareVersion(fwMain, fwSub);
+  reportCheck("readFirmwareVersion", st.ok(), st.ok() ? "" : errToStr(st.code));
+
+  uint8_t e2spec = 0;
+  st = device.readE2SpecVersion(e2spec);
+  reportCheck("readE2SpecVersion", st.ok(), st.ok() ? "" : errToStr(st.code));
+
+  uint8_t ops = 0, modes = 0, special = 0;
+  st = device.readOperatingFunctions(ops);
+  reportCheck("readOperatingFunctions", st.ok(), st.ok() ? "" : errToStr(st.code));
+  if (st.ok()) st = device.readOperatingModeSupport(modes);
+  reportCheck("readOperatingModeSupport", st.ok(), st.ok() ? "" : errToStr(st.code));
+  if (st.ok()) st = device.readSpecialFeatures(special);
+  reportCheck("readSpecialFeatures", st.ok(), st.ok() ? "" : errToStr(st.code));
+
+  uint8_t status = 0;
+  st = device.readStatus(status);
+  reportCheck("readStatus", st.ok(), st.ok() ? "" : errToStr(st.code));
+
+  uint16_t fast = 0, avg = 0;
+  st = device.readCo2Fast(fast);
+  reportCheck("readCo2Fast", st.ok(), st.ok() ? "" : errToStr(st.code));
+  st = device.readCo2Average(avg);
+  reportCheck("readCo2Average", st.ok(), st.ok() ? "" : errToStr(st.code));
+
+  if (device.hasErrorCode()) {
+    uint8_t code = 0;
+    st = device.readErrorCode(code);
+    reportCheck("readErrorCode", st.ok(), st.ok() ? "" : errToStr(st.code));
+  } else {
+    reportSkip("readErrorCode", "not supported");
+  }
+
+  if (device.hasSerialNumber()) {
+    uint8_t sn[16] = {0};
+    st = device.readSerialNumber(sn);
+    reportCheck("readSerialNumber", st.ok(), st.ok() ? "" : errToStr(st.code));
+  } else {
+    reportSkip("readSerialNumber", "not supported");
+  }
+
+  if (device.hasPartName()) {
+    uint8_t name[16] = {0};
+    st = device.readPartName(name);
+    reportCheck("readPartName", st.ok(), st.ok() ? "" : errToStr(st.code));
+  } else {
+    reportSkip("readPartName", "not supported");
+  }
+
+  uint8_t addr = 0;
+  st = device.readBusAddress(addr);
+  reportCheck("readBusAddress", st.ok(), st.ok() ? "" : errToStr(st.code));
+
+  uint16_t interval = 0;
+  st = device.readMeasurementInterval(interval);
+  reportCheck("readMeasurementInterval", st.ok(), st.ok() ? "" : errToStr(st.code));
+
+  int8_t factor = 0;
+  st = device.readCo2IntervalFactor(factor);
+  reportCheck("readCo2IntervalFactor", st.ok(), st.ok() ? "" : errToStr(st.code));
+
+  uint8_t mode = 0;
+  st = device.readOperatingMode(mode);
+  reportCheck("readOperatingMode", st.ok(), st.ok() ? "" : errToStr(st.code));
+
+  uint8_t ctrl = 0;
+  st = device.readControlByte(EE871::cmd::MAIN_STATUS, ctrl);
+  reportCheck("readControlByte(MAIN_STATUS)", st.ok(), st.ok() ? "" : errToStr(st.code));
+
+  uint16_t rawU16 = 0;
+  st = device.readU16(EE871::cmd::MAIN_MV4_LO, EE871::cmd::MAIN_MV4_HI, rawU16);
+  reportCheck("readU16(MV4)", st.ok(), st.ok() ? "" : errToStr(st.code));
+
+  st = device.recover();
+  reportCheck("recover", st.ok(), st.ok() ? "" : errToStr(st.code));
+  reportCheck("isOnline", device.isOnline(), "");
+
+  Serial.printf("Selftest result: pass=%s%lu%s fail=%s%lu%s skip=%s%lu%s\n",
+                goodIfNonZeroColor(result.pass), static_cast<unsigned long>(result.pass), LOG_COLOR_RESET,
+                goodIfZeroColor(result.fail), static_cast<unsigned long>(result.fail), LOG_COLOR_RESET,
+                skipCountColor(result.skip), static_cast<unsigned long>(result.skip), LOG_COLOR_RESET);
 }
 
 // ============================================================================
@@ -356,6 +752,25 @@ void processCommand(const String& cmd) {
 
   if (trimmed == "help" || trimmed == "?") {
     printHelp();
+  } else if (trimmed == "read") {
+    uint16_t ppm = 0;
+    auto st = device.readCo2Average(ppm);
+    printStatus(st);
+    if (st.ok()) {
+      Serial.printf("  CO2 avg: %u ppm\n", ppm);
+    }
+  } else if (trimmed == "cfg" || trimmed == "settings") {
+    printDriverHealth();
+    uint8_t ops = 0;
+    uint8_t modes = 0;
+    uint8_t special = 0;
+    auto st = device.readOperatingFunctions(ops);
+    if (st.ok()) st = device.readOperatingModeSupport(modes);
+    if (st.ok()) st = device.readSpecialFeatures(special);
+    printStatus(st);
+    if (st.ok()) {
+      Serial.printf("  Features: ops=0x%02X modes=0x%02X special=0x%02X\n", ops, modes, special);
+    }
   } else if (trimmed == "probe") {
     LOGI("Probing device (no health tracking)...");
     auto st = device.probe();
@@ -384,6 +799,7 @@ void processCommand(const String& cmd) {
     printStatus(st);
     if (st.ok()) {
       e2diag::printStatus(status);
+      Serial.printf("  hasCo2Error(): %s\n", EE871::EE871::hasCo2Error(status) ? "YES" : "NO");
     }
   } else if (trimmed == "co2fast") {
     uint16_t ppm = 0;
@@ -530,6 +946,58 @@ void processCommand(const String& cmd) {
     } else {
       LOGW("Unknown reg subcommand: %s", subcmd.c_str());
     }
+  } else if (trimmed.startsWith("ctrl ")) {
+    String token = trimmed.substring(5);
+    token.trim();
+    uint8_t mainNibble = 0;
+    if (!parseU8Token(token, mainNibble)) {
+      LOGW("Usage: ctrl <main_nibble>");
+      return;
+    }
+    uint8_t value = 0;
+    auto st = device.readControlByte(mainNibble, value);
+    printStatus(st);
+    if (st.ok()) {
+      Serial.printf("  ctrl(0x%02X) -> 0x%02X (%u)\n",
+                    static_cast<unsigned>(mainNibble),
+                    static_cast<unsigned>(value),
+                    static_cast<unsigned>(value));
+    }
+  } else if (trimmed.startsWith("u16 ")) {
+    String args = trimmed.substring(4);
+    args.trim();
+    String loTok;
+    String hiTok;
+    if (!splitToken(args, loTok, hiTok) || hiTok.length() == 0) {
+      LOGW("Usage: u16 <main_lo> <main_hi>");
+      return;
+    }
+    uint8_t lo = 0;
+    uint8_t hi = 0;
+    if (!parseU8Token(loTok, lo) || !parseU8Token(hiTok, hi)) {
+      LOGW("Invalid main_lo/main_hi");
+      return;
+    }
+    uint16_t value = 0;
+    auto st = device.readU16(lo, hi, value);
+    printStatus(st);
+    if (st.ok()) {
+      Serial.printf("  u16(0x%02X,0x%02X) -> 0x%04X (%u)\n",
+                    static_cast<unsigned>(lo),
+                    static_cast<unsigned>(hi),
+                    static_cast<unsigned>(value),
+                    static_cast<unsigned>(value));
+    }
+  } else if (trimmed.startsWith("ptr ")) {
+    String token = trimmed.substring(4);
+    token.trim();
+    uint16_t ptr = 0;
+    if (!parseU16Token(token, ptr)) {
+      LOGW("Usage: ptr <addr16>");
+      return;
+    }
+    auto st = device.setCustomPointer(ptr);
+    printStatus(st);
   } else if (trimmed == "drv") {
     printDriverHealth();
   } else if (trimmed == "recover") {
@@ -561,19 +1029,31 @@ void processCommand(const String& cmd) {
     if (st.ok()) st = device.readSpecialFeatures(special);
     if (st.ok()) {
       Serial.printf("  Operating functions (0x07): 0x%02X\n", ops);
-      Serial.printf("    Serial number: %s\n", (ops & 0x01) ? "yes" : "no");
-      Serial.printf("    Part name: %s\n", (ops & 0x02) ? "yes" : "no");
-      Serial.printf("    Address config: %s\n", (ops & 0x04) ? "yes" : "no");
-      Serial.printf("    Global interval: %s\n", (ops & 0x10) ? "yes" : "no");
-      Serial.printf("    Specific interval: %s\n", (ops & 0x20) ? "yes" : "no");
-      Serial.printf("    Filter config: %s\n", (ops & 0x40) ? "yes" : "no");
-      Serial.printf("    Error code: %s\n", (ops & 0x80) ? "yes" : "no");
+      Serial.printf("    Serial number: %s\n", device.hasSerialNumber() ? "yes" : "no");
+      Serial.printf("    Part name: %s\n", device.hasPartName() ? "yes" : "no");
+      Serial.printf("    Address config: %s\n", device.hasAddressConfig() ? "yes" : "no");
+      Serial.printf("    Global interval: %s\n", device.hasGlobalInterval() ? "yes" : "no");
+      Serial.printf("    Specific interval: %s\n", device.hasSpecificInterval() ? "yes" : "no");
+      Serial.printf("    Filter config: %s\n", device.hasFilterConfig() ? "yes" : "no");
+      Serial.printf("    Error code: %s\n", device.hasErrorCode() ? "yes" : "no");
       Serial.printf("  Mode support (0x08): 0x%02X\n", modes);
-      Serial.printf("    Low power: %s\n", (modes & 0x01) ? "yes" : "no");
-      Serial.printf("    E2 priority: %s\n", (modes & 0x02) ? "yes" : "no");
+      Serial.printf("    Low power: %s\n", device.hasLowPowerMode() ? "yes" : "no");
+      Serial.printf("    E2 priority: %s\n", device.hasE2Priority() ? "yes" : "no");
       Serial.printf("  Special features (0x09): 0x%02X\n", special);
-      Serial.printf("    Auto adjust: %s\n", (special & 0x01) ? "yes" : "no");
+      Serial.printf("    Auto adjust: %s\n", device.hasAutoAdjust() ? "yes" : "no");
     }
+  } else if (trimmed == "caps") {
+    Serial.println("=== Capabilities ===");
+    Serial.printf("  hasSerialNumber: %s\n", device.hasSerialNumber() ? "true" : "false");
+    Serial.printf("  hasPartName: %s\n", device.hasPartName() ? "true" : "false");
+    Serial.printf("  hasAddressConfig: %s\n", device.hasAddressConfig() ? "true" : "false");
+    Serial.printf("  hasGlobalInterval: %s\n", device.hasGlobalInterval() ? "true" : "false");
+    Serial.printf("  hasSpecificInterval: %s\n", device.hasSpecificInterval() ? "true" : "false");
+    Serial.printf("  hasFilterConfig: %s\n", device.hasFilterConfig() ? "true" : "false");
+    Serial.printf("  hasErrorCode: %s\n", device.hasErrorCode() ? "true" : "false");
+    Serial.printf("  hasLowPowerMode: %s\n", device.hasLowPowerMode() ? "true" : "false");
+    Serial.printf("  hasE2Priority: %s\n", device.hasE2Priority() ? "true" : "false");
+    Serial.printf("  hasAutoAdjust: %s\n", device.hasAutoAdjust() ? "true" : "false");
   } else if (trimmed == "serial") {
     uint8_t sn[16] = {0};
     auto st = device.readSerialNumber(sn);
@@ -602,6 +1082,34 @@ void processCommand(const String& cmd) {
       }
       Serial.println();
     }
+  } else if (trimmed.startsWith("partname ")) {
+    String text = trimmed.substring(9);
+    text.trim();
+    if (text.length() == 0) {
+      LOGW("Usage: partname <text>");
+      return;
+    }
+    uint8_t out[16] = {0};
+    const size_t maxLen = (text.length() > 16) ? 16 : static_cast<size_t>(text.length());
+    for (size_t i = 0; i < maxLen; ++i) {
+      out[i] = static_cast<uint8_t>(text[i]);
+    }
+    auto st = device.writePartName(out);
+    printStatus(st);
+    if (st.ok()) {
+      uint8_t verify[16] = {0};
+      st = device.readPartName(verify);
+      printStatus(st);
+      if (st.ok()) {
+        Serial.print("  Part name: ");
+        for (int i = 0; i < 16; i++) {
+          if (verify[i] >= 0x20 && verify[i] < 0x7F) Serial.print((char)verify[i]);
+          else if (verify[i] == 0) break;
+          else Serial.print('.');
+        }
+        Serial.println();
+      }
+    }
   
   // === Configuration Commands ===
   } else if (trimmed == "addr") {
@@ -627,6 +1135,21 @@ void processCommand(const String& cmd) {
     int val = trimmed.substring(9).toInt();
     LOGI("Writing interval %d deciseconds...", val);
     auto st = device.writeMeasurementInterval(static_cast<uint16_t>(val));
+    printStatus(st);
+  } else if (trimmed == "factor") {
+    int8_t factor = 0;
+    auto st = device.readCo2IntervalFactor(factor);
+    printStatus(st);
+    if (st.ok()) {
+      Serial.printf("  CO2 interval factor: %d\n", static_cast<int>(factor));
+    }
+  } else if (trimmed.startsWith("factor ")) {
+    const int val = trimmed.substring(7).toInt();
+    if (val < -128 || val > 127) {
+      LOGW("factor must be -128..127");
+      return;
+    }
+    auto st = device.writeCo2IntervalFactor(static_cast<int8_t>(val));
     printStatus(st);
   } else if (trimmed == "filter") {
     uint8_t filter = 0;
@@ -673,6 +1196,14 @@ void processCommand(const String& cmd) {
     if (st.ok()) {
       Serial.printf("  CO2 gain: %u (factor=%.4f)\n", gain, gain / 32768.0f);
     }
+  } else if (trimmed.startsWith("gain ")) {
+    int val = trimmed.substring(5).toInt();
+    if (val < 0 || val > 65535) {
+      LOGW("gain must be 0..65535");
+      return;
+    }
+    auto st = device.writeCo2Gain(static_cast<uint16_t>(val));
+    printStatus(st);
   } else if (trimmed == "calpoints") {
     uint16_t lower = 0, upper = 0;
     auto st = device.readCo2CalPoints(lower, upper);
@@ -704,6 +1235,9 @@ void processCommand(const String& cmd) {
     auto st = device.busReset();
     printStatus(st);
   
+  } else if (trimmed == "verbose") {
+    LOGI("Verbose mode: %s%s%s", onOffColor(verboseMode), verboseMode ? "ON" : "OFF", LOG_COLOR_RESET);
+  
   } else if (trimmed.startsWith("verbose ")) {
     int val = trimmed.substring(8).toInt();
     verboseMode = (val != 0);
@@ -711,7 +1245,7 @@ void processCommand(const String& cmd) {
       buslog::clear();
     }
     buslog::setEnabled(verboseMode);
-    LOGI("Verbose mode: %s", verboseMode ? "ON" : "OFF");
+    LOGI("Verbose mode: %s%s%s", onOffColor(verboseMode), verboseMode ? "ON" : "OFF", LOG_COLOR_RESET);
   } else if (trimmed == "trace stats") {
     buslog::printStats();
   } else if (trimmed == "trace clear") {
@@ -747,6 +1281,61 @@ void processCommand(const String& cmd) {
     e2diag::testTransaction(deviceCfg, ctrlByte);
   } else if (trimmed == "libtest") {
     e2diag::testLibraryCommands(deviceCfg);
+  } else if (trimmed == "selftest") {
+    runSelfTest();
+  } else if (trimmed == "stress_mix") {
+    runStressMix(100);
+  } else if (trimmed.startsWith("stress_mix ")) {
+    int count = trimmed.substring(11).toInt();
+    if (count <= 0) count = 100;
+    runStressMix(count);
+  } else if (trimmed.startsWith("stress")) {
+    int count = 100;
+    if (trimmed.length() > 6) {
+      count = trimmed.substring(6).toInt();
+      if (count <= 0) count = 100;
+    }
+    int ok = 0;
+    int fail = 0;
+    bool hasFailure = false;
+    EE871::Status firstFailure = EE871::Status::Ok();
+    EE871::Status lastFailure = EE871::Status::Ok();
+    for (int i = 0; i < count; ++i) {
+      uint16_t ppm = 0;
+      auto st = device.readCo2Average(ppm);
+      if (st.ok()) {
+        ++ok;
+      } else {
+        ++fail;
+        if (!hasFailure) {
+          firstFailure = st;
+          hasFailure = true;
+        }
+        lastFailure = st;
+      }
+      device.tick(millis());
+    }
+    const float successPct = (count > 0) ? (100.0f * static_cast<float>(ok) / static_cast<float>(count)) : 0.0f;
+    Serial.printf("Stress: %sok=%d%s %sfail=%d%s total=%d (%s%.2f%%%s)\n",
+                  goodIfNonZeroColor(static_cast<uint32_t>(ok)),
+                  ok,
+                  LOG_COLOR_RESET,
+                  goodIfZeroColor(static_cast<uint32_t>(fail)),
+                  fail,
+                  LOG_COLOR_RESET,
+                  count,
+                  successRateColor(successPct),
+                  successPct,
+                  LOG_COLOR_RESET);
+    if (hasFailure) {
+      Serial.println("Failure details:");
+      Serial.println("  First failure:");
+      printStatus(firstFailure);
+      if (fail > 1) {
+        Serial.println("  Last failure:");
+        printStatus(lastFailure);
+      }
+    }
 
   } else {
     LOGW("Unknown command: %s", trimmed.c_str());
@@ -758,8 +1347,8 @@ void processCommand(const String& cmd) {
 // ============================================================================
 
 void setup() {
-  Serial.begin(115200);
-  delay(2000);  // Give USB CDC time to enumerate
+  log_begin(115200);
+  delay(200);
   
   Serial.println();
   Serial.println("=== EE871 Bringup Example ===");
@@ -778,7 +1367,7 @@ void setup() {
   deviceCfg.readSda = trace::readSda;
   deviceCfg.delayUs = trace::delayUs;
   deviceCfg.busUser = &board::e2Pins();
-  deviceCfg.deviceAddress = ee871::cmd::DEFAULT_DEVICE_ADDRESS;
+  deviceCfg.deviceAddress = EE871::cmd::DEFAULT_DEVICE_ADDRESS;
   deviceCfg.clockLowUs = board::E2_CLOCK_LOW_US;
   deviceCfg.clockHighUs = board::E2_CLOCK_HIGH_US;
   deviceCfg.bitTimeoutUs = board::E2_BIT_TIMEOUT_US;
@@ -825,3 +1414,4 @@ void loop() {
 
   buslog::flush();
 }
+

@@ -10,7 +10,7 @@
 #include "EE871/Status.h"
 #include "EE871/Version.h"
 
-namespace ee871 {
+namespace EE871 {
 
 /// Driver state for health monitoring
 enum class DriverState : uint8_t {
@@ -354,4 +354,4 @@ private:
   uint32_t _totalSuccess = 0;
 };
 
-} // namespace ee871
+} // namespace EE871

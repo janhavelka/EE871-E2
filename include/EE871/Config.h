@@ -5,7 +5,7 @@
 #include <cstdint>
 #include "EE871/Status.h"
 
-namespace ee871 {
+namespace EE871 {
 
 /// E2 set-line callback signature (open-drain).
 /// @param level 1 = release line (HIGH), 0 = drive LOW
@@ -51,4 +51,4 @@ struct Config {
   uint8_t offlineThreshold = 5;   ///< Consecutive failures before OFFLINE state
 };
 
-} // namespace ee871
+} // namespace EE871

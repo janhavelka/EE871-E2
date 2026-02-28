@@ -62,7 +62,7 @@ static void delayUs(uint32_t us, void* user) {
   delayMicroseconds(us);
 }
 
-ee871::EE871 sensor;
+EE871::EE871 sensor;
 
 void setup() {
   Serial.begin(115200);
@@ -71,7 +71,7 @@ void setup() {
   digitalWrite(bus.scl, HIGH);
   digitalWrite(bus.sda, HIGH);
 
-  ee871::Config cfg;
+  EE871::Config cfg;
   cfg.setScl = setScl;
   cfg.setSda = setSda;
   cfg.readScl = readScl;
@@ -104,7 +104,7 @@ void loop() {
 ## Health Monitoring
 
 ```cpp
-if (sensor.state() == ee871::DriverState::OFFLINE) {
+if (sensor.state() == EE871::DriverState::OFFLINE) {
   sensor.recover();
 }
 
@@ -120,3 +120,4 @@ Serial.printf("Failures: %u consecutive, %lu total\n",
 ## License
 
 MIT License. See [LICENSE](LICENSE).
+

@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-namespace ee871 {
+namespace EE871 {
 
 /// Error codes for all EE871 operations
 enum class Err : uint8_t {
@@ -53,4 +53,4 @@ struct Status {
   }
 };
 
-} // namespace ee871
+} // namespace EE871

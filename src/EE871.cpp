@@ -5,7 +5,7 @@
 
 #include <limits>
 
-namespace ee871 {
+namespace EE871 {
 namespace {
 
 static constexpr uint32_t kPollStepUs = 5;
@@ -1064,4 +1064,4 @@ Status EE871::_updateHealth(const Status& st) {
   return st;
 }
 
-} // namespace ee871
+} // namespace EE871

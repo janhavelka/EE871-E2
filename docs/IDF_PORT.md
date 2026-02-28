@@ -1,10 +1,10 @@
-# EE871-E2 — ESP-IDF Migration Prompt
+﻿# EE871-E2 -- ESP-IDF Migration Prompt
 
 > **Library**: EE871-E2 (CO2 sensor, E2 bus protocol)
-> **Current version**: 0.2.0 → **Target**: 2.0.0
+> **Current version**: 0.2.0 -> **Target**: 2.0.0
 > **Namespace**: `ee871` (lowercase)
 > **Include path**: `#include "EE871/EE871.h"`
-> **Difficulty**: Trivial — already pure C++, packaging only
+> **Difficulty**: Trivial -- already pure C++, packaging only
 
 ---
 
@@ -45,7 +45,7 @@ idf_component_register(
 
 ```yaml
 version: "2.0.0"
-description: "EE871 CO2 sensor driver — E2 bus protocol"
+description: "EE871 CO2 sensor driver -- E2 bus protocol"
 targets:
   - esp32s2
   - esp32s3
@@ -55,8 +55,8 @@ dependencies:
 
 ### 3. Version bump
 
-- `library.json` → `2.0.0`
-- `Version.h` (if present) → `2.0.0`
+- `library.json` -> `2.0.0`
+- `Version.h` (if present) -> `2.0.0`
 
 ### 4. Remove Arduino example
 
@@ -103,15 +103,15 @@ extern "C" void app_main() {
     io.intr_type = GPIO_INTR_DISABLE;
     gpio_config(&io);
 
-    ee871::Config cfg{};
+    EE871::Config cfg{};
     cfg.setLine = setLine;
     cfg.readLine = readLine;
     cfg.delayUs = delayUs;
     cfg.user = nullptr;
 
-    ee871::Sensor sensor;
-    ee871::Status st = sensor.begin(cfg);
-    if (st.err != ee871::Err::Ok) {
+    EE871::Sensor sensor;
+    EE871::Status st = sensor.begin(cfg);
+    if (st.err != EE871::Err::Ok) {
         printf("begin() failed: %s\n", st.msg);
     }
 

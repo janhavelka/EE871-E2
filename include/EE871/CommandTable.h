@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-namespace ee871 {
+namespace EE871 {
 namespace cmd {
 
 // ============================================================================
@@ -168,4 +168,4 @@ static constexpr uint8_t OPERATING_MODE_E2_PRIORITY_MASK = 0x02;
 static constexpr uint8_t AUTO_ADJUST_RUNNING_MASK = 0x01;
 
 } // namespace cmd
-} // namespace ee871
+} // namespace EE871
