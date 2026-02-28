@@ -127,3 +127,7 @@ Serial.printf("Failures: %u consecutive, %lu total\n",
 
 MIT License. See [LICENSE](LICENSE).
 
+
+## Documentation
+
+- `docs/DOXYGEN.md` - how to build and browse API docs
