@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-02-28
+
+### Added
+- Unified bringup CLI helper files under `examples/common/*` for consistent setup/diagnostics flow
+- `docs/UNIFICATION_STANDARD.md` and repository-level CLI/timing guard tools
+
+### Changed
+- `examples/01_basic_bringup_cli` output/help style aligned with the shared I2C CLI scheme
+- Self-test and stress outputs now provide clearer NOT_INITIALIZED/absent-device diagnostics instead of ambiguous summaries
+
+### Fixed
+- Public API/type namespace and include-path consistency issues that caused compile breaks during example builds
+- Release metadata synchronized for `v0.2.1`
+
 ## [0.2.0] - 2026-02-22
 
 ### Added
@@ -35,7 +49,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial release with template structure
 - ESP32-S2 and ESP32-S3 support
 
-[Unreleased]: https://github.com/janhavelka/EE871-E2/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/janhavelka/EE871-E2/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/janhavelka/EE871-E2/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/janhavelka/EE871-E2/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/janhavelka/EE871-E2/releases/tag/v0.1.1
 [0.1.0]: https://github.com/janhavelka/EE871-E2/releases/tag/v0.1.0

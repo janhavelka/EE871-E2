@@ -17,7 +17,7 @@ Add to `platformio.ini`:
 
 ```ini
 lib_deps =
-  https://github.com/your-username/ee871-e2.git
+  https://github.com/janhavelka/EE871-E2.git
 ```
 
 ### Manual
@@ -116,6 +116,12 @@ Serial.printf("Failures: %u consecutive, %lu total\n",
 ## Examples
 
 - `examples/01_basic_bringup_cli/` - Interactive CLI for testing
+
+## Documentation
+
+- `CHANGELOG.md` - full release history
+- `docs/UNIFICATION_STANDARD.md` - shared API/CLI/test conventions
+- `docs/IDF_PORT.md` - ESP-IDF portability guidance
 
 ## License
 
