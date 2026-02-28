@@ -383,6 +383,7 @@ void printHelp() {
 
   helpSection("Common");
   helpItem("help / ?", "Show this help");
+  helpItem("version / ver", "Print firmware and library version info");
   helpItem("scan", "Scan all 8 E2 addresses");
   helpItem("probe", "Probe device (no health tracking)");
   helpItem("recover", "Attempt recovery");
@@ -453,6 +454,16 @@ void printHelp() {
   helpItem("caps", "Print feature capability booleans");
   helpItem("trace stats", "Show bus trace buffer stats");
   helpItem("trace clear", "Clear buffered trace events");
+}
+
+void printVersionInfo() {
+  Serial.println("=== Version Info ===");
+  Serial.printf("  Example firmware build: %s %s\n", __DATE__, __TIME__);
+  Serial.printf("  EE871 library version: %s\n", EE871::VERSION);
+  Serial.printf("  EE871 library full: %s\n", EE871::VERSION_FULL);
+  Serial.printf("  EE871 library build: %s\n", EE871::BUILD_TIMESTAMP);
+  Serial.printf("  EE871 library commit: %s (%s)\n", EE871::GIT_COMMIT, EE871::GIT_STATUS);
+  Serial.println("  Sensor firmware: use command 'fw'");
 }
 
 void runStressMix(int count) {
@@ -752,6 +763,8 @@ void processCommand(const String& cmd) {
 
   if (trimmed == "help" || trimmed == "?") {
     printHelp();
+  } else if (trimmed == "version" || trimmed == "ver") {
+    printVersionInfo();
   } else if (trimmed == "read") {
     uint16_t ppm = 0;
     auto st = device.readCo2Average(ppm);
