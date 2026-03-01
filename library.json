@@ -1,6 +1,6 @@
 {
   "name": "ee871-e2",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "EE871 CO2 sensor driver for the E2 bus (ESP32 Arduino/PlatformIO).",
   "keywords": [
     "ee871",
@@ -29,9 +29,15 @@
   },
   "license": "MIT",
   "homepage": "https://github.com/YOUR_USERNAME/ee871-e2",
-  "frameworks": ["arduino"],
-  "platforms": ["espressif32"],
-  "headers": ["EE871/EE871.h"],
+  "frameworks": [
+    "arduino"
+  ],
+  "platforms": [
+    "espressif32"
+  ],
+  "headers": [
+    "EE871/EE871.h"
+  ],
   "build": {
     "includeDir": "include",
     "srcDir": "src"
