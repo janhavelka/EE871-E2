@@ -277,6 +277,39 @@ const char* successRateColor(float pct) {
   return LOG_COLOR_RED;
 }
 
+static constexpr uint32_t STRESS_PROGRESS_UPDATES = 10U;
+
+uint32_t stressProgressStep(uint32_t total) {
+  if (total == 0U) {
+    return 0U;
+  }
+  const uint32_t step = total / STRESS_PROGRESS_UPDATES;
+  return (step == 0U) ? 1U : step;
+}
+
+void printStressProgress(uint32_t completed, uint32_t total, uint32_t okCount, uint32_t failCount) {
+  if (completed == 0U || total == 0U) {
+    return;
+  }
+  const uint32_t step = stressProgressStep(total);
+  if (step == 0U || (completed != total && (completed % step) != 0U)) {
+    return;
+  }
+  const float pct = (100.0f * static_cast<float>(completed)) / static_cast<float>(total);
+  Serial.printf("  Progress: %lu/%lu (%s%.0f%%%s, ok=%s%lu%s, fail=%s%lu%s)\n",
+                static_cast<unsigned long>(completed),
+                static_cast<unsigned long>(total),
+                successRateColor(pct),
+                pct,
+                LOG_COLOR_RESET,
+                goodIfNonZeroColor(okCount),
+                static_cast<unsigned long>(okCount),
+                LOG_COLOR_RESET,
+                goodIfZeroColor(failCount),
+                static_cast<unsigned long>(failCount),
+                LOG_COLOR_RESET);
+}
+
 /// Print status details
 void printStatus(const EE871::Status& st) {
   Serial.printf("  Status: %s%s%s (code=%u, detail=%ld)\n",
@@ -466,6 +499,80 @@ void printVersionInfo() {
   Serial.println("  Sensor firmware: use command 'fw'");
 }
 
+void runStress(int count) {
+  const uint32_t successBefore = device.totalSuccess();
+  const uint32_t failBefore = device.totalFailures();
+  const uint32_t startMs = millis();
+  int ok = 0;
+  int fail = 0;
+  bool hasFailure = false;
+  EE871::Status firstFailure = EE871::Status::Ok();
+  EE871::Status lastFailure = EE871::Status::Ok();
+
+  for (int i = 0; i < count; ++i) {
+    uint16_t ppm = 0;
+    EE871::Status st = device.readCo2Average(ppm);
+    if (st.ok()) {
+      ++ok;
+    } else {
+      ++fail;
+      if (!hasFailure) {
+        firstFailure = st;
+        hasFailure = true;
+      }
+      lastFailure = st;
+    }
+
+    printStressProgress(static_cast<uint32_t>(i + 1),
+                        static_cast<uint32_t>(count),
+                        static_cast<uint32_t>(ok),
+                        static_cast<uint32_t>(fail));
+    device.tick(millis());
+  }
+
+  const uint32_t elapsed = millis() - startMs;
+  const float successPct =
+      (count > 0) ? (100.0f * static_cast<float>(ok) / static_cast<float>(count)) : 0.0f;
+  const uint32_t successDelta = device.totalSuccess() - successBefore;
+  const uint32_t failDelta = device.totalFailures() - failBefore;
+
+  Serial.println("=== Stress Summary ===");
+  Serial.printf("  Total: %d\n", count);
+  Serial.printf("  Success: %s%d%s\n",
+                goodIfNonZeroColor(static_cast<uint32_t>(ok)),
+                ok,
+                LOG_COLOR_RESET);
+  Serial.printf("  Errors: %s%d%s\n",
+                goodIfZeroColor(static_cast<uint32_t>(fail)),
+                fail,
+                LOG_COLOR_RESET);
+  Serial.printf("  Success rate: %s%.2f%%%s\n",
+                successRateColor(successPct),
+                successPct,
+                LOG_COLOR_RESET);
+  Serial.printf("  Duration: %lu ms\n", static_cast<unsigned long>(elapsed));
+  if (elapsed > 0U) {
+    Serial.printf("  Rate: %.2f ops/s\n",
+                  (1000.0f * static_cast<float>(count)) / static_cast<float>(elapsed));
+  }
+  Serial.printf("  Health delta: %ssuccess +%lu%s, %sfailures +%lu%s\n",
+                goodIfNonZeroColor(successDelta),
+                static_cast<unsigned long>(successDelta),
+                LOG_COLOR_RESET,
+                goodIfZeroColor(failDelta),
+                static_cast<unsigned long>(failDelta),
+                LOG_COLOR_RESET);
+  if (hasFailure) {
+    Serial.println("  Failure details:");
+    Serial.println("  First failure:");
+    printStatus(firstFailure);
+    if (fail > 1) {
+      Serial.println("  Last failure:");
+      printStatus(lastFailure);
+    }
+  }
+}
+
 void runStressMix(int count) {
   struct OpStats {
     const char* name;
@@ -487,6 +594,8 @@ void runStressMix(int count) {
   const uint32_t succBefore = device.totalSuccess();
   const uint32_t failBefore = device.totalFailures();
   const uint32_t startMs = millis();
+  uint32_t okTotal = 0;
+  uint32_t failTotal = 0;
 
   for (int i = 0; i < count; ++i) {
     const int op = i % opCount;
@@ -545,21 +654,22 @@ void runStressMix(int count) {
 
     if (st.ok()) {
       stats[op].ok++;
+      okTotal++;
     } else {
       stats[op].fail++;
+      failTotal++;
       if (verboseMode) {
         Serial.printf("  [%d] %s failed: %s\n", i, stats[op].name, errToStr(st.code));
       }
     }
+
+    printStressProgress(static_cast<uint32_t>(i + 1),
+                        static_cast<uint32_t>(count),
+                        okTotal,
+                        failTotal);
   }
 
   const uint32_t elapsed = millis() - startMs;
-  uint32_t okTotal = 0;
-  uint32_t failTotal = 0;
-  for (int i = 0; i < opCount; ++i) {
-    okTotal += stats[i].ok;
-    failTotal += stats[i].fail;
-  }
 
   Serial.println("=== stress_mix summary ===");
   const float successPct =
@@ -1308,47 +1418,7 @@ void processCommand(const String& cmd) {
       count = trimmed.substring(6).toInt();
       if (count <= 0) count = 100;
     }
-    int ok = 0;
-    int fail = 0;
-    bool hasFailure = false;
-    EE871::Status firstFailure = EE871::Status::Ok();
-    EE871::Status lastFailure = EE871::Status::Ok();
-    for (int i = 0; i < count; ++i) {
-      uint16_t ppm = 0;
-      auto st = device.readCo2Average(ppm);
-      if (st.ok()) {
-        ++ok;
-      } else {
-        ++fail;
-        if (!hasFailure) {
-          firstFailure = st;
-          hasFailure = true;
-        }
-        lastFailure = st;
-      }
-      device.tick(millis());
-    }
-    const float successPct = (count > 0) ? (100.0f * static_cast<float>(ok) / static_cast<float>(count)) : 0.0f;
-    Serial.printf("Stress: %sok=%d%s %sfail=%d%s total=%d (%s%.2f%%%s)\n",
-                  goodIfNonZeroColor(static_cast<uint32_t>(ok)),
-                  ok,
-                  LOG_COLOR_RESET,
-                  goodIfZeroColor(static_cast<uint32_t>(fail)),
-                  fail,
-                  LOG_COLOR_RESET,
-                  count,
-                  successRateColor(successPct),
-                  successPct,
-                  LOG_COLOR_RESET);
-    if (hasFailure) {
-      Serial.println("Failure details:");
-      Serial.println("  First failure:");
-      printStatus(firstFailure);
-      if (fail > 1) {
-        Serial.println("  Last failure:");
-        printStatus(lastFailure);
-      }
-    }
+    runStress(count);
 
   } else {
     LOGW("Unknown command: %s", trimmed.c_str());
