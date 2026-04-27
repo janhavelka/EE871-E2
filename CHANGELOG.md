@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- High-level optional-feature helpers now consistently return `NOT_INITIALIZED` before parameter or capability checks when called before `begin()`.
+- `writeOperatingMode()` now validates unsupported bit fields before capability checks.
+- README and `Config` Doxygen now document timing bounds, health behavior, feature guards, and callback ownership more explicitly.
+
+### Fixed
+- Byte-timeout accounting in E2 bit helpers now uses saturating arithmetic and avoids overflow in the elapsed-time accumulator.
+- `IN_PROGRESS` statuses are neutral for health tracking instead of counting as communication failures.
+
 ## [0.3.0] - 2026-03-01
 
 ### Changed

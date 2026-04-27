@@ -4,6 +4,7 @@
 
 #include <Arduino.h>
 #include <stdlib.h>
+#include "common/CliStyle.h"
 #include "common/Log.h"
 #include "common/BoardConfig.h"
 #include "common/E2Transport.h"
@@ -404,89 +405,82 @@ void printDriverHealth() {
 
 /// Print help
 void printHelp() {
-  auto helpSection = [](const char* title) {
-    Serial.printf("\n%s[%s]%s\n", LOG_COLOR_GREEN, title, LOG_COLOR_RESET);
-  };
-  auto helpItem = [](const char* cmd, const char* desc) {
-    Serial.printf("  %s%-32s%s - %s\n", LOG_COLOR_CYAN, cmd, LOG_COLOR_RESET, desc);
-  };
-
   Serial.println();
-  Serial.printf("%s=== EE871-E2 CLI Help ===%s\n", LOG_COLOR_CYAN, LOG_COLOR_RESET);
+  cli::printHelpHeader("EE871-E2 CLI Help");
 
-  helpSection("Common");
-  helpItem("help / ?", "Show this help");
-  helpItem("version / ver", "Print firmware and library version info");
-  helpItem("scan", "Scan all 8 E2 addresses");
-  helpItem("probe", "Probe device (no health tracking)");
-  helpItem("recover", "Attempt recovery");
-  helpItem("drv", "Show driver state and health");
-  helpItem("read", "Read CO2 average");
-  helpItem("cfg / settings", "Show driver state and feature flags");
-  helpItem("verbose [0|1]", "Toggle bus trace output (no args = show)");
-  helpItem("stress [N]", "Repeated CO2 average reads");
-  helpItem("stress_mix [N]", "Mixed safe read operations");
-  helpItem("selftest", "Safe command self-test with report");
+  cli::printHelpSection("Common");
+  cli::printHelpItem("help / ?", "Show this help");
+  cli::printHelpItem("version / ver", "Print firmware and library version info");
+  cli::printHelpItem("scan", "Scan all 8 E2 addresses");
+  cli::printHelpItem("probe", "Probe device (no health tracking)");
+  cli::printHelpItem("recover", "Attempt recovery");
+  cli::printHelpItem("drv", "Show driver state and health");
+  cli::printHelpItem("read", "Read CO2 average");
+  cli::printHelpItem("cfg / settings", "Show driver state and feature flags");
+  cli::printHelpItem("verbose [0|1]", "Toggle bus trace output (no args = show)");
+  cli::printHelpItem("stress [N]", "Repeated CO2 average reads");
+  cli::printHelpItem("stress_mix [N]", "Mixed safe read operations");
+  cli::printHelpItem("selftest", "Safe command self-test with report");
 
-  helpSection("Device Commands");
-  helpItem("id", "Read group/subgroup/available bits");
-  helpItem("status", "Read status byte (starts measurement)");
-  helpItem("co2fast", "Read MV3 (fast response)");
-  helpItem("co2avg", "Read MV4 (averaged)");
-  helpItem("error", "Read error code (if status indicates error)");
-  helpItem("reg read <addr>", "Read custom register (0x00..0xFF)");
-  helpItem("reg write <addr> <value>", "Write custom register and verify");
-  helpItem("reg dump [start] [len]", "Dump custom registers (default all)");
-  helpItem("ctrl <main_nibble>", "Raw readControlByte(main_nibble)");
-  helpItem("u16 <main_lo> <main_hi>", "Raw readU16(main_lo, main_hi)");
-  helpItem("ptr <addr16>", "Set custom pointer");
+  cli::printHelpSection("Device Commands");
+  cli::printHelpItem("id", "Read group/subgroup/available bits");
+  cli::printHelpItem("status", "Read status byte (starts measurement)");
+  cli::printHelpItem("co2fast", "Read MV3 (fast response)");
+  cli::printHelpItem("co2avg", "Read MV4 (averaged)");
+  cli::printHelpItem("error", "Read error code (if status indicates error)");
+  cli::printHelpItem("reg read <addr>", "Read custom register (0x00..0xFF)");
+  cli::printHelpItem("reg write <addr> <value>", "Write custom register and verify");
+  cli::printHelpItem("reg dump [start] [len]", "Dump custom registers (default all)");
+  cli::printHelpItem("ctrl <main_nibble>", "Raw readControlByte(main_nibble)");
+  cli::printHelpItem("u16 <main_lo> <main_hi>", "Raw readU16(main_lo, main_hi)");
+  cli::printHelpItem("ptr <addr16>", "Set custom pointer");
 
-  helpSection("Device Info");
-  helpItem("fw", "Read firmware version");
-  helpItem("e2spec", "Read E2 spec version");
-  helpItem("features", "Read feature support flags");
-  helpItem("serial", "Read serial number");
-  helpItem("partname", "Read part name");
-  helpItem("partname <text>", "Write part name (16 bytes max)");
+  cli::printHelpSection("Device Info");
+  cli::printHelpItem("fw", "Read firmware version");
+  cli::printHelpItem("e2spec", "Read E2 spec version");
+  cli::printHelpItem("features", "Read feature support flags");
+  cli::printHelpItem("serial", "Read serial number");
+  cli::printHelpItem("partname", "Read part name");
+  cli::printHelpItem("partname <text>", "Write part name (16 bytes max)");
 
-  helpSection("Configuration");
-  helpItem("addr", "Read current bus address");
-  helpItem("addr <0-7>", "Write bus address (needs power cycle)");
-  helpItem("interval", "Read measurement interval");
-  helpItem("interval <dec>", "Write interval (150..36000 deciseconds)");
-  helpItem("factor", "Read CO2 interval factor");
-  helpItem("factor <val>", "Write CO2 interval factor");
-  helpItem("filter", "Read CO2 filter setting");
-  helpItem("filter <val>", "Write CO2 filter");
-  helpItem("mode", "Read operating mode");
-  helpItem("mode <val>", "Write operating mode (0..3)");
+  cli::printHelpSection("Configuration");
+  cli::printHelpItem("addr", "Read current bus address");
+  cli::printHelpItem("addr <0-7>", "Write bus address (needs power cycle)");
+  cli::printHelpItem("interval", "Read measurement interval");
+  cli::printHelpItem("interval <dec>", "Write interval (150..36000 deciseconds)");
+  cli::printHelpItem("factor", "Read CO2 interval factor");
+  cli::printHelpItem("factor <val>", "Write CO2 interval factor");
+  cli::printHelpItem("filter", "Read CO2 filter setting");
+  cli::printHelpItem("filter <val>", "Write CO2 filter");
+  cli::printHelpItem("mode", "Read operating mode");
+  cli::printHelpItem("mode <val>", "Write operating mode (0..3)");
 
-  helpSection("Calibration");
-  helpItem("offset", "Read CO2 offset (ppm)");
-  helpItem("offset <val>", "Write CO2 offset (signed)");
-  helpItem("gain", "Read CO2 gain");
-  helpItem("gain <val>", "Write CO2 gain");
-  helpItem("calpoints", "Read last calibration points");
-  helpItem("autoadj", "Read auto-adjust status");
-  helpItem("autoadj start", "Start auto-adjustment (~5 min)");
+  cli::printHelpSection("Calibration");
+  cli::printHelpItem("offset", "Read CO2 offset (ppm)");
+  cli::printHelpItem("offset <val>", "Write CO2 offset (signed)");
+  cli::printHelpItem("gain", "Read CO2 gain");
+  cli::printHelpItem("gain <val>", "Write CO2 gain");
+  cli::printHelpItem("calpoints", "Read last calibration points");
+  cli::printHelpItem("autoadj", "Read auto-adjust status");
+  cli::printHelpItem("autoadj start", "Start auto-adjustment (~5 min)");
 
-  helpSection("Bus Safety");
-  helpItem("buscheck", "Check if bus is idle");
-  helpItem("libreset", "Bus reset via library");
+  cli::printHelpSection("Bus Safety");
+  cli::printHelpItem("buscheck", "Check if bus is idle");
+  cli::printHelpItem("libreset", "Bus reset via library");
 
-  helpSection("Diagnostics");
-  helpItem("diag", "Run full diagnostic suite");
-  helpItem("levels", "Read current bus levels");
-  helpItem("pintest", "Test pin toggle (MCU bus control)");
-  helpItem("clocktest", "Generate clock pulses and verify");
-  helpItem("sniff", "Toggle sniffer on/off");
-  helpItem("timing", "Try different clock frequencies");
-  helpItem("busreset", "Send 9 clocks to recover stuck bus");
-  helpItem("tx <hex>", "Test transaction with control byte");
-  helpItem("libtest", "Test all library commands (begin uses)");
-  helpItem("caps", "Print feature capability booleans");
-  helpItem("trace stats", "Show bus trace buffer stats");
-  helpItem("trace clear", "Clear buffered trace events");
+  cli::printHelpSection("Diagnostics");
+  cli::printHelpItem("diag", "Run full diagnostic suite");
+  cli::printHelpItem("levels", "Read current bus levels");
+  cli::printHelpItem("pintest", "Test pin toggle (MCU bus control)");
+  cli::printHelpItem("clocktest", "Generate clock pulses and verify");
+  cli::printHelpItem("sniff", "Toggle sniffer on/off");
+  cli::printHelpItem("timing", "Try different clock frequencies");
+  cli::printHelpItem("busreset", "Send 9 clocks to recover stuck bus");
+  cli::printHelpItem("tx <hex>", "Test transaction with control byte");
+  cli::printHelpItem("libtest", "Test all library commands (begin uses)");
+  cli::printHelpItem("caps", "Print feature capability booleans");
+  cli::printHelpItem("trace stats", "Show bus trace buffer stats");
+  cli::printHelpItem("trace clear", "Clear buffered trace events");
 }
 
 void printVersionInfo() {
@@ -1474,7 +1468,7 @@ void setup() {
   }
 
   Serial.println("\nType 'help' for commands");
-  Serial.print("> ");
+  cli::printPrompt();
 }
 
 void loop() {
@@ -1488,7 +1482,7 @@ void loop() {
       if (inputBuffer.length() > 0) {
         processCommand(inputBuffer);
         inputBuffer = "";
-        Serial.print("> ");
+        cli::printPrompt();
       }
     } else {
       inputBuffer += c;

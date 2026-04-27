@@ -121,6 +121,52 @@ void test_recover_requires_begin() {
                           static_cast<uint8_t>(st.code));
 }
 
+void test_high_level_helpers_check_initialization_first() {
+  EE871::EE871 dev;
+  uint8_t byte = 0;
+  uint8_t buf[16] = {};
+
+  Status st = dev.customRead(0, nullptr, 1);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
+                          static_cast<uint8_t>(st.code));
+
+  st = dev.readErrorCode(byte);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
+                          static_cast<uint8_t>(st.code));
+
+  st = dev.readSerialNumber(nullptr);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
+                          static_cast<uint8_t>(st.code));
+
+  st = dev.readPartName(buf);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
+                          static_cast<uint8_t>(st.code));
+
+  st = dev.writePartName(nullptr);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
+                          static_cast<uint8_t>(st.code));
+
+  st = dev.writeBusAddress(0);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
+                          static_cast<uint8_t>(st.code));
+
+  st = dev.writeCo2IntervalFactor(1);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
+                          static_cast<uint8_t>(st.code));
+
+  st = dev.writeCo2Filter(0);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
+                          static_cast<uint8_t>(st.code));
+
+  st = dev.writeOperatingMode(0xFF);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
+                          static_cast<uint8_t>(st.code));
+
+  st = dev.startAutoAdjust();
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
+                          static_cast<uint8_t>(st.code));
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_status_ok);
@@ -133,6 +179,7 @@ int main() {
   RUN_TEST(test_begin_rejects_zero_offline_threshold);
   RUN_TEST(test_probe_requires_begin);
   RUN_TEST(test_recover_requires_begin);
+  RUN_TEST(test_high_level_helpers_check_initialization_first);
   return UNITY_END();
 }
 

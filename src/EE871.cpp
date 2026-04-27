@@ -29,7 +29,8 @@ inline bool readSda(const Config& cfg) {
 inline void delayUs(const Config& cfg, uint32_t us, uint32_t* elapsedUs) {
   cfg.delayUs(us, cfg.busUser);
   if (elapsedUs != nullptr) {
-    *elapsedUs += us;
+    const uint32_t room = std::numeric_limits<uint32_t>::max() - *elapsedUs;
+    *elapsedUs = (us > room) ? std::numeric_limits<uint32_t>::max() : (*elapsedUs + us);
   }
 }
 
@@ -39,8 +40,12 @@ static Status waitSclHigh(const Config& cfg, uint32_t* elapsedUs) {
     if (waitedUs >= cfg.bitTimeoutUs) {
       return Status::Error(Err::TIMEOUT, "Clock stretch timeout", static_cast<int32_t>(waitedUs));
     }
-    if (elapsedUs != nullptr && (*elapsedUs + kPollStepUs) > cfg.byteTimeoutUs) {
-      return Status::Error(Err::TIMEOUT, "Byte timeout", static_cast<int32_t>(*elapsedUs));
+    if (elapsedUs != nullptr) {
+      const uint32_t remaining =
+          (*elapsedUs < cfg.byteTimeoutUs) ? (cfg.byteTimeoutUs - *elapsedUs) : 0U;
+      if (remaining < kPollStepUs) {
+        return Status::Error(Err::TIMEOUT, "Byte timeout", static_cast<int32_t>(*elapsedUs));
+      }
     }
     delayUs(cfg, kPollStepUs, elapsedUs);
     waitedUs += kPollStepUs;
@@ -412,6 +417,9 @@ Status EE871::customRead(uint8_t address, uint8_t& data) {
 }
 
 Status EE871::customRead(uint8_t address, uint8_t* buf, size_t len) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
   if (buf == nullptr || len == 0) {
     return Status::Error(Err::INVALID_PARAM, "Invalid buffer");
   }
@@ -553,6 +561,9 @@ Status EE871::readStatus(uint8_t& status) {
 }
 
 Status EE871::readErrorCode(uint8_t& code) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
   if (!hasErrorCode()) {
     return Status::Error(Err::NOT_SUPPORTED, "Error code not supported");
   }
@@ -604,6 +615,9 @@ Status EE871::readSpecialFeatures(uint8_t& bits) {
 // ============================================================================
 
 Status EE871::readSerialNumber(uint8_t* buf) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
   if (buf == nullptr) {
     return Status::Error(Err::INVALID_PARAM, "Null buffer");
   }
@@ -614,6 +628,9 @@ Status EE871::readSerialNumber(uint8_t* buf) {
 }
 
 Status EE871::readPartName(uint8_t* buf) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
   if (buf == nullptr) {
     return Status::Error(Err::INVALID_PARAM, "Null buffer");
   }
@@ -624,6 +641,9 @@ Status EE871::readPartName(uint8_t* buf) {
 }
 
 Status EE871::writePartName(const uint8_t* buf) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
   if (buf == nullptr) {
     return Status::Error(Err::INVALID_PARAM, "Null buffer");
   }
@@ -649,6 +669,9 @@ Status EE871::readBusAddress(uint8_t& address) {
 }
 
 Status EE871::writeBusAddress(uint8_t address) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
   if (!hasAddressConfig()) {
     return Status::Error(Err::NOT_SUPPORTED, "Address config not supported");
   }
@@ -690,6 +713,9 @@ Status EE871::readCo2IntervalFactor(int8_t& factor) {
 }
 
 Status EE871::writeCo2IntervalFactor(int8_t factor) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
   if (!hasSpecificInterval()) {
     return Status::Error(Err::NOT_SUPPORTED, "Specific interval not supported");
   }
@@ -706,6 +732,9 @@ Status EE871::readCo2Filter(uint8_t& filter) {
 }
 
 Status EE871::writeCo2Filter(uint8_t filter) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
   if (!hasFilterConfig()) {
     return Status::Error(Err::NOT_SUPPORTED, "Filter config not supported");
   }
@@ -718,16 +747,19 @@ Status EE871::readOperatingMode(uint8_t& mode) {
 }
 
 Status EE871::writeOperatingMode(uint8_t mode) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
+  // Only bits 0 and 1 are valid.
+  if (mode > 0x03) {
+    return Status::Error(Err::OUT_OF_RANGE, "Invalid mode bits", mode);
+  }
   // Check if requested mode bits are supported
   if ((mode & cmd::OPERATING_MODE_MEASUREMODE_MASK) && !hasLowPowerMode()) {
     return Status::Error(Err::NOT_SUPPORTED, "Low power mode not supported");
   }
   if ((mode & cmd::OPERATING_MODE_E2_PRIORITY_MASK) && !hasE2Priority()) {
     return Status::Error(Err::NOT_SUPPORTED, "E2 priority not supported");
-  }
-  // Only bits 0 and 1 are valid
-  if (mode > 0x03) {
-    return Status::Error(Err::OUT_OF_RANGE, "Invalid mode bits", mode);
   }
   return customWrite(cmd::CUSTOM_OPERATING_MODE, mode);
 }
@@ -748,6 +780,9 @@ Status EE871::readAutoAdjustStatus(bool& running) {
 }
 
 Status EE871::startAutoAdjust() {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
   if (!hasAutoAdjust()) {
     return Status::Error(Err::NOT_SUPPORTED, "Auto adjust not supported");
   }
@@ -1035,6 +1070,9 @@ Status EE871::_writeCommandTracked(uint8_t controlByte, uint8_t addressByte, uin
 
 Status EE871::_updateHealth(const Status& st) {
   if (!_initialized) {
+    return st;
+  }
+  if (st.inProgress()) {
     return st;
   }
 

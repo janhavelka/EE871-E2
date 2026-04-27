@@ -8,6 +8,7 @@ Production-grade EE871 CO2 sensor driver for the E2 bus on ESP32 (Arduino/Platfo
 - **Health monitoring** - READY/DEGRADED/OFFLINE tracking
 - **Deterministic behavior** - bounded loops, explicit timeouts
 - **Managed synchronous** - blocking transfers with spec-compliant limits
+- **Feature guards** - optional EE871 registers are checked from cached capability flags
 
 ## Installation
 
@@ -113,6 +114,22 @@ Serial.printf("Failures: %u consecutive, %lu total\n",
               static_cast<unsigned long>(sensor.totalFailures()));
 ```
 
+Validation and precondition errors return before E2 traffic and do not update health counters. `probe()` uses raw E2 reads and is diagnostic-only; normal reads/writes use tracked wrappers. `IN_PROGRESS` is treated as neutral for health if future scheduled operations use it.
+
+## Timing And Blocking
+
+The driver is managed synchronous: E2 transactions block for bounded protocol time, and `tick(nowMs)` only records the latest application timestamp for diagnostics. Clock stretching is bounded by `bitTimeoutUs` and `byteTimeoutUs`; flash writes are bounded by `writeDelayMs` or `intervalWriteDelayMs` with max 5000 ms validation.
+
+The library never owns GPIO pins or an I2C/Wire instance. Applications provide `setScl`, `setSda`, `readScl`, `readSda`, and `delayUs` callbacks.
+
+## Main API
+
+- Lifecycle: `begin`, `tick`, `end`
+- Diagnostics: `probe`, `recover`, `busReset`, `checkBusIdle`
+- Identification: `readGroup`, `readSubgroup`, `readFirmwareVersion`, `readE2SpecVersion`
+- Measurements: `readStatus`, `readCo2Fast`, `readCo2Average`, `readErrorCode`
+- Custom memory/config: `customRead`, `customWrite`, `writeMeasurementInterval`, bus address, filter, operating mode, auto-adjust, calibration helpers
+
 ## Examples
 
 - `examples/01_basic_bringup_cli/` - Interactive CLI for testing
@@ -120,14 +137,9 @@ Serial.printf("Failures: %u consecutive, %lu total\n",
 ## Documentation
 
 - `CHANGELOG.md` - full release history
-- `docs/UNIFICATION_STANDARD.md` - shared API/CLI/test conventions
 - `docs/IDF_PORT.md` - ESP-IDF portability guidance
+- `docs/DOXYGEN.md` - how to build and browse API docs
 
 ## License
 
 MIT License. See [LICENSE](LICENSE).
-
-
-## Documentation
-
-- `docs/DOXYGEN.md` - how to build and browse API docs
