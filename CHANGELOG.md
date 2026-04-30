@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Release metadata now matches the published repository, maintainer contact,
+  and `0.3.0` changelog baseline.
 - High-level optional-feature helpers now consistently return `NOT_INITIALIZED` before parameter or capability checks when called before `begin()`.
 - `writeOperatingMode()` now validates unsupported bit fields before capability checks.
 - README and `Config` Doxygen now document timing bounds, health behavior, feature guards, and callback ownership more explicitly.
