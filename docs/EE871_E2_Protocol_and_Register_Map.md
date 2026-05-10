@@ -608,7 +608,9 @@ Minimum API to implement:
 ---
 
 ## 14) Source documents used
-- **Specification_E2_Interface.pdf** (E2 Interface Specification v4.1)
-- **AN0105.pdf** (E+E Application Note: E2 software examples)
-- **E2-Interface-CO2.pdf** (CO2 module addendum: timing, MV3/MV4 meaning, write delays, power modes)
-- **manual-9CvOog6A.pdf** (EE871 user guide: 50,000 ppm E2 range, pinout, measurement interval)
+- **E2_interface_specification_v4_1.pdf** (E2 Interface Specification v4.1)
+- **E2_interface_utilising_AN0105.pdf** (E+E Application Note: E2 software examples)
+- **EE871_E2_interface_addendum.pdf** (EE871-specific E2 parameters, timing, and write delays)
+- **EE871_E2_CO2_interface_AN1611-1.pdf** (CO2 module addendum: timing, MV3/MV4 meaning, write delays, power modes)
+- **EE871_EE240_wireless_user_guide.pdf** (EE871 for EE240 wireless network: 10,000 ppm E2 range, pinout, measurement interval)
+- **EE871_digital_interface_user_guide.pdf** (EE871 user guide: 50,000 ppm E2 range, pinout, measurement interval)
