@@ -20,6 +20,11 @@ static constexpr uint8_t RW_WRITE = 0x00;
 static constexpr uint8_t ADDR_SHIFT = 1;
 static constexpr uint8_t MAIN_SHIFT = 4;
 
+/// Build an E2 control byte from main command, device address, and direction.
+/// @param mainCommandNibble Command nibble placed in bits 7..4.
+/// @param deviceAddress E2 device address, masked to 0..7.
+/// @param read true for read direction, false for write direction.
+/// @return Encoded control byte.
 static constexpr uint8_t makeControlByte(uint8_t mainCommandNibble,
                                          uint8_t deviceAddress,
                                          bool read) {
@@ -28,11 +33,19 @@ static constexpr uint8_t makeControlByte(uint8_t mainCommandNibble,
                               (read ? RW_READ : RW_WRITE));
 }
 
+/// Build a read-direction E2 control byte.
+/// @param mainCommandNibble Command nibble placed in bits 7..4.
+/// @param deviceAddress E2 device address, masked to 0..7.
+/// @return Encoded read control byte.
 static constexpr uint8_t makeControlRead(uint8_t mainCommandNibble,
                                          uint8_t deviceAddress) {
   return makeControlByte(mainCommandNibble, deviceAddress, true);
 }
 
+/// Build a write-direction E2 control byte.
+/// @param mainCommandNibble Command nibble placed in bits 7..4.
+/// @param deviceAddress E2 device address, masked to 0..7.
+/// @return Encoded write control byte.
 static constexpr uint8_t makeControlWrite(uint8_t mainCommandNibble,
                                           uint8_t deviceAddress) {
   return makeControlByte(mainCommandNibble, deviceAddress, false);
@@ -57,6 +70,22 @@ static constexpr uint8_t MAIN_MV3_LO = 0xC;
 static constexpr uint8_t MAIN_MV3_HI = 0xD;
 static constexpr uint8_t MAIN_MV4_LO = 0xE;
 static constexpr uint8_t MAIN_MV4_HI = 0xF;
+
+/// Check whether a main-command read is defined for EE871 CO2 operation.
+/// @param mainCommandNibble Command nibble before address/RW bits are added.
+/// @return true for identity, custom-pointer read, status, MV3, and MV4 reads.
+static constexpr bool isReadMainCommandSupported(uint8_t mainCommandNibble) {
+  return mainCommandNibble == MAIN_TYPE_LO ||
+         mainCommandNibble == MAIN_TYPE_SUB ||
+         mainCommandNibble == MAIN_AVAIL_MEAS ||
+         mainCommandNibble == MAIN_TYPE_HI ||
+         mainCommandNibble == MAIN_CUSTOM_PTR ||
+         mainCommandNibble == MAIN_STATUS ||
+         mainCommandNibble == MAIN_MV3_LO ||
+         mainCommandNibble == MAIN_MV3_HI ||
+         mainCommandNibble == MAIN_MV4_LO ||
+         mainCommandNibble == MAIN_MV4_HI;
+}
 
 // ============================================================================
 // Device Identity and Capabilities
@@ -139,6 +168,26 @@ static constexpr uint8_t CO2_ERROR_SUPPLY_VOLTAGE_LOW = 1;
 static constexpr uint8_t CO2_ERROR_SENSOR_COUNTS_LOW = 200;
 static constexpr uint8_t CO2_ERROR_SENSOR_COUNTS_HIGH = 201;
 static constexpr uint8_t CO2_ERROR_SUPPLY_VOLTAGE_BREAKDOWN = 202;
+
+/// Convert a documented EE871 CO2 error code to a static string.
+/// @param code Error code read from custom memory 0xC1.
+/// @return Static error description, or "unknown CO2 error".
+inline const char* co2ErrorCodeName(uint8_t code) {
+  switch (code) {
+    case 0:
+      return "no error";
+    case CO2_ERROR_SUPPLY_VOLTAGE_LOW:
+      return "supply voltage low";
+    case CO2_ERROR_SENSOR_COUNTS_LOW:
+      return "sensor counts low";
+    case CO2_ERROR_SENSOR_COUNTS_HIGH:
+      return "sensor counts high";
+    case CO2_ERROR_SUPPLY_VOLTAGE_BREAKDOWN:
+      return "supply voltage breakdown at peak";
+    default:
+      return "unknown CO2 error";
+  }
+}
 
 // ============================================================================
 // Feature Flags

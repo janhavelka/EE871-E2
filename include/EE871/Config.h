@@ -22,7 +22,7 @@ using E2ReadLineFn = bool (*)(void* user);
 /// @param user User context pointer passed through from Config
 using E2DelayUsFn = void (*)(uint32_t us, void* user);
 
-/// Configuration for EE871 driver
+/// @brief Configuration for EE871 driver.
 struct Config {
   // === E2 Transport (required) ===
   E2SetLineFn setScl = nullptr;   ///< Set/release clock line
@@ -48,7 +48,7 @@ struct Config {
   uint32_t intervalWriteDelayMs = 300; ///< Flash delay for 0xC6/0xC7 pair, max 5000 ms.
 
   // === Health Tracking ===
-  uint8_t offlineThreshold = 5;   ///< Consecutive failures before OFFLINE state, must be > 0.
+  uint8_t offlineThreshold = 5;   ///< Consecutive failures before OFFLINE; zero normalizes to 1 in begin().
 };
 
 } // namespace EE871

@@ -115,6 +115,13 @@ Serial.printf("Failures: %u consecutive, %lu total\n",
 ```
 
 Validation and precondition errors return before E2 traffic and do not update health counters. `probe()` uses raw E2 reads and is diagnostic-only; normal reads/writes use tracked wrappers. `IN_PROGRESS` is treated as neutral for health if future scheduled operations use it.
+`Config::offlineThreshold = 0` is normalized to one failed operation. Failed
+`begin()` and `end()` paths clear stale runtime/cached feature state so later
+diagnostics do not report old sensor capabilities.
+
+Cache-only diagnostics are available through `SettingsSnapshot`,
+`getSettings(SettingsSnapshot&)`, `getSettings()`, `isInitialized()`,
+`getConfig()`, `driverState()`, `healthState()`, and `offlineThreshold()`.
 
 ## Timing And Blocking
 
@@ -129,10 +136,16 @@ The library never owns GPIO pins or an I2C/Wire instance. Applications provide `
 - Identification: `readGroup`, `readSubgroup`, `readFirmwareVersion`, `readE2SpecVersion`
 - Measurements: `readStatus`, `readCo2Fast`, `readCo2Average`, `readErrorCode`
 - Custom memory/config: `customRead`, `customWrite`, `writeMeasurementInterval`, bus address, filter, operating mode, auto-adjust, calibration helpers
+- Low-level command helpers: `cmd::makeControlRead`,
+  `cmd::makeControlWrite`, `cmd::isReadMainCommandSupported`, and
+  `cmd::co2ErrorCodeName`. Unsupported EE871 main-command reads return
+  `NOT_SUPPORTED` before bus traffic.
 
 ## Examples
 
 - `examples/01_basic_bringup_cli/` - Interactive CLI for testing
+  - Status/error output decodes CO2 error-code names when the feature is
+    available.
 
 ## Documentation
 

@@ -337,19 +337,25 @@ bool ensureProbeOk() {
 /// Print driver health information
 void printDriverHealth() {
   const uint32_t now = millis();
-  const uint32_t totalOk = device.totalSuccess();
-  const uint32_t totalFail = device.totalFailures();
+  EE871::SettingsSnapshot settings;
+  const EE871::Status snapshotStatus = device.getSettings(settings);
+  if (!snapshotStatus.ok()) {
+    printStatus(snapshotStatus);
+    return;
+  }
+  const uint32_t totalOk = settings.totalSuccess;
+  const uint32_t totalFail = settings.totalFailures;
   const uint32_t total = totalOk + totalFail;
   const float successRate = (total > 0U)
                                 ? (100.0f * static_cast<float>(totalOk) / static_cast<float>(total))
                                 : 0.0f;
-  const EE871::Status lastErr = device.lastError();
-  const EE871::DriverState st = device.state();
+  const EE871::Status lastErr = settings.lastError;
+  const EE871::DriverState st = settings.state;
   const bool online = device.isOnline();
 
   Serial.println("=== Driver Health ===");
   Serial.printf("  State: %s%s%s\n",
-                stateColor(st, online, device.consecutiveFailures()),
+                stateColor(st, online, settings.consecutiveFailures),
                 stateToStr(st),
                 LOG_COLOR_RESET);
   Serial.printf("  Online: %s%s%s\n",
@@ -357,8 +363,8 @@ void printDriverHealth() {
                 log_bool_str(online),
                 LOG_COLOR_RESET);
   Serial.printf("  Consecutive failures: %s%u%s\n",
-                goodIfZeroColor(device.consecutiveFailures()),
-                device.consecutiveFailures(),
+                goodIfZeroColor(settings.consecutiveFailures),
+                settings.consecutiveFailures,
                 LOG_COLOR_RESET);
   Serial.printf("  Total success: %s%lu%s\n",
                 goodIfNonZeroColor(totalOk),
@@ -373,7 +379,7 @@ void printDriverHealth() {
                 successRate,
                 LOG_COLOR_RESET);
 
-  const uint32_t lastOkMs = device.lastOkMs();
+  const uint32_t lastOkMs = settings.lastOkMs;
   if (lastOkMs > 0U) {
     Serial.printf("  Last OK: %lu ms ago (at %lu ms)\n",
                   static_cast<unsigned long>(now - lastOkMs),
@@ -382,7 +388,7 @@ void printDriverHealth() {
     Serial.println("  Last OK: never");
   }
 
-  const uint32_t lastErrorMs = device.lastErrorMs();
+  const uint32_t lastErrorMs = settings.lastErrorMs;
   if (lastErrorMs > 0U) {
     Serial.printf("  Last error: %lu ms ago (at %lu ms)\n",
                   static_cast<unsigned long>(now - lastErrorMs),
@@ -917,6 +923,15 @@ void processCommand(const String& cmd) {
     if (st.ok()) {
       e2diag::printStatus(status);
       Serial.printf("  hasCo2Error(): %s\n", EE871::EE871::hasCo2Error(status) ? "YES" : "NO");
+      if (EE871::EE871::hasCo2Error(status) && device.hasErrorCode()) {
+        uint8_t code = 0;
+        auto errSt = device.readErrorCode(code);
+        printStatus(errSt);
+        if (errSt.ok()) {
+          Serial.printf("  CO2 error: %u (%s)\n", code,
+                        EE871::cmd::co2ErrorCodeName(code));
+        }
+      }
     }
   } else if (trimmed == "co2fast") {
     uint16_t ppm = 0;
@@ -937,7 +952,8 @@ void processCommand(const String& cmd) {
     auto st = device.readErrorCode(code);
     printStatus(st);
     if (st.ok()) {
-      Serial.printf("  Error code: %u\n", code);
+      Serial.printf("  Error code: %u (%s)\n", code,
+                    EE871::cmd::co2ErrorCodeName(code));
     }
   } else if (trimmed.startsWith("reg ")) {
     String args = trimmed.substring(4);
@@ -1491,4 +1507,3 @@ void loop() {
 
   buslog::flush();
 }
-

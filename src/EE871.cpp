@@ -200,6 +200,8 @@ Status EE871::begin(const Config& config) {
     return Status::Error(Err::ALREADY_INITIALIZED, "Call end() first");
   }
 
+  _resetStoppedState();
+
   if (config.setScl == nullptr || config.setSda == nullptr ||
       config.readScl == nullptr || config.readSda == nullptr ||
       config.delayUs == nullptr) {
@@ -220,9 +222,6 @@ Status EE871::begin(const Config& config) {
   if (config.byteTimeoutUs < config.bitTimeoutUs) {
     return Status::Error(Err::INVALID_CONFIG, "byteTimeoutUs must be >= bitTimeoutUs");
   }
-  if (config.offlineThreshold == 0) {
-    return Status::Error(Err::INVALID_CONFIG, "offlineThreshold must be > 0");
-  }
   if (config.writeDelayMs > cmd::WRITE_DELAY_MAX_MS) {
     return Status::Error(Err::INVALID_CONFIG, "writeDelayMs exceeds safe limit");
   }
@@ -230,16 +229,11 @@ Status EE871::begin(const Config& config) {
     return Status::Error(Err::INVALID_CONFIG, "intervalWriteDelayMs exceeds safe limit");
   }
 
-  _config = config;
-  _initialized = false;
-  _driverState = DriverState::UNINIT;
-  _nowMs = 0;
-  _lastOkMs = 0;
-  _lastErrorMs = 0;
-  _lastError = Status::Ok();
-  _consecutiveFailures = 0;
-  _totalFailures = 0;
-  _totalSuccess = 0;
+  Config normalized = config;
+  if (normalized.offlineThreshold == 0) {
+    normalized.offlineThreshold = 1;
+  }
+  _config = normalized;
 
   // Check bus is idle before probing
   if (!readScl(_config) || !readSda(_config)) {
@@ -268,7 +262,9 @@ Status EE871::begin(const Config& config) {
     delayUs(_config, _config.stopHoldUs, nullptr);
     // Check again
     if (!readScl(_config) || !readSda(_config)) {
-      return Status::Error(Err::BUS_STUCK, "Bus stuck after reset");
+      Status err = Status::Error(Err::BUS_STUCK, "Bus stuck after reset");
+      _resetStoppedState();
+      return err;
     }
   }
 
@@ -279,16 +275,20 @@ Status EE871::begin(const Config& config) {
 
   Status st = _readControlByteRaw(controlLow, low);
   if (!st.ok()) {
+    _resetStoppedState();
     return st;
   }
   st = _readControlByteRaw(controlHigh, high);
   if (!st.ok()) {
+    _resetStoppedState();
     return st;
   }
 
   const uint16_t group = static_cast<uint16_t>(low) | (static_cast<uint16_t>(high) << 8);
   if (group != cmd::SENSOR_GROUP_ID) {
-    return Status::Error(Err::DEVICE_NOT_FOUND, "Unexpected group id", group);
+    Status err = Status::Error(Err::DEVICE_NOT_FOUND, "Unexpected group id", group);
+    _resetStoppedState();
+    return err;
   }
 
   // Cache feature flags for guards
@@ -324,8 +324,46 @@ void EE871::tick(uint32_t nowMs) {
 }
 
 void EE871::end() {
+  _resetStoppedState();
+}
+
+Status EE871::getSettings(SettingsSnapshot& out) const {
+  out.config = _config;
+  out.state = _driverState;
+  out.initialized = _initialized;
+  out.nowMs = _nowMs;
+  out.operatingFunctions = _operatingFunctions;
+  out.operatingModeSupport = _operatingModeSupport;
+  out.specialFeatures = _specialFeatures;
+  out.lastOkMs = _lastOkMs;
+  out.lastErrorMs = _lastErrorMs;
+  out.lastError = _lastError;
+  out.consecutiveFailures = _consecutiveFailures;
+  out.totalFailures = _totalFailures;
+  out.totalSuccess = _totalSuccess;
+  return Status::Ok();
+}
+
+SettingsSnapshot EE871::getSettings() const {
+  SettingsSnapshot out;
+  (void)getSettings(out);
+  return out;
+}
+
+void EE871::_resetStoppedState() {
+  _config = Config{};
   _initialized = false;
   _driverState = DriverState::UNINIT;
+  _nowMs = 0;
+  _operatingFunctions = 0;
+  _operatingModeSupport = 0;
+  _specialFeatures = 0;
+  _lastOkMs = 0;
+  _lastErrorMs = 0;
+  _lastError = Status::Ok();
+  _consecutiveFailures = 0;
+  _totalFailures = 0;
+  _totalSuccess = 0;
 }
 
 Status EE871::probe() {
@@ -379,11 +417,26 @@ Status EE871::readControlByte(uint8_t mainCommandNibble, uint8_t& data) {
   if (mainCommandNibble > 0x0F) {
     return Status::Error(Err::INVALID_PARAM, "Invalid main command");
   }
+  if (!cmd::isReadMainCommandSupported(mainCommandNibble)) {
+    return Status::Error(Err::NOT_SUPPORTED, "Unsupported EE871 main command",
+                         mainCommandNibble);
+  }
   const uint8_t control = cmd::makeControlRead(mainCommandNibble, _config.deviceAddress);
   return _readControlByteTracked(control, data);
 }
 
 Status EE871::readU16(uint8_t mainCommandLow, uint8_t mainCommandHigh, uint16_t& value) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
+  if (mainCommandLow > 0x0F || mainCommandHigh > 0x0F) {
+    return Status::Error(Err::INVALID_PARAM, "Invalid main command");
+  }
+  if (!cmd::isReadMainCommandSupported(mainCommandLow) ||
+      !cmd::isReadMainCommandSupported(mainCommandHigh)) {
+    return Status::Error(Err::NOT_SUPPORTED, "Unsupported EE871 main command");
+  }
+
   uint8_t low = 0;
   uint8_t high = 0;
   Status st = readControlByte(mainCommandLow, low);

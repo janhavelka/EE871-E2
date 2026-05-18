@@ -54,6 +54,27 @@ void test_config_defaults() {
   TEST_ASSERT_EQUAL_UINT8(5, cfg.offlineThreshold);
 }
 
+void test_command_table_control_bytes_and_support() {
+  TEST_ASSERT_EQUAL_UINT8(0xC5, cmd::makeControlRead(cmd::MAIN_MV3_LO, 2));
+  TEST_ASSERT_EQUAL_UINT8(0x50, cmd::makeControlWrite(cmd::MAIN_CUSTOM_PTR, 0));
+  TEST_ASSERT_TRUE(cmd::isReadMainCommandSupported(cmd::MAIN_MV3_LO));
+  TEST_ASSERT_TRUE(cmd::isReadMainCommandSupported(cmd::MAIN_MV4_HI));
+  TEST_ASSERT_FALSE(cmd::isReadMainCommandSupported(cmd::MAIN_MV1_LO));
+  TEST_ASSERT_FALSE(cmd::isReadMainCommandSupported(0x06));
+}
+
+void test_co2_error_code_names() {
+  TEST_ASSERT_EQUAL_STRING("supply voltage low",
+                           cmd::co2ErrorCodeName(cmd::CO2_ERROR_SUPPLY_VOLTAGE_LOW));
+  TEST_ASSERT_EQUAL_STRING("sensor counts low",
+                           cmd::co2ErrorCodeName(cmd::CO2_ERROR_SENSOR_COUNTS_LOW));
+  TEST_ASSERT_EQUAL_STRING("sensor counts high",
+                           cmd::co2ErrorCodeName(cmd::CO2_ERROR_SENSOR_COUNTS_HIGH));
+  TEST_ASSERT_EQUAL_STRING("supply voltage breakdown at peak",
+                           cmd::co2ErrorCodeName(cmd::CO2_ERROR_SUPPLY_VOLTAGE_BREAKDOWN));
+  TEST_ASSERT_EQUAL_STRING("unknown CO2 error", cmd::co2ErrorCodeName(7));
+}
+
 void test_begin_rejects_missing_callbacks() {
   EE871::EE871 dev;
   Config cfg;
@@ -93,7 +114,7 @@ void test_begin_rejects_clock_timing_below_spec() {
                           static_cast<uint8_t>(st.code));
 }
 
-void test_begin_rejects_zero_offline_threshold() {
+void test_begin_normalizes_zero_offline_threshold() {
   EE871::EE871 dev;
   Config cfg;
   cfg.setScl = [](bool, void*) {};
@@ -103,8 +124,38 @@ void test_begin_rejects_zero_offline_threshold() {
   cfg.delayUs = [](uint32_t, void*) {};
   cfg.offlineThreshold = 0;
   Status st = dev.begin(cfg);
-  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_CONFIG),
-                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_NOT_EQUAL(static_cast<uint8_t>(Err::INVALID_CONFIG),
+                        static_cast<uint8_t>(st.code));
+  TEST_ASSERT_FALSE(dev.isInitialized());
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::UNINIT),
+                          static_cast<uint8_t>(dev.driverState()));
+}
+
+void test_default_health_aliases() {
+  EE871::EE871 dev;
+  TEST_ASSERT_FALSE(dev.isInitialized());
+  TEST_ASSERT_FALSE(dev.isOnline());
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::UNINIT),
+                          static_cast<uint8_t>(dev.state()));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(dev.state()),
+                          static_cast<uint8_t>(dev.driverState()));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(dev.driverState()),
+                          static_cast<uint8_t>(dev.healthState()));
+  TEST_ASSERT_EQUAL_UINT8(5, dev.offlineThreshold());
+
+  SettingsSnapshot snap;
+  TEST_ASSERT_TRUE(dev.getSettings(snap).ok());
+  TEST_ASSERT_FALSE(snap.initialized);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::UNINIT),
+                          static_cast<uint8_t>(snap.state));
+  TEST_ASSERT_EQUAL_UINT8(5, snap.config.offlineThreshold);
+  TEST_ASSERT_EQUAL_UINT32(0u, snap.totalFailures);
+  TEST_ASSERT_EQUAL_UINT32(0u, snap.totalSuccess);
+
+  const SettingsSnapshot byValue = dev.getSettings();
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(snap.state),
+                          static_cast<uint8_t>(byValue.state));
+  TEST_ASSERT_EQUAL_UINT8(snap.config.offlineThreshold, byValue.config.offlineThreshold);
 }
 
 void test_probe_requires_begin() {
@@ -173,10 +224,13 @@ int main() {
   RUN_TEST(test_status_error);
   RUN_TEST(test_status_in_progress);
   RUN_TEST(test_config_defaults);
+  RUN_TEST(test_command_table_control_bytes_and_support);
+  RUN_TEST(test_co2_error_code_names);
   RUN_TEST(test_begin_rejects_missing_callbacks);
   RUN_TEST(test_begin_rejects_invalid_device_address);
   RUN_TEST(test_begin_rejects_clock_timing_below_spec);
-  RUN_TEST(test_begin_rejects_zero_offline_threshold);
+  RUN_TEST(test_begin_normalizes_zero_offline_threshold);
+  RUN_TEST(test_default_health_aliases);
   RUN_TEST(test_probe_requires_begin);
   RUN_TEST(test_recover_requires_begin);
   RUN_TEST(test_high_level_helpers_check_initialization_first);

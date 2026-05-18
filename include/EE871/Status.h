@@ -6,7 +6,7 @@
 
 namespace EE871 {
 
-/// Error codes for all EE871 operations
+/// @brief Error codes for all EE871 operations.
 enum class Err : uint8_t {
   OK = 0,                    ///< Operation successful
   NOT_INITIALIZED,           ///< begin() not called
@@ -25,7 +25,7 @@ enum class Err : uint8_t {
   NOT_SUPPORTED              ///< Feature not supported by this device/firmware
 };
 
-/// Status structure returned by all fallible operations
+/// @brief Status structure returned by all fallible operations.
 struct Status {
   Err code = Err::OK;
   int32_t detail = 0;        ///< Implementation-specific detail (e.g., E2 error code)
