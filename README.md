@@ -1,10 +1,11 @@
 # EE871 E2 Driver Library
 
-Production-grade EE871 CO2 sensor driver for the E2 bus on ESP32 (Arduino/PlatformIO).
+Production-grade EE871 CO2 sensor driver for the E2 bus on ESP32 using Arduino/PlatformIO or ESP-IDF.
 
 ## Features
 
 - **E2 bus HAL injection** - no Wire/I2C dependency in library code
+- **Framework-neutral core** - Arduino and ESP-IDF adapters live outside the driver
 - **Health monitoring** - READY/DEGRADED/OFFLINE tracking
 - **Deterministic behavior** - bounded loops, explicit timeouts
 - **Managed synchronous** - blocking transfers with spec-compliant limits
@@ -24,6 +25,13 @@ lib_deps =
 ### Manual
 
 Copy `include/EE871/` and `src/` to your project.
+
+### ESP-IDF
+
+Use this repository as an ESP-IDF component with `EXTRA_COMPONENT_DIRS` or the
+metadata in `idf_component.yml`. The component builds only the framework-neutral
+core. Applications own the open-drain GPIO lines and inject `setScl`, `setSda`,
+`readScl`, `readSda`, and `delayUs` callbacks through `Config`.
 
 ## Quick Start
 
@@ -146,11 +154,34 @@ The library never owns GPIO pins or an I2C/Wire instance. Applications provide `
 - `examples/01_basic_bringup_cli/` - Interactive CLI for testing
   - Status/error output decodes CO2 error-code names when the feature is
     available.
+- `examples/idf/basic_bringup/` - ESP-IDF GPIO E2 bring-up example
+  using `examples/idf/common/E2GpioTransport.h`.
+
+## Building And Validation
+
+```bash
+pio test -e native
+pio run -e ex_bringup_s3
+pio run -e ex_bringup_s2
+python tools/check_core_timing_guard.py
+python tools/check_cli_contract.py
+```
+
+When ESP-IDF is installed, build the IDF example from
+`examples/idf/basic_bringup`:
+
+```bash
+idf.py set-target esp32s3
+idf.py build
+idf.py set-target esp32s2
+idf.py build
+```
 
 ## Documentation
 
 - `CHANGELOG.md` - full release history
 - `docs/IDF_PORT.md` - ESP-IDF portability guidance
+- `docs/IDF_PORT_IMPLEMENTATION.md` - ESP-IDF implementation notes
 - `docs/DOXYGEN.md` - how to build and browse API docs
 
 ## License

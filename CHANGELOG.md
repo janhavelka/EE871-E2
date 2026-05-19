@@ -8,11 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- ESP-IDF component metadata (`CMakeLists.txt`, `idf_component.yml`) for the
+  framework-neutral E2 driver core.
+- ESP-IDF GPIO E2 adapter and `examples/idf/basic_bringup` application-owned
+  transport example.
 - `SettingsSnapshot`, `getSettings()`, `isInitialized()`, `getConfig()`, `driverState()`, `healthState()`, and `offlineThreshold()` for cache-only runtime and health inspection.
 - Command-table helpers for supported main-command read checks and CO2 error-code names.
 - Bring-up CLI status/error output now decodes CO2 error-code names.
 
 ### Changed
+- `library.json` now advertises both Arduino and ESP-IDF framework support.
 - Release metadata now matches the published repository, maintainer contact,
   and `0.3.0` changelog baseline.
 - Reference documentation now uses human-readable vendor PDF names and separates compact protocol notes from full PDF extractions under `docs/extracted-md/` and `docs/pdf-extracted-md/`.

@@ -34,7 +34,7 @@
   },
   "license": "MIT",
   "homepage": "https://github.com/janhavelka/EE871-E2",
-  "frameworks": ["arduino"],
+  "frameworks": ["arduino", "espidf"],
   "platforms": ["espressif32"],
   "headers": ["EE871/EE871.h"],
   "build": {
