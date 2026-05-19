@@ -154,8 +154,9 @@ The library never owns GPIO pins or an I2C/Wire instance. Applications provide `
 - `examples/01_basic_bringup_cli/` - Interactive CLI for testing
   - Status/error output decodes CO2 error-code names when the feature is
     available.
-- `examples/idf/basic_bringup/` - ESP-IDF GPIO E2 bring-up example
-  using `examples/idf/common/E2GpioTransport.h`.
+- `examples/idf/basic_bringup/` - ESP-IDF GPIO E2 bring-up CLI using
+  `examples/idf/common/E2GpioTransport.h`, with the same user-visible command
+  surface and diagnostics as the Arduino CLI.
 
 ## Building And Validation
 
@@ -165,6 +166,7 @@ pio run -e ex_bringup_s3
 pio run -e ex_bringup_s2
 python tools/check_core_timing_guard.py
 python tools/check_cli_contract.py
+python tools/check_idf_example_contract.py
 ```
 
 When ESP-IDF is installed, build the IDF example from
@@ -180,9 +182,8 @@ idf.py build
 ## Documentation
 
 - `CHANGELOG.md` - full release history
-- `docs/IDF_PORT.md` - ESP-IDF portability guidance
+- `docs/IDF_PORT.md` - ESP-IDF portability and validation guidance
 - `docs/IDF_PORT_IMPLEMENTATION.md` - ESP-IDF implementation notes
-- `docs/DOXYGEN.md` - how to build and browse API docs
 
 ## License
 

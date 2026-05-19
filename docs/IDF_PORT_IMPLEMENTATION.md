@@ -9,9 +9,10 @@ Branch: `feature/ee871-e2-idf-port`.
 - Added ESP-IDF component metadata for the core library.
 - Added `examples/idf/common/E2GpioTransport.h`, an ESP-IDF GPIO open-drain
   adapter for the existing `Config` callbacks.
-- Added `examples/idf/basic_bringup`, a small native ESP-IDF example that owns
-  GPIO setup, initializes the driver, reads identity fields, and polls status
-  plus averaged CO2.
+- Added `examples/idf/basic_bringup`, a native ESP-IDF interactive CLI that
+  owns GPIO setup and mirrors the Arduino bring-up CLI command surface,
+  formatting, diagnostics, health reporting, register/raw access, self-test,
+  stress, probe, recover, and reset workflows.
 
 ## Files Added
 
@@ -22,6 +23,7 @@ Branch: `feature/ee871-e2-idf-port`.
 - `examples/idf/basic_bringup/main/CMakeLists.txt`
 - `examples/idf/basic_bringup/main/main.cpp`
 - `examples/idf/basic_bringup/README.md`
+- `tools/check_idf_example_contract.py`
 
 ## Architecture
 
@@ -33,6 +35,9 @@ Branch: `feature/ee871-e2-idf-port`.
   exposes an explicit `enableInternalPullups` parameter for bench use.
 - GPIO configuration failures are reported before `begin()`. The callback
   contract itself remains status-free, matching the existing public API.
+- The IDF CLI uses `stdio` input/output with ANSI color sequences so the serial
+  monitor prompt, help sections, status blocks, and diagnostics remain aligned
+  with the Arduino example.
 
 ## Remaining Validation
 
