@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - README and `Config` Doxygen now document timing bounds, health behavior, feature guards, and callback ownership more explicitly.
 - ESP-IDF port documentation now describes the interactive CLI and validation
   checklist instead of a one-way periodic logger.
+- `AGENTS.md` now explicitly requires native ESP-IDF examples and forbids
+  Arduino compatibility facades in IDF example code.
 
 ### Fixed
 - Byte-timeout accounting in E2 bit helpers now uses saturating arithmetic and avoids overflow in the elapsed-time accumulator.

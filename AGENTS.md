@@ -249,3 +249,20 @@ Release steps:
 - Enum values: `CAPS_CASE` or `X1`, `X2` for short forms
 - Locals/params: `camelCase`
 - Config fields: `camelCase`
+
+---
+
+## Framework Boundary And ESP-IDF Examples
+
+- Public/core code must stay framework-neutral: no Arduino or ESP-IDF framework
+  headers in `include/` or `src/`.
+- Core code must not own GPIO, timing, or bus resources; hardware access belongs
+  behind injected callbacks/adapters/config.
+- Arduino examples may use Arduino APIs.
+- ESP-IDF examples must be native IDF programs using `app_main`, native driver
+  headers, `esp_timer`, `vTaskDelay`, and fixed C buffers.
+- ESP-IDF examples must not include Arduino CLI source or use
+  `ArduinoCompat`, `IdfArduinoCompat`, `Arduino.h`, `Wire.h`, `String`,
+  `Serial`, `TwoWire`, `HardwareSerial`, or Arduino-style facades.
+- Keep command parity through repo-local native command contracts/checks rather
+  than sharing Arduino implementation.
