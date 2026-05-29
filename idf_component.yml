@@ -1,0 +1,9 @@
+version: "0.3.0"
+description: "EE871 CO2 sensor driver for the E2 bus"
+license: "MIT"
+url: "https://github.com/janhavelka/EE871-E2"
+targets:
+  - esp32s2
+  - esp32s3
+dependencies:
+  idf: ">=6.0.1"
