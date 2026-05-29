@@ -26,10 +26,10 @@ namespace board {
 // ====================================================================
 
 /// @brief E2 DATA pin. Example default for ESP32-S2/S3.
-static constexpr int E2_DATA = 7;
+static constexpr int E2_DATA = 6;
 
 /// @brief E2 CLOCK pin. Example default for ESP32-S2/S3.
-static constexpr int E2_CLOCK = 6;
+static constexpr int E2_CLOCK = 7;
 
 /// @brief E2 timing defaults (spec: >=100 us high/low).
 static constexpr uint16_t E2_CLOCK_LOW_US = 100;
