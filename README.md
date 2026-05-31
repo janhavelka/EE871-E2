@@ -196,11 +196,13 @@ on the same `EE871` instance recursively.
 - `examples/01_basic_bringup_cli/` - Interactive CLI for testing
   - Status/error output decodes CO2 error-code names when the feature is
     available.
-- `examples/idf/basic_bringup/` - ESP-IDF GPIO E2 bring-up CLI using
+- `examples/idf/basic_bringup/` - ESP-IDF GPIO E2 diagnostic/basic bring-up CLI using
   `examples/idf/common/E2GpioTransport.h`, with the same user-visible command
   surface and diagnostics as the Arduino CLI. This example owns GPIO setup for
   bring-up and diagnostics; production applications should integrate the E2
-  callbacks into their own GPIO or bus manager.
+  callbacks into their own GPIO or bus manager and externally serialize access
+  if multiple tasks can touch the same `EE871` instance or E2 lines. EE871-E2
+  uses GPIO-style E2 signaling, not ESP-IDF `driver/i2c_master` or hardware I2C.
 
 ## Building And Validation
 
@@ -217,10 +219,8 @@ When ESP-IDF is installed, build the IDF example from
 `examples/idf/basic_bringup`:
 
 ```bash
-idf.py set-target esp32s3
-idf.py build
-idf.py set-target esp32s2
-idf.py build
+idf.py -C examples/idf/basic_bringup set-target esp32s3 build
+idf.py -C examples/idf/basic_bringup set-target esp32s2 build
 ```
 
 ## Documentation

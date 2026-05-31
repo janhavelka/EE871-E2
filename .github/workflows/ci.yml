@@ -55,6 +55,34 @@ jobs:
       - name: Run native tests
         run: pio test -e native
 
+  idf-build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - esp32s3
+          - esp32s2
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Enforce IDF example contract
+        run: python tools/check_idf_example_contract.py
+
+      - name: Build IDF basic bringup for ${{ matrix.target }}
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v6.0.1
+          target: ${{ matrix.target }}
+          path: examples/idf/basic_bringup
+
   validate-library:
     runs-on: ubuntu-latest
     steps:

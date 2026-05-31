@@ -185,18 +185,22 @@ declare:
 idf_component_register(
   SRCS "main.cpp"
   INCLUDE_DIRS "." "../../common"
-  REQUIRES ee871-e2 esp_driver_gpio esp_timer
+  REQUIRES "EE871-E2" esp_driver_gpio esp_rom esp_timer freertos
 )
 ```
 
 If the IDF adapter is promoted into the component rather than example code,
 place it in a separate optional source file and add `PRIV_REQUIRES
-esp_driver_gpio esp_timer`.
+esp_driver_gpio esp_rom esp_timer`.
 
 ## ESP-IDF Example Behavior
 
-`examples/idf/basic_bringup` provides an interactive serial CLI equivalent to
-`examples/01_basic_bringup_cli`:
+`examples/idf/basic_bringup` provides a diagnostic/basic bring-up interactive
+serial CLI equivalent to `examples/01_basic_bringup_cli`. It owns the E2 GPIO
+lines for demonstration; production applications should integrate the callbacks
+into their own GPIO or bus manager and externally serialize access if multiple
+tasks can touch the same `EE871` instance or E2 lines. EE871-E2 uses GPIO-style
+E2 signaling, not ESP-IDF `driver/i2c_master` or hardware I2C.
 
 1. Configure target in code constants:
    - SCL GPIO.
@@ -239,9 +243,8 @@ Arduino:
 - `python -m platformio run -e ex_bringup_s2`
 
 ESP-IDF:
-- `idf.py set-target esp32s3`
-- `idf.py build` in `examples/idf/basic_bringup`
-- Repeat for `esp32s2` if the project target matrix requires it.
+- `idf.py -C examples/idf/basic_bringup set-target esp32s3 build`
+- `idf.py -C examples/idf/basic_bringup set-target esp32s2 build`
 - Hardware smoke:
   - Bus idle SCL/SDA high before begin.
   - `begin()` succeeds against a known EE871 device.

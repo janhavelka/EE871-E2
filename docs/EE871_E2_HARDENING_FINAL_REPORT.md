@@ -156,3 +156,64 @@ Tests run:
 - `python -m platformio run -e ex_bringup_s3`: PASS, `SUCCESS` in 00:00:20.415.
 - `python -m platformio run -e ex_bringup_s2`: PASS, `SUCCESS` in 00:00:27.054.
 - `git diff --check`: PASS; only Git line-ending conversion warnings were emitted.
+
+## Prompt 04 - ESP-IDF Build Coverage, CI, And Example Contract Honesty
+
+CI changes:
+- Added a dedicated GitHub Actions `idf-build` matrix job for `esp32s3` and
+  `esp32s2`.
+- The job runs `python tools/check_idf_example_contract.py` before building.
+- The job uses `espressif/esp-idf-ci-action@v1` with `esp_idf_version:
+  v6.0.1`, `target: ${{ matrix.target }}`, and `path:
+  examples/idf/basic_bringup`, which maps to `idf.py build` for the example
+  project.
+
+IDF component/example metadata:
+- Root `CMakeLists.txt` remains framework-neutral: only `src/EE871.cpp` and
+  `include/` are registered for the core component.
+- `idf_component.yml` already targets `esp32s2` and `esp32s3` with `idf >=6.0.1`.
+- `examples/idf/basic_bringup` keeps `EXTRA_COMPONENT_DIRS "../../.."` so the
+  root component is built as the local dependency.
+- Added the explicit `esp_rom` dependency to the IDF example component because
+  `examples/idf/common/E2GpioTransport.h` includes `esp_rom_sys.h`.
+
+IDF example/docs honesty:
+- README and IDF docs now describe the IDF example as a diagnostic/basic
+  bring-up example.
+- Docs state that the example owns GPIO setup for demonstration, production
+  users should integrate callbacks into their own GPIO or bus manager, and
+  external serialization is required if multiple tasks can access the same
+  `EE871` instance or E2 lines.
+- Docs explicitly state that EE871-E2 uses GPIO-style E2 signaling, not
+  ESP-IDF `driver/i2c_master` or hardware I2C.
+
+Local IDF availability:
+- `idf.py --version`: FAIL. PowerShell reported: `The term 'idf.py' is not
+  recognized as the name of a cmdlet, function, script file, or operable
+  program.`
+- Because `idf.py` is unavailable locally, the following local pure ESP-IDF
+  builds were not run:
+  - `idf.py -C examples/idf/basic_bringup set-target esp32s3 build`
+  - `idf.py -C examples/idf/basic_bringup set-target esp32s2 build`
+
+Remaining IDF validation gaps:
+- Local pure `idf.py` build success is still unverified on this workstation
+  until ESP-IDF is installed or available on `PATH`.
+- CI coverage has been added but will only be proven after GitHub Actions runs
+  the new `idf-build` matrix.
+- Hardware validation remains pending for real ESP32-S2/S3 boards with an EE871
+  sensor.
+
+Commands run:
+- `git checkout hardening/ee871-e2-industry-readiness`: already on branch.
+- `git pull --ff-only`: already up to date.
+- `git status --short`: clean before edits.
+- `python tools/check_core_timing_guard.py`: PASS, `Core timing guard PASSED`.
+- `python tools/check_idf_example_contract.py`: PASS, `IDF example contract PASSED`.
+- `python tools/check_cli_contract.py`: PASS, `CLI contract PASSED`.
+- `python scripts/generate_version.py check`: PASS, `include\EE871\Version.h` up to date.
+- `python -m platformio test -e native`: PASS, 28 test cases succeeded in 00:00:01.409.
+- `python -m platformio run -e ex_bringup_s3`: PASS, `SUCCESS` in 00:00:19.613.
+- `python -m platformio run -e ex_bringup_s2`: PASS, `SUCCESS` in 00:00:19.908.
+- `idf.py --version`: FAIL, command not found as described above.
+- `git diff --check`: PASS; only Git line-ending conversion warnings were emitted.
