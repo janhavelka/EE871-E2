@@ -85,3 +85,74 @@ Tests run:
 - `python -m platformio run -e ex_bringup_s3`: PASS, `SUCCESS` in 00:00:27.808.
 - `python -m platformio run -e ex_bringup_s2`: PASS, `SUCCESS` in 00:00:18.752.
 - `git diff --check`: PASS; only Git line-ending conversion warnings were emitted.
+
+## Prompt 03 - Persistent Multi-Byte Dirty-State Diagnostics
+
+API changes:
+- Added `persistentConfigDirty()` and `persistentConfigDirtyError()` public
+  diagnostics.
+- Added `persistentConfigDirty` and `persistentConfigDirtyError` to
+  `SettingsSnapshot`.
+- Added `resyncPersistentConfig()` to re-read persistent fields and clear the
+  dirty diagnostic only after the values are readable and coherent.
+
+Behavior changes:
+- `writeMeasurementInterval()` marks persistent configuration dirty when the
+  low byte has succeeded and a high-byte write, verify read, or verify compare
+  fails. A low-byte write failure before any byte succeeds remains clean.
+- `writeCo2Offset()` and `writeCo2Gain()` mark dirty when the low byte succeeds
+  and the high-byte write/verify path fails.
+- `writePartName()` marks dirty when at least one byte has succeeded and a
+  later byte write fails.
+- The dirty diagnostic preserves the first/root failing `Status` and does not
+  replace the precise write-function return status.
+- Dirty state is not cleared by unrelated successful reads, `recover()`,
+  OFFLINE transitions, `end()`, or failed `begin()` cleanup. It is cleared only
+  by successful `resyncPersistentConfig()`.
+
+Fake transport/test harness changes:
+- Extended `test/support/FakeE2Transport.h` with one-shot address-matched
+  custom-write NACKs and one-shot dropped write commits. This keeps the fake at
+  the E2 callback boundary while allowing exact low-byte, high-byte, and
+  verify-mismatch scripts.
+
+Runtime fault tests added:
+- `writeMeasurementInterval()` low-byte failure leaves dirty false.
+- `writeMeasurementInterval()` high-byte failure marks dirty with the original
+  NACK status.
+- `writeMeasurementInterval()` verify mismatch marks dirty and an unrelated
+  successful `readStatus()` does not clear it.
+- `writeCo2Offset()` high-byte failure marks dirty.
+- `writeCo2Gain()` high-byte failure marks dirty.
+- Dirty diagnostics preserve the first failing status when later dirty-capable
+  operations also fail.
+- `resyncPersistentConfig()` fails without clearing dirty when interval bytes
+  are incoherent, then clears dirty after the fake memory is made coherent.
+- Dirty state survives OFFLINE.
+
+Docs updated:
+- README now documents that multi-byte persistent writes are not bus-atomic,
+  persistent state can be partially changed on failure, dirty diagnostics should
+  be checked, and persistent writes are maintenance operations with latency and
+  endurance implications.
+
+Remaining limitations:
+- Dirty state is global, not a per-field bitmap. It intentionally reports that
+  persistent configuration needs resync/inspection without guessing which field
+  is authoritative.
+- `resyncPersistentConfig()` validates that persistent fields can be read and
+  that the global interval is in range; it cannot prove the values match an
+  external operator-intended configuration unless the application compares them.
+- The implementation marks dirty at the multi-byte wrapper boundary after a
+  first byte returns success. It does not add a lower-level transaction-phase
+  API to distinguish every possible post-PEC/STOP ambiguity.
+
+Tests run:
+- `python tools/check_core_timing_guard.py`: PASS, `Core timing guard PASSED`.
+- `python tools/check_cli_contract.py`: PASS, `CLI contract PASSED`.
+- `python tools/check_idf_example_contract.py`: PASS, `IDF example contract PASSED`.
+- `python scripts/generate_version.py check`: PASS, `include\EE871\Version.h` up to date.
+- `python -m platformio test -e native`: PASS, 28 test cases succeeded in 00:00:02.538.
+- `python -m platformio run -e ex_bringup_s3`: PASS, `SUCCESS` in 00:00:20.415.
+- `python -m platformio run -e ex_bringup_s2`: PASS, `SUCCESS` in 00:00:27.054.
+- `git diff --check`: PASS; only Git line-ending conversion warnings were emitted.

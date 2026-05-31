@@ -28,6 +28,23 @@ static Status beginFakeDevice(EE871::EE871& dev,
   return dev.begin(cfg);
 }
 
+static void assertSameStatus(const Status& expected, const Status& actual) {
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(expected.code),
+                          static_cast<uint8_t>(actual.code));
+  TEST_ASSERT_EQUAL_INT32(expected.detail, actual.detail);
+  TEST_ASSERT_EQUAL_STRING(expected.msg, actual.msg);
+}
+
+static void assertDirtyWithOriginalError(const EE871::EE871& dev, const Status& st) {
+  TEST_ASSERT_TRUE(dev.persistentConfigDirty());
+  assertSameStatus(st, dev.persistentConfigDirtyError());
+
+  SettingsSnapshot snap;
+  TEST_ASSERT_TRUE(dev.getSettings(snap).ok());
+  TEST_ASSERT_TRUE(snap.persistentConfigDirty);
+  assertSameStatus(st, snap.persistentConfigDirtyError);
+}
+
 void test_status_ok() {
   Status st = Status::Ok();
   TEST_ASSERT_TRUE(st.ok());
@@ -161,11 +178,16 @@ void test_default_health_aliases() {
   TEST_ASSERT_EQUAL_UINT8(5, snap.config.offlineThreshold);
   TEST_ASSERT_EQUAL_UINT32(0u, snap.totalFailures);
   TEST_ASSERT_EQUAL_UINT32(0u, snap.totalSuccess);
+  TEST_ASSERT_FALSE(snap.persistentConfigDirty);
+  TEST_ASSERT_TRUE(snap.persistentConfigDirtyError.ok());
+  TEST_ASSERT_FALSE(dev.persistentConfigDirty());
+  TEST_ASSERT_TRUE(dev.persistentConfigDirtyError().ok());
 
   const SettingsSnapshot byValue = dev.getSettings();
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(snap.state),
                           static_cast<uint8_t>(byValue.state));
   TEST_ASSERT_EQUAL_UINT8(snap.config.offlineThreshold, byValue.config.offlineThreshold);
+  TEST_ASSERT_FALSE(byValue.persistentConfigDirty);
 }
 
 void test_probe_requires_begin() {
@@ -178,6 +200,10 @@ void test_probe_requires_begin() {
 void test_recover_requires_begin() {
   EE871::EE871 dev;
   Status st = dev.recover();
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
+                          static_cast<uint8_t>(st.code));
+
+  st = dev.resyncPersistentConfig();
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
                           static_cast<uint8_t>(st.code));
 }
@@ -363,6 +389,154 @@ void test_offline_threshold_and_recover_after_replug() {
   TEST_ASSERT_EQUAL_UINT8(0, dev.consecutiveFailures());
 }
 
+void test_interval_low_byte_write_failure_does_not_dirty() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+
+  fake.failNextWriteToAddress(cmd::CUSTOM_INTERVAL_L);
+  Status st = dev.writeMeasurementInterval(300);
+
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NACK),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_STRING("Address byte NACK", st.msg);
+  TEST_ASSERT_FALSE(dev.persistentConfigDirty());
+  TEST_ASSERT_TRUE(dev.persistentConfigDirtyError().ok());
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(cmd::INTERVAL_MIN_DECISEC & 0xFF),
+                          fake.memory(cmd::CUSTOM_INTERVAL_L));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(cmd::INTERVAL_MIN_DECISEC >> 8),
+                          fake.memory(cmd::CUSTOM_INTERVAL_H));
+}
+
+void test_interval_high_byte_write_failure_sets_dirty() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+
+  fake.failNextWriteToAddress(cmd::CUSTOM_INTERVAL_H);
+  Status st = dev.writeMeasurementInterval(300);
+
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NACK),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_STRING("Address byte NACK", st.msg);
+  assertDirtyWithOriginalError(dev, st);
+  TEST_ASSERT_EQUAL_UINT8(0x2C, fake.memory(cmd::CUSTOM_INTERVAL_L));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(cmd::INTERVAL_MIN_DECISEC >> 8),
+                          fake.memory(cmd::CUSTOM_INTERVAL_H));
+}
+
+void test_interval_verify_failure_sets_dirty_and_unrelated_read_does_not_clear() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+
+  fake.dropNextWriteCommitToAddress(cmd::CUSTOM_INTERVAL_H);
+  Status st = dev.writeMeasurementInterval(300);
+
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::E2_ERROR),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_STRING("Interval verify failed", st.msg);
+  TEST_ASSERT_EQUAL_INT32(0x2C, st.detail);
+  assertDirtyWithOriginalError(dev, st);
+
+  uint8_t status = 0;
+  TEST_ASSERT_TRUE(dev.readStatus(status).ok());
+  assertDirtyWithOriginalError(dev, st);
+}
+
+void test_co2_offset_high_byte_failure_sets_dirty() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+
+  fake.failNextWriteToAddress(cmd::CUSTOM_CO2_OFFSET_H);
+  Status st = dev.writeCo2Offset(0x1234);
+
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NACK),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_STRING("Address byte NACK", st.msg);
+  assertDirtyWithOriginalError(dev, st);
+  TEST_ASSERT_EQUAL_UINT8(0x34, fake.memory(cmd::CUSTOM_CO2_OFFSET_L));
+}
+
+void test_co2_gain_high_byte_failure_sets_dirty() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+
+  fake.failNextWriteToAddress(cmd::CUSTOM_CO2_GAIN_H);
+  Status st = dev.writeCo2Gain(0x5678);
+
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NACK),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_STRING("Address byte NACK", st.msg);
+  assertDirtyWithOriginalError(dev, st);
+  TEST_ASSERT_EQUAL_UINT8(0x78, fake.memory(cmd::CUSTOM_CO2_GAIN_L));
+}
+
+void test_dirty_error_preserves_first_failure() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+
+  fake.dropNextWriteCommitToAddress(cmd::CUSTOM_INTERVAL_H);
+  Status first = dev.writeMeasurementInterval(300);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::E2_ERROR),
+                          static_cast<uint8_t>(first.code));
+  assertDirtyWithOriginalError(dev, first);
+
+  fake.failNextWriteToAddress(cmd::CUSTOM_CO2_GAIN_H);
+  Status second = dev.writeCo2Gain(0x5678);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NACK),
+                          static_cast<uint8_t>(second.code));
+  assertDirtyWithOriginalError(dev, first);
+}
+
+void test_resync_persistent_config_clears_only_when_coherent() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+
+  fake.failNextWriteToAddress(cmd::CUSTOM_INTERVAL_H);
+  Status dirtyCause = dev.writeMeasurementInterval(300);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NACK),
+                          static_cast<uint8_t>(dirtyCause.code));
+  assertDirtyWithOriginalError(dev, dirtyCause);
+
+  Status st = dev.resyncPersistentConfig();
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::OUT_OF_RANGE),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_TRUE(dev.persistentConfigDirty());
+
+  fake.setMemory(cmd::CUSTOM_INTERVAL_L, 0x2C);
+  fake.setMemory(cmd::CUSTOM_INTERVAL_H, 0x01);
+  st = dev.resyncPersistentConfig();
+  TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_FALSE(dev.persistentConfigDirty());
+  TEST_ASSERT_TRUE(dev.persistentConfigDirtyError().ok());
+}
+
+void test_dirty_state_survives_offline() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake, 2).ok());
+
+  fake.failNextWriteToAddress(cmd::CUSTOM_CO2_OFFSET_H);
+  Status dirtyCause = dev.writeCo2Offset(0x1234);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NACK),
+                          static_cast<uint8_t>(dirtyCause.code));
+  assertDirtyWithOriginalError(dev, dirtyCause);
+
+  fake.setDevicePresent(false);
+  uint8_t status = 0;
+  Status st = dev.readStatus(status);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NACK),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::OFFLINE),
+                          static_cast<uint8_t>(dev.state()));
+  assertDirtyWithOriginalError(dev, dirtyCause);
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_status_ok);
@@ -385,6 +559,14 @@ int main() {
   RUN_TEST(test_device_absent_probe_has_no_health_side_effect_tracked_read_fails);
   RUN_TEST(test_custom_write_verify_mismatch_returns_precise_error);
   RUN_TEST(test_offline_threshold_and_recover_after_replug);
+  RUN_TEST(test_interval_low_byte_write_failure_does_not_dirty);
+  RUN_TEST(test_interval_high_byte_write_failure_sets_dirty);
+  RUN_TEST(test_interval_verify_failure_sets_dirty_and_unrelated_read_does_not_clear);
+  RUN_TEST(test_co2_offset_high_byte_failure_sets_dirty);
+  RUN_TEST(test_co2_gain_high_byte_failure_sets_dirty);
+  RUN_TEST(test_dirty_error_preserves_first_failure);
+  RUN_TEST(test_resync_persistent_config_clears_only_when_coherent);
+  RUN_TEST(test_dirty_state_survives_offline);
   return UNITY_END();
 }
 

@@ -36,8 +36,12 @@ public:
     _sdaStuckLow = false;
     _sdaStuckHigh = false;
     _corruptReadPec = false;
+    _failNextWriteEnabled = false;
+    _failNextWriteAddress = 0;
     _dropWriteEnabled = false;
     _dropWriteAddress = 0;
+    _dropNextWriteEnabled = false;
+    _dropNextWriteAddress = 0;
     _statusByte = 0;
     _mv3 = 600;
     _mv4 = 650;
@@ -101,9 +105,19 @@ public:
   void setMemory(uint8_t address, uint8_t value) { _memory[address] = value; }
   uint8_t memory(uint8_t address) const { return _memory[address]; }
 
+  void failNextWriteToAddress(uint8_t address) {
+    _failNextWriteAddress = address;
+    _failNextWriteEnabled = true;
+  }
+
   void dropWritesToAddress(uint8_t address, bool enabled) {
     _dropWriteAddress = address;
     _dropWriteEnabled = enabled;
+  }
+
+  void dropNextWriteCommitToAddress(uint8_t address) {
+    _dropNextWriteAddress = address;
+    _dropNextWriteEnabled = true;
   }
 
 private:
@@ -319,8 +333,15 @@ private:
     _byte = 0;
   }
 
-  bool ackForCurrentPhase() const {
+  bool ackForCurrentPhase() {
     if (!_devicePresent) {
+      return false;
+    }
+    if (_phase == Phase::ACK_ADDRESS &&
+        mainCommand() == EE871::cmd::MAIN_CUSTOM_WRITE &&
+        _failNextWriteEnabled &&
+        _address == _failNextWriteAddress) {
+      _failNextWriteEnabled = false;
       return false;
     }
     return _phase == Phase::ACK_CONTROL ||
@@ -402,6 +423,10 @@ private:
     if (main == EE871::cmd::MAIN_CUSTOM_PTR) {
       _customPointer = _data;
     } else if (main == EE871::cmd::MAIN_CUSTOM_WRITE) {
+      if (_dropNextWriteEnabled && _address == _dropNextWriteAddress) {
+        _dropNextWriteEnabled = false;
+        return;
+      }
       if (!(_dropWriteEnabled && _address == _dropWriteAddress)) {
         _memory[_address] = _data;
       }
@@ -438,8 +463,12 @@ private:
   bool _sdaStuckLow = false;
   bool _sdaStuckHigh = false;
   bool _corruptReadPec = false;
+  bool _failNextWriteEnabled = false;
+  uint8_t _failNextWriteAddress = 0;
   bool _dropWriteEnabled = false;
   uint8_t _dropWriteAddress = 0;
+  bool _dropNextWriteEnabled = false;
+  uint8_t _dropNextWriteAddress = 0;
   uint8_t _statusByte = 0;
   uint16_t _mv3 = 0;
   uint16_t _mv4 = 0;

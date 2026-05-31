@@ -35,6 +35,8 @@ struct SettingsSnapshot {
   uint8_t consecutiveFailures = 0; ///< Current consecutive tracked failures.
   uint32_t totalFailures = 0;     ///< Total tracked failures.
   uint32_t totalSuccess = 0;      ///< Total tracked successes.
+  bool persistentConfigDirty = false; ///< True when persistent config may be partially applied.
+  Status persistentConfigDirtyError = Status::Ok(); ///< First error that marked persistent config dirty.
 };
 
 /// @brief Transport-agnostic EE871 CO2 sensor driver for the E2 bus.
@@ -85,6 +87,10 @@ public:
   /// Attempt to recover from DEGRADED/OFFLINE state
   /// @return Status::Ok() if device now responsive, error otherwise
   Status recover();
+
+  /// Re-read persistent configuration and clear dirty diagnostics when coherent.
+  /// @return Status::Ok() when persistent fields can be read and validated.
+  Status resyncPersistentConfig();
 
   // =========================================================================
   // Driver State
@@ -158,6 +164,14 @@ public:
   /// @return Normalized threshold currently in use.
   uint8_t offlineThreshold() const { return _config.offlineThreshold; }
 
+  /// Check if a multi-byte persistent write may have partially applied.
+  /// @return true when persistent configuration needs explicit resync/inspection.
+  bool persistentConfigDirty() const { return _persistentConfigDirty; }
+
+  /// First error that marked persistent configuration dirty.
+  /// @return Stored error status, or Status::Ok() when not dirty.
+  Status persistentConfigDirtyError() const { return _persistentConfigDirtyError; }
+
   // =========================================================================
   // E2 Protocol Helpers
   // =========================================================================
@@ -201,7 +215,8 @@ public:
 
   /// Write global measurement interval (0xC6/0xC7) and verify
   /// @param intervalDeciSeconds Interval in 0.1 s units
-  /// @return Status::Ok() when both interval bytes verify.
+  /// @return Status::Ok() when both interval bytes verify. A failure after the
+  /// first byte succeeds marks persistent configuration dirty.
   Status writeMeasurementInterval(uint16_t intervalDeciSeconds);
 
   // =========================================================================
@@ -312,7 +327,8 @@ public:
 
   /// Write 16-byte part name (0xB0-0xBF)
   /// @param buf Buffer of exactly 16 bytes
-  /// @return Status::Ok() when all bytes verify.
+  /// @return Status::Ok() when all bytes verify. A failure after one byte
+  /// succeeds marks persistent configuration dirty.
   Status writePartName(const uint8_t* buf);
 
   // =========================================================================
@@ -403,7 +419,8 @@ public:
 
   /// Write CO2 offset (signed, ppm).
   /// @param offset Signed offset in ppm.
-  /// @return Status::Ok() when both bytes verify.
+  /// @return Status::Ok() when both bytes verify. A high-byte failure after the
+  /// low byte succeeds marks persistent configuration dirty.
   Status writeCo2Offset(int16_t offset);
 
   /// Read CO2 gain (gain = value / 32768).
@@ -413,7 +430,8 @@ public:
 
   /// Write CO2 gain (gain = value / 32768).
   /// @param gain Raw gain value.
-  /// @return Status::Ok() when both bytes verify.
+  /// @return Status::Ok() when both bytes verify. A high-byte failure after the
+  /// low byte succeeds marks persistent configuration dirty.
   Status writeCo2Gain(uint16_t gain);
 
   /// Read last calibration points.
@@ -486,6 +504,8 @@ private:
   Status _updateHealth(const Status& st);
 
   void _resetStoppedState();
+  void _markPersistentConfigDirty(const Status& st);
+  void _clearPersistentConfigDirty();
 
   // =========================================================================
   // State
@@ -508,6 +528,8 @@ private:
   uint8_t _consecutiveFailures = 0;
   uint32_t _totalFailures = 0;
   uint32_t _totalSuccess = 0;
+  bool _persistentConfigDirty = false;
+  Status _persistentConfigDirtyError = Status::Ok();
 };
 
 } // namespace EE871

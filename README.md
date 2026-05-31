@@ -148,6 +148,24 @@ The driver is managed synchronous: E2 transactions block for bounded protocol ti
 
 The library never owns GPIO pins or an I2C/Wire instance. Applications provide `setScl`, `setSda`, `readScl`, `readSda`, and `delayUs` callbacks.
 
+## Persistent Configuration Writes
+
+Multi-byte persistent writes are not bus-atomic on EE871-E2. A low byte can
+commit before a high byte fails, or a write can be accepted before a later
+readback verify fails. If this happens, persistent sensor configuration may be
+partially changed and should be treated as dirty until it is explicitly
+resynced or inspected.
+
+Use `persistentConfigDirty()` and `persistentConfigDirtyError()` to detect the
+condition and retrieve the original failing `Status`. `SettingsSnapshot`
+includes the same diagnostics. `resyncPersistentConfig()` re-reads the
+persistent fields and clears the dirty state only after the values are readable
+and coherent; unrelated successful reads do not clear it.
+
+Treat persistent writes such as measurement interval, part name, CO2 offset,
+and CO2 gain as maintenance operations. They can have longer latency than
+normal reads and may have sensor flash/endurance implications.
+
 ## Threading, ISR, And Callback Contract
 
 `EE871::EE871` instances are not thread-safe. Use one owner task/context, or
@@ -163,7 +181,8 @@ on the same `EE871` instance recursively.
 ## Main API
 
 - Lifecycle: `begin`, `tick`, `end`
-- Diagnostics: `probe`, `recover`, `busReset`, `checkBusIdle`
+- Diagnostics: `probe`, `recover`, `resyncPersistentConfig`, `busReset`,
+  `checkBusIdle`, `persistentConfigDirty`, `persistentConfigDirtyError`
 - Identification: `readGroup`, `readSubgroup`, `readFirmwareVersion`, `readE2SpecVersion`
 - Measurements: `readStatus`, `readCo2Fast`, `readCo2Average`, `readErrorCode`
 - Custom memory/config: `customRead`, `customWrite`, `writeMeasurementInterval`, bus address, filter, operating mode, auto-adjust, calibration helpers
