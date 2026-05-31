@@ -5,17 +5,13 @@
 
 #include <unity.h>
 
-#include "Arduino.h"
-#include "Wire.h"
-
-SerialClass Serial;
-TwoWire Wire;
-
 #include "EE871/Config.h"
 #include "EE871/EE871.h"
 #include "EE871/Status.h"
+#include "support/FakeE2Transport.h"
 
 using namespace EE871;
+using EE871Test::FakeE2Transport;
 
 static_assert(!std::is_copy_constructible_v<EE871::EE871>);
 static_assert(!std::is_copy_assignable_v<EE871::EE871>);
@@ -24,6 +20,13 @@ static_assert(!std::is_move_assignable_v<EE871::EE871>);
 
 void setUp() {}
 void tearDown() {}
+
+static Status beginFakeDevice(EE871::EE871& dev,
+                              FakeE2Transport& fake,
+                              uint8_t offlineThreshold = 5) {
+  Config cfg = fake.makeConfig(offlineThreshold);
+  return dev.begin(cfg);
+}
 
 void test_status_ok() {
   Status st = Status::Ok();
@@ -225,6 +228,141 @@ void test_high_level_helpers_check_initialization_first() {
                           static_cast<uint8_t>(st.code));
 }
 
+void test_fake_transport_begin_succeeds() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+
+  Status st = beginFakeDevice(dev, fake);
+
+  TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_TRUE(dev.isInitialized());
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::READY),
+                          static_cast<uint8_t>(dev.state()));
+  TEST_ASSERT_TRUE(dev.hasGlobalInterval());
+}
+
+void test_clock_stretch_timeout_is_bounded_and_tracked() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+
+  fake.resetElapsed();
+  fake.setHoldSclLow(true);
+  uint8_t status = 0;
+  Status st = dev.readStatus(status);
+
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::TIMEOUT),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_TRUE(fake.elapsedUs() <= 30U);
+  TEST_ASSERT_EQUAL_UINT8(1, dev.consecutiveFailures());
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::DEGRADED),
+                          static_cast<uint8_t>(dev.state()));
+}
+
+void test_pec_mismatch_probe_is_raw_but_tracked_read_updates_health() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+
+  const uint32_t totalFailuresBeforeProbe = dev.totalFailures();
+  const uint8_t consecutiveBeforeProbe = dev.consecutiveFailures();
+  fake.setCorruptReadPec(true);
+
+  Status st = dev.probe();
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::PEC_MISMATCH),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_UINT32(totalFailuresBeforeProbe, dev.totalFailures());
+  TEST_ASSERT_EQUAL_UINT8(consecutiveBeforeProbe, dev.consecutiveFailures());
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::READY),
+                          static_cast<uint8_t>(dev.state()));
+
+  uint8_t status = 0;
+  st = dev.readStatus(status);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::PEC_MISMATCH),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_UINT32(totalFailuresBeforeProbe + 1U, dev.totalFailures());
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::DEGRADED),
+                          static_cast<uint8_t>(dev.state()));
+}
+
+void test_device_absent_probe_has_no_health_side_effect_tracked_read_fails() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+
+  fake.setDevicePresent(false);
+  const uint32_t totalFailuresBeforeProbe = dev.totalFailures();
+  const uint32_t totalSuccessBeforeProbe = dev.totalSuccess();
+  Status st = dev.probe();
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NACK),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_UINT32(totalFailuresBeforeProbe, dev.totalFailures());
+  TEST_ASSERT_EQUAL_UINT32(totalSuccessBeforeProbe, dev.totalSuccess());
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::READY),
+                          static_cast<uint8_t>(dev.state()));
+
+  uint8_t status = 0;
+  st = dev.readStatus(status);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NACK),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_UINT32(totalFailuresBeforeProbe + 1U, dev.totalFailures());
+  TEST_ASSERT_EQUAL_UINT8(1, dev.consecutiveFailures());
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::DEGRADED),
+                          static_cast<uint8_t>(dev.state()));
+}
+
+void test_custom_write_verify_mismatch_returns_precise_error() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+
+  const uint8_t address = cmd::CUSTOM_FILTER_CO2;
+  fake.setMemory(address, 0x11);
+  fake.dropWritesToAddress(address, true);
+
+  Status st = dev.customWrite(address, 0x5A);
+
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::E2_ERROR),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_STRING("Write verify failed", st.msg);
+  TEST_ASSERT_EQUAL_INT32(0x11, st.detail);
+}
+
+void test_offline_threshold_and_recover_after_replug() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake, 2).ok());
+
+  fake.setDevicePresent(false);
+  uint8_t status = 0;
+  dev.tick(100);
+  Status st = dev.readStatus(status);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NACK),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::DEGRADED),
+                          static_cast<uint8_t>(dev.state()));
+  TEST_ASSERT_EQUAL_UINT8(1, dev.consecutiveFailures());
+
+  dev.tick(200);
+  st = dev.readStatus(status);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NACK),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::OFFLINE),
+                          static_cast<uint8_t>(dev.state()));
+  TEST_ASSERT_EQUAL_UINT8(2, dev.consecutiveFailures());
+
+  fake.setDevicePresent(true);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::OFFLINE),
+                          static_cast<uint8_t>(dev.state()));
+
+  dev.tick(300);
+  st = dev.recover();
+  TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::READY),
+                          static_cast<uint8_t>(dev.state()));
+  TEST_ASSERT_EQUAL_UINT8(0, dev.consecutiveFailures());
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_status_ok);
@@ -241,6 +379,12 @@ int main() {
   RUN_TEST(test_probe_requires_begin);
   RUN_TEST(test_recover_requires_begin);
   RUN_TEST(test_high_level_helpers_check_initialization_first);
+  RUN_TEST(test_fake_transport_begin_succeeds);
+  RUN_TEST(test_clock_stretch_timeout_is_bounded_and_tracked);
+  RUN_TEST(test_pec_mismatch_probe_is_raw_but_tracked_read_updates_health);
+  RUN_TEST(test_device_absent_probe_has_no_health_side_effect_tracked_read_fails);
+  RUN_TEST(test_custom_write_verify_mismatch_returns_precise_error);
+  RUN_TEST(test_offline_threshold_and_recover_after_replug);
   return UNITY_END();
 }
 
