@@ -1,6 +1,6 @@
 # EE871-E2 ESP-IDF v6.0.1 Port Guide
 
-Last audited: 2026-05-19
+Last audited: 2026-05-31
 
 Scope: first-class ESP-IDF support while keeping the Arduino/PlatformIO example
 and public driver core usable. The framework-neutral driver core is shared; the

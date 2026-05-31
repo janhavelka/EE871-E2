@@ -1,7 +1,7 @@
 # EE871-E2 ESP-IDF Port Implementation Notes
 
-Date: 2026-05-19.
-Branch: `feature/ee871-e2-idf-port`.
+Date: 2026-05-31.
+Branch: `hardening/ee871-e2-industry-readiness`.
 
 ## Scope
 

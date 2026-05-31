@@ -12,7 +12,8 @@
     "arduino",
     "platformio",
     "embedded",
-    "non-blocking",
+    "bounded",
+    "synchronous",
     "sensor"
   ],
   "authors": [

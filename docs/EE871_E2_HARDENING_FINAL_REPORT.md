@@ -308,6 +308,9 @@ Documentation changes:
   manager.
 - IDF port docs now state that pure `idf.py` build proof remains an acceptance
   gap until captured locally or in CI.
+- Package metadata now describes the driver as bounded/synchronous rather than
+  non-blocking, matching the managed synchronous API contract.
+- IDF port audit metadata was refreshed for this hardening branch.
 - Added `docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md` with concrete
   per-board/per-scenario hardware validation rows, all marked `NOT RUN`, plus a
   safe CLI recipe and persistent-write warnings.
@@ -338,9 +341,12 @@ Exact commands run in Prompt 05:
 - `python tools/check_cli_contract.py`: PASS, `CLI contract PASSED`.
 - `python tools/check_idf_example_contract.py`: PASS, `IDF example contract PASSED`.
 - `python scripts/generate_version.py check`: PASS, `include\EE871\Version.h` up to date.
-- `python -m platformio test -e native`: PASS, 31 test cases succeeded in 00:00:02.707.
-- `python -m platformio run -e ex_bringup_s3`: PASS, `SUCCESS` in 00:00:28.433.
-- `python -m platformio run -e ex_bringup_s2`: PASS, `SUCCESS` in 00:00:20.276.
+- `python -m platformio test -e native`: PASS, 31 test cases succeeded in 00:00:01.344.
+- `python -m platformio run -e ex_bringup_s3`: first attempt FAIL in 00:00:52.390
+  while compiling Arduino framework object `esp32-hal-bt.c.o`; no project
+  source diagnostic was emitted in captured output.
+- `python -m platformio run -e ex_bringup_s3`: rerun PASS, `SUCCESS` in 00:00:19.308.
+- `python -m platformio run -e ex_bringup_s2`: PASS, `SUCCESS` in 00:00:17.874.
 - `python -m platformio pkg pack`: PASS, wrote `ee871-e2-0.3.0.tar.gz`.
 - `Remove-Item -LiteralPath ...\ee871-e2-0.3.0.tar.gz`: generated package
   artifact removed; it is not intended to be tracked.
@@ -367,7 +373,7 @@ Known remaining gaps:
   firmware for direct hardware validation.
 - Persistent write behavior needs bench validation, including power-cycle
   persistence and failed-write operator recovery.
-- `library.json` and `CHANGELOG.md` were not updated for a release.
+- `library.json` version and `CHANGELOG.md` were not updated for a release.
 - CI currently runs on main/master push and PR events; the new IDF job still
   needs a PR/workflow run to prove it.
 
