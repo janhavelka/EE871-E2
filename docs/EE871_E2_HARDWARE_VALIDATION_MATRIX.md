@@ -21,7 +21,7 @@ Allowed statuses:
 Use the Arduino PlatformIO CLI example or the native ESP-IDF diagnostic/basic
 bring-up CLI. Both expose the same user-visible command surface.
 
-Safe read-only sequence:
+Safe non-persistent sequence:
 
 ```text
 version
@@ -46,6 +46,9 @@ drv
 
 Notes:
 
+- This sequence avoids persistent configuration writes. It is not strictly
+  read-only: tracked reads update driver health, and `recover` may issue bus
+  recovery clocks before probing.
 - `probe` is diagnostic-only and should not change health counters.
 - `status` can trigger a new EE871 measurement when the previous sample is old.
 - `read` reads the CO2 averaged value; `co2fast` reads MV3; `co2avg` reads MV4.
@@ -108,7 +111,7 @@ Warnings before persistent writes:
 | F-05 | CO2 fast read | S2, S3 | `co2fast` | MV3 fast-response value is reported, or a precise bounded error is returned. | NOT RUN | CO2 ppm value and status. |
 | F-06 | PEC success on normal reads | S2, S3 | `id`, `status`, `read`, `features` | Normal reads do not report `PEC_MISMATCH`. | NOT RUN | Command output. |
 | F-07 | Feature/cache sanity | S2, S3 | `features`, `caps`, `cfg` | Capability output is internally consistent and guards unsupported writes. | NOT RUN | Feature bytes and booleans. |
-| F-08 | Warm-up behavior | S2, S3 | Power cycle, run `status`, `read`, `co2avg` every 30 s during first 10 min | Readings are treated as warm-up data until EE871 warm-up has elapsed. | NOT RUN | Timestamped ppm trend. |
+| F-08 | Warm-up behavior | S2, S3 | Power cycle, run `status`, `read`, `co2avg` every 30 s during first 10 min | Operator/application validation treats readings as warm-up data until EE871 warm-up has elapsed. | NOT RUN | Timestamped ppm trend. |
 | F-09 | Stale sample behavior | S2, S3 | Compare `status`, wait 5-10 s, `co2avg`, repeat after >10 s | Status-triggered measurement behavior and sample freshness are observable and documented. | NOT RUN | Timestamped status/CO2 output. |
 | F-10 | Safe self-test | S2, S3 | `selftest` | Safe commands complete with expected pass/fail report; no persistent settings are changed. | NOT RUN | Self-test report. |
 | F-11 | Mixed read stress | S2, S3 | `stress_mix 100` | No hangs; failures, if any, are bounded and health counters match output. | NOT RUN | Stress summary. |
@@ -125,7 +128,7 @@ Run these only on a bench sensor after recording original values.
 | P-03 | CO2 offset write/readback | S2, S3 | `offset`, record value, `offset <bench_value>`, `offset` | Write returns OK and readback matches; dirty diagnostics checked on failure. | NOT RUN | Before/write/after output. |
 | P-04 | CO2 gain write/readback | S2, S3 | `gain`, record value, `gain <bench_value>`, `gain` | Write returns OK and readback matches; dirty diagnostics checked on failure. | NOT RUN | Before/write/after output. |
 | P-05 | Part name write/readback | S2, S3 | `partname`, record value, `partname <bench_text>`, `partname` | Write returns OK and readback matches. | NOT RUN | Before/write/after output. |
-| P-06 | Bus address write | S2, S3 | `addr`, record value, `addr <bench_addr>`, power cycle, configured address scan | Address change behaves as documented and does not retarget the current session until power cycle. | NOT RUN | Address read/scan output. |
+| P-06 | Bus address write | S2, S3 | `addr`, record value, `addr <bench_addr>`, power cycle, `scan`; then rebuild/reconfigure firmware for the new address or use a dedicated test wrapper | Address change behaves as documented and does not retarget the current session until power cycle. | NOT RUN | Address read/scan output, configured-address follow-up output. |
 
 ## Fault And Recovery Matrix
 
