@@ -459,6 +459,20 @@ void test_co2_offset_high_byte_failure_sets_dirty() {
   TEST_ASSERT_EQUAL_UINT8(0x34, fake.memory(cmd::CUSTOM_CO2_OFFSET_L));
 }
 
+void test_co2_offset_low_byte_verify_failure_sets_dirty() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+
+  fake.dropNextWriteCommitToAddress(cmd::CUSTOM_CO2_OFFSET_L);
+  Status st = dev.writeCo2Offset(0x1234);
+
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::E2_ERROR),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_STRING("Write verify failed", st.msg);
+  assertDirtyWithOriginalError(dev, st);
+}
+
 void test_co2_gain_high_byte_failure_sets_dirty() {
   FakeE2Transport fake;
   EE871::EE871 dev;
@@ -472,6 +486,23 @@ void test_co2_gain_high_byte_failure_sets_dirty() {
   TEST_ASSERT_EQUAL_STRING("Address byte NACK", st.msg);
   assertDirtyWithOriginalError(dev, st);
   TEST_ASSERT_EQUAL_UINT8(0x78, fake.memory(cmd::CUSTOM_CO2_GAIN_L));
+}
+
+void test_part_name_first_byte_verify_failure_sets_dirty() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+
+  const uint8_t partName[cmd::CUSTOM_PART_NAME_LEN] = {
+      'E', 'E', '8', '7', '1', ' ', 'B', 'E',
+      'N', 'C', 'H', ' ', '0', '0', '0', '1'};
+  fake.dropNextWriteCommitToAddress(cmd::CUSTOM_PART_NAME_START);
+  Status st = dev.writePartName(partName);
+
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::E2_ERROR),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_STRING("Write verify failed", st.msg);
+  assertDirtyWithOriginalError(dev, st);
 }
 
 void test_dirty_error_preserves_first_failure() {
@@ -563,7 +594,9 @@ int main() {
   RUN_TEST(test_interval_high_byte_write_failure_sets_dirty);
   RUN_TEST(test_interval_verify_failure_sets_dirty_and_unrelated_read_does_not_clear);
   RUN_TEST(test_co2_offset_high_byte_failure_sets_dirty);
+  RUN_TEST(test_co2_offset_low_byte_verify_failure_sets_dirty);
   RUN_TEST(test_co2_gain_high_byte_failure_sets_dirty);
+  RUN_TEST(test_part_name_first_byte_verify_failure_sets_dirty);
   RUN_TEST(test_dirty_error_preserves_first_failure);
   RUN_TEST(test_resync_persistent_config_clears_only_when_coherent);
   RUN_TEST(test_dirty_state_survives_offline);

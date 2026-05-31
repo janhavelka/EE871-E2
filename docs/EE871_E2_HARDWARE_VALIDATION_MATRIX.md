@@ -1,0 +1,154 @@
+# EE871-E2 Hardware Validation Matrix
+
+Date: 2026-05-31
+Branch: `hardening/ee871-e2-industry-readiness`
+
+This matrix is a hardware validation plan, not a record of completed bench
+results. No EE871 hardware tests were run while creating this document. Default
+status is `NOT RUN` until a test is executed and recorded with board, firmware,
+sensor serial/part, wiring, supply, pull-ups, and observed output.
+
+Allowed statuses:
+
+- `NOT RUN` - scenario has not been executed.
+- `PASS` - scenario was executed and met expected behavior.
+- `FAIL` - scenario was executed and did not meet expected behavior.
+- `BLOCKED` - scenario could not be run because a prerequisite is missing.
+- `NOT APPLICABLE` - scenario does not apply to the tested setup.
+
+## Safe Bring-Up CLI Recipe
+
+Use the Arduino PlatformIO CLI example or the native ESP-IDF diagnostic/basic
+bring-up CLI. Both expose the same user-visible command surface.
+
+Safe read-only sequence:
+
+```text
+version
+drv
+buscheck
+levels
+probe
+drv
+status
+read
+co2fast
+co2avg
+features
+caps
+fw
+e2spec
+selftest
+stress_mix 20
+recover
+drv
+```
+
+Notes:
+
+- `probe` is diagnostic-only and should not change health counters.
+- `status` can trigger a new EE871 measurement when the previous sample is old.
+- `read` reads the CO2 averaged value; `co2fast` reads MV3; `co2avg` reads MV4.
+- Record raw command output and timestamps for each board/sensor combination.
+
+Persistent-write commands are bench-only:
+
+```text
+interval
+interval <150..36000>
+offset
+offset <signed_ppm>
+gain
+gain <0..65535>
+partname
+partname <text>
+addr
+addr <0-7>
+factor
+factor <value>
+filter
+filter <value>
+mode
+mode <0..3>
+autoadj start
+```
+
+Warnings before persistent writes:
+
+- Persistent writes may change sensor configuration and may persist across power
+  cycles.
+- Persistent writes can have long delays and flash/endurance implications.
+- Only run persistent-write tests on a bench sensor where configuration changes
+  are acceptable and the original values have been recorded.
+- After any failed multi-byte persistent write, check dirty diagnostics through
+  library instrumentation or a dedicated application wrapper before trusting
+  persistent configuration.
+- The current bring-up CLI does not expose `persistentConfigDirty()`,
+  `persistentConfigDirtyError()`, or `resyncPersistentConfig()` directly. Hardware
+  validation of those diagnostics requires a small API-level test firmware or a
+  future CLI command.
+
+## Board Matrix
+
+| ID | Board | Framework/example | Target | Sensor | Pull-ups/level shift | Status | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| B-S3-A | ESP32-S3 dev board | `examples/01_basic_bringup_cli` | `ex_bringup_s3` | EE871-E2 bench sensor | External pull-ups, level shifter as required | NOT RUN | Record GPIOs, supply, cable length. |
+| B-S2-A | ESP32-S2 dev board | `examples/01_basic_bringup_cli` | `ex_bringup_s2` | EE871-E2 bench sensor | External pull-ups, level shifter as required | NOT RUN | Record GPIOs, supply, cable length. |
+| B-S3-IDF | ESP32-S3 dev board | `examples/idf/basic_bringup` | `esp32s3` | EE871-E2 bench sensor | External pull-ups, level shifter as required | NOT RUN | Requires local or CI pure ESP-IDF build. |
+| B-S2-IDF | ESP32-S2 dev board | `examples/idf/basic_bringup` | `esp32s2` | EE871-E2 bench sensor | External pull-ups, level shifter as required | NOT RUN | Requires local or CI pure ESP-IDF build. |
+
+## Functional Matrix
+
+| ID | Scenario | Board(s) | CLI/API sequence | Expected behavior | Status | Evidence to capture |
+| --- | --- | --- | --- | --- | --- | --- |
+| F-01 | Power-up `begin()` with sensor present | S2, S3 | Power cycle, open monitor, inspect boot output, `drv` | Device initializes or reports a precise non-OK `Status`; driver state is READY on success. | NOT RUN | Boot log, `drv` output. |
+| F-02 | Probe no-health-side-effects | S2, S3 | `drv`, `probe`, `drv` | Successful or failed `probe` does not change health counters/state. | NOT RUN | Before/after `drv` output. |
+| F-03 | Status read | S2, S3 | `status`, `drv` | Status byte read completes or returns bounded error; tracked success/failure updates health as documented. | NOT RUN | `status` output and health counters. |
+| F-04 | CO2 averaged read | S2, S3 | `read`, `co2avg` | MV4 averaged value is reported, or a precise bounded error is returned. | NOT RUN | CO2 ppm values and status. |
+| F-05 | CO2 fast read | S2, S3 | `co2fast` | MV3 fast-response value is reported, or a precise bounded error is returned. | NOT RUN | CO2 ppm value and status. |
+| F-06 | PEC success on normal reads | S2, S3 | `id`, `status`, `read`, `features` | Normal reads do not report `PEC_MISMATCH`. | NOT RUN | Command output. |
+| F-07 | Feature/cache sanity | S2, S3 | `features`, `caps`, `cfg` | Capability output is internally consistent and guards unsupported writes. | NOT RUN | Feature bytes and booleans. |
+| F-08 | Warm-up behavior | S2, S3 | Power cycle, run `status`, `read`, `co2avg` every 30 s during first 10 min | Readings are treated as warm-up data until EE871 warm-up has elapsed. | NOT RUN | Timestamped ppm trend. |
+| F-09 | Stale sample behavior | S2, S3 | Compare `status`, wait 5-10 s, `co2avg`, repeat after >10 s | Status-triggered measurement behavior and sample freshness are observable and documented. | NOT RUN | Timestamped status/CO2 output. |
+| F-10 | Safe self-test | S2, S3 | `selftest` | Safe commands complete with expected pass/fail report; no persistent settings are changed. | NOT RUN | Self-test report. |
+| F-11 | Mixed read stress | S2, S3 | `stress_mix 100` | No hangs; failures, if any, are bounded and health counters match output. | NOT RUN | Stress summary. |
+| F-12 | Repeated CO2 read stress | S2, S3 | `stress 100` | No hangs; CO2 read success rate and health counters are recorded. | NOT RUN | Stress summary. |
+
+## Persistent Configuration Matrix
+
+Run these only on a bench sensor after recording original values.
+
+| ID | Scenario | Board(s) | CLI/API sequence | Expected behavior | Status | Evidence to capture |
+| --- | --- | --- | --- | --- | --- | --- |
+| P-01 | Measurement interval write/readback | S2, S3 | `interval`, record value, `interval <bench_value>`, `interval` | Write returns OK and readback matches; on failure, persistent dirty diagnostics must be checked by the application. | NOT RUN | Before/write/after output. |
+| P-02 | Measurement interval power-cycle persistence | S2, S3 | Run P-01, power cycle sensor and MCU, `interval` | Value persists across power cycle or documented sensor behavior explains difference. | NOT RUN | Pre/post power-cycle output. |
+| P-03 | CO2 offset write/readback | S2, S3 | `offset`, record value, `offset <bench_value>`, `offset` | Write returns OK and readback matches; dirty diagnostics checked on failure. | NOT RUN | Before/write/after output. |
+| P-04 | CO2 gain write/readback | S2, S3 | `gain`, record value, `gain <bench_value>`, `gain` | Write returns OK and readback matches; dirty diagnostics checked on failure. | NOT RUN | Before/write/after output. |
+| P-05 | Part name write/readback | S2, S3 | `partname`, record value, `partname <bench_text>`, `partname` | Write returns OK and readback matches. | NOT RUN | Before/write/after output. |
+| P-06 | Bus address write | S2, S3 | `addr`, record value, `addr <bench_addr>`, power cycle, configured address scan | Address change behaves as documented and does not retarget the current session until power cycle. | NOT RUN | Address read/scan output. |
+
+## Fault And Recovery Matrix
+
+| ID | Scenario | Board(s) | CLI/API sequence | Expected behavior | Status | Evidence to capture |
+| --- | --- | --- | --- | --- | --- | --- |
+| R-01 | Wrong wiring or no sensor | S2, S3 | Disconnect sensor, boot, `probe`, `status`, `drv` | Initialization or reads fail with bounded non-OK status; no hang. | NOT RUN | Boot log, command output, health counters. |
+| R-02 | Unplug/replug recovery | S2, S3 | Start connected, `read`, unplug, repeated `read`, replug, `recover`, `drv` | Tracked failures degrade/offline as configured; successful `recover` returns READY. | NOT RUN | Timestamped health transitions. |
+| R-03 | SDA stuck low | S2, S3 | Use fault jig to pull SDA low, `buscheck`, `libreset`, `drv` | `BUS_STUCK` or precise bounded error; no unbounded wait. | NOT RUN | Jig setup and command output. |
+| R-04 | SCL stuck low / clock stretch timeout | S2, S3 | Use fault jig to pull SCL low, `status`, `buscheck`, `libreset` | Timeout or `BUS_STUCK` within configured deadline; no hang. | NOT RUN | Timing notes and output. |
+| R-05 | SDA forced high/no ACK | S2, S3 | Use fault jig/open line, `probe`, `status` | NACK/no-response error is bounded and health rules match `probe` vs tracked reads. | NOT RUN | Command output. |
+| R-06 | Recovery clocks on stuck bus | S2, S3 | `busreset`, `libreset`, `buscheck` | Recovery clocks are issued and idle state is reported accurately. | NOT RUN | Output and line-level observation if available. |
+| R-07 | Timing sweep | S2, S3 | `timing` | Supported timing range is identified without hangs; failures are bounded. | NOT RUN | Timing table output. |
+| R-08 | Bus trace sanity | S2, S3 | `verbose 1`, `status`, `trace stats`, `verbose 0` | Trace captures bounded line activity and does not destabilize reads. | NOT RUN | Trace stats and sample trace. |
+
+## Sign-Off Template
+
+For each completed row, record:
+
+- Date/time.
+- Operator.
+- Commit SHA and firmware build timestamp.
+- Board model and target.
+- Sensor part/serial number.
+- GPIO pins, pull-up values, level shifter, supply voltage, cable length.
+- CLI command transcript.
+- Result status and notes.

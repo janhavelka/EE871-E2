@@ -34,7 +34,7 @@ Tests run:
 Hardware validation:
 - Not run. No hardware behavior is claimed in this report.
 
-Remaining prompts/work planned:
+Subsequent hardening prompts:
 - Prompt 02: native fake E2 transport and runtime fault tests.
 - Prompt 03: persistent multi-byte dirty-state diagnostics.
 - Prompt 04: pure ESP-IDF build coverage, CI, and IDF example documentation.
@@ -143,9 +143,10 @@ Remaining limitations:
 - `resyncPersistentConfig()` validates that persistent fields can be read and
   that the global interval is in range; it cannot prove the values match an
   external operator-intended configuration unless the application compares them.
-- The implementation marks dirty at the multi-byte wrapper boundary after a
-  first byte returns success. It does not add a lower-level transaction-phase
-  API to distinguish every possible post-PEC/STOP ambiguity.
+- Prompt 05 later added private write-accepted tracking so first-byte
+  post-accept failures can mark dirty. The remaining limitation is diagnostic
+  granularity: dirty state is still global and does not identify a single
+  authoritative field.
 
 Tests run:
 - `python tools/check_core_timing_guard.py`: PASS, `Core timing guard PASSED`.
@@ -217,3 +218,183 @@ Commands run:
 - `python -m platformio run -e ex_bringup_s2`: PASS, `SUCCESS` in 00:00:19.908.
 - `idf.py --version`: FAIL, command not found as described above.
 - `git diff --check`: PASS; only Git line-ending conversion warnings were emitted.
+
+## Prompt 05 - Final Integration Review And Hardware Validation Plan
+
+Starting audit findings:
+- The original audit classified the core architecture as sound but not yet
+  industry-grade because validation evidence was missing.
+- High-severity gaps were pure ESP-IDF build coverage, native E2 runtime fault
+  coverage, and dirty-state diagnostics for partially applied multi-byte
+  persistent writes.
+- Medium-severity gaps included public copy/move safety, thread/ISR contract
+  clarity, and documentation honesty around EE871-E2 GPIO signaling versus
+  hardware I2C.
+- Hardware validation was unknown; no real ESP32-S2/S3 plus EE871 bench results
+  existed in the audit.
+
+Full branch diff review:
+- `git diff --stat main...HEAD`: reviewed; branch changes are limited to CI,
+  docs, public contracts, dirty-state implementation, native fake transport,
+  and native tests.
+- `git diff --check`: PASS.
+- `git status --short`: clean before Prompt 05 edits.
+- No generated build artifacts, package tarballs, firmware binaries, or
+  accidental archives are part of the intended diff.
+- No Arduino, ESP-IDF, FreeRTOS, logging, GPIO, or hardware I2C headers leaked
+  into `include/` or `src/`.
+- The large test addition is scoped to native tests under `test/` and uses the
+  callback-boundary fake E2 transport.
+- Documentation does not claim hardware validation, local pure `idf.py` success,
+  or field/industry-grade readiness.
+
+Prompt 05 code/test correction:
+- Final diff review found that first-byte `customWrite()` verify/readback
+  failures in multi-byte persistent writes could be dirty but were treated as
+  clean by `writeCo2Offset()`, `writeCo2Gain()`, and `writePartName()`.
+- Added private write-accepted tracking for `_writeCommandRaw()`,
+  `_writeCommandTracked()`, and `_customWriteDirect()` so callers can distinguish
+  a clean pre-accept failure from a post-accept failure.
+- Added native tests for first-byte accepted/readback-failed cases:
+  `test_co2_offset_low_byte_verify_failure_sets_dirty` and
+  `test_part_name_first_byte_verify_failure_sets_dirty`.
+- Final native coverage is 30 test cases.
+
+Public API changes across the branch:
+- `EE871::EE871` is now non-copyable and non-movable.
+- Added `resyncPersistentConfig()`.
+- Added `persistentConfigDirty()` and `persistentConfigDirtyError()`.
+- Added `persistentConfigDirty` and `persistentConfigDirtyError` to
+  `SettingsSnapshot`.
+- No new `Err` enum value was added; write methods continue returning the
+  precise failing `Status`.
+
+Core changes:
+- Public comments now state that EE871-E2 is GPIO-style E2 signaling, not
+  Arduino Wire, ESP-IDF hardware I2C, or an owned bus.
+- Thread-safety, ISR-safety, callback boundedness, and callback reentrancy
+  contracts are documented.
+- Health state behavior remains wrapper-driven: public tracked operations update
+  health through tracked wrappers, while `probe()` remains raw/no-health.
+- Persistent dirty state is set when multi-byte persistent configuration may
+  have partially applied and is cleared only by verified
+  `resyncPersistentConfig()`.
+
+Test infrastructure changes:
+- Added `test/support/FakeE2Transport.h`, a deterministic native E2 fake at the
+  line-callback boundary.
+- Added runtime fault tests for SCL timeout, PEC mismatch, device absence,
+  verify mismatch, offline/recover, probe health side effects, dirty-state
+  transitions, and dirty-state resync behavior.
+- Native tests no longer depend on Arduino/Wire stubs.
+
+ESP-IDF and CI changes:
+- Added CI `idf-build` matrix for `esp32s3` and `esp32s2` using
+  `espressif/esp-idf-ci-action@v1` and `esp_idf_version: v6.0.1`.
+- The IDF CI job runs `python tools/check_idf_example_contract.py` before the
+  build.
+- Added explicit `esp_rom` dependency to the IDF example component because the
+  example transport includes `esp_rom_sys.h`.
+- Local pure `idf.py` builds were not run because `idf.py` is not installed or
+  not on `PATH` in this shell.
+
+Documentation changes:
+- README documents the E2-versus-hardware-I2C boundary, managed synchronous
+  timing, thread/ISR constraints, persistent dirty diagnostics, and IDF example
+  honesty.
+- IDF docs now describe the example as diagnostic/basic bring-up and state that
+  production users should integrate callbacks into their own GPIO or bus
+  manager.
+- Added `docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md` with concrete
+  per-board/per-scenario hardware validation rows, all marked `NOT RUN`, plus a
+  safe CLI recipe and persistent-write warnings.
+
+Hardware validation status:
+- NOT RUN. No real ESP32-S2, ESP32-S3, EE871 sensor, wiring fault, pull-up,
+  warm-up, stale-sample, unplug/replug, or persistent-write bench validation was
+  performed during this hardening pass.
+- The hardware validation matrix is a plan only. It does not claim pass/fail
+  hardware evidence.
+- The current CLI does not expose `persistentConfigDirty()`,
+  `persistentConfigDirtyError()`, or `resyncPersistentConfig()` directly, so
+  hardware validation of those diagnostics needs API-level test firmware or a
+  future CLI command.
+
+Exact commands run in Prompt 05:
+- `git checkout hardening/ee871-e2-industry-readiness`: already on branch.
+- `git pull --ff-only`: already up to date.
+- `git status --short`: clean before edits.
+- `git diff --stat main...HEAD`: reviewed.
+- `git diff --check`: PASS before edits and PASS after final edits; only Git
+  line-ending conversion warnings were emitted after edits.
+- `python tools/check_core_timing_guard.py`: PASS, `Core timing guard PASSED`.
+- `python tools/check_cli_contract.py`: PASS, `CLI contract PASSED`.
+- `python tools/check_idf_example_contract.py`: PASS, `IDF example contract PASSED`.
+- `python scripts/generate_version.py check`: PASS, `include\EE871\Version.h` up to date.
+- `python -m platformio test -e native`: PASS, 30 test cases succeeded in 00:00:01.904.
+- `python -m platformio run -e ex_bringup_s3`: PASS, `SUCCESS` in 00:00:22.986.
+- `python -m platformio run -e ex_bringup_s2`: PASS, `SUCCESS` in 00:00:24.239.
+- `python -m platformio pkg pack`: PASS, wrote `ee871-e2-0.3.0.tar.gz`.
+- `Remove-Item -LiteralPath ...\ee871-e2-0.3.0.tar.gz`: generated package
+  artifact removed; it is not intended to be tracked.
+- `idf.py --version`: FAIL. PowerShell reported: `The term 'idf.py' is not
+  recognized as the name of a cmdlet, function, script file, or operable
+  program.`
+
+Commands not run and why:
+- `idf.py -C examples/idf/basic_bringup set-target esp32s3 build`: not run
+  because `idf.py` is unavailable locally.
+- `idf.py -C examples/idf/basic_bringup set-target esp32s2 build`: not run
+  because `idf.py` is unavailable locally.
+- GitHub Actions result verification: not claimed in this report. The new CI
+  job must be proven by a PR or workflow run.
+- Hardware CLI validation: not run because no hardware bench execution occurred
+  in this session.
+
+Known remaining gaps:
+- Pure ESP-IDF builds must pass in GitHub Actions or a local ESP-IDF
+  environment.
+- Real hardware validation must be executed using
+  `docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md`.
+- Dirty diagnostics should be exposed through a CLI command or dedicated test
+  firmware for direct hardware validation.
+- Persistent write behavior needs bench validation, including power-cycle
+  persistence and failed-write operator recovery.
+- `library.json` and `CHANGELOG.md` were not updated for a release.
+- CI currently runs on main/master push and PR events; the new IDF job still
+  needs a PR/workflow run to prove it.
+
+Future work for a full industry-grade claim:
+- Prove pure ESP-IDF S2/S3 builds in CI.
+- Run and record the hardware matrix on both ESP32-S2 and ESP32-S3 with real
+  EE871 hardware.
+- Add hardware or jig-based tests for stuck SCL/SDA, wrong wiring/no sensor,
+  unplug/replug, PEC/fault behavior if observable, warm-up, and stale sample
+  behavior.
+- Add CLI/API surface to report persistent dirty diagnostics during hardware
+  validation.
+- Add release notes, versioning decision, and changelog entries before tagging.
+
+Compatibility and breaking-change notes:
+- Deleting copy/move operations is a source-compatibility break for users who
+  copied or moved `EE871` instances by value.
+- `SettingsSnapshot` layout changed, so layout-sensitive or ABI-sensitive users
+  must rebuild.
+- Added diagnostics are backward-compatible for normal source users.
+- No behavior changes intentionally retarget bus ownership, timing callbacks, or
+  framework neutrality.
+
+Merge readiness verdict:
+- Ready to merge after CI passes. The branch is PR-ready and materially improves
+  hardening with core contracts, native E2 fault injection, persistent dirty
+  diagnostics, IDF CI coverage, and honest validation docs.
+
+Release readiness verdict:
+- Not release-ready yet. Release still needs successful pure ESP-IDF CI results,
+  release/version/changelog decisions, and at least the intended release-level
+  hardware validation evidence.
+
+Field/industry-grade verdict:
+- Not yet field/industry-grade. Production-oriented hardening is complete for
+  this branch, but physical fault validation and pure IDF CI evidence remain
+  required before making an industry-grade claim.

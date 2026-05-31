@@ -492,8 +492,11 @@ private:
   Status _readControlByteRaw(uint8_t controlByte, uint8_t& data);
   Status _readControlByteTracked(uint8_t controlByte, uint8_t& data);
 
-  Status _writeCommandRaw(uint8_t controlByte, uint8_t addressByte, uint8_t dataByte);
-  Status _writeCommandTracked(uint8_t controlByte, uint8_t addressByte, uint8_t dataByte);
+  Status _writeCommandRaw(uint8_t controlByte, uint8_t addressByte, uint8_t dataByte,
+                          bool* writeAccepted = nullptr);
+  Status _writeCommandTracked(uint8_t controlByte, uint8_t addressByte, uint8_t dataByte,
+                              bool* writeAccepted = nullptr);
+  Status _customWriteDirect(uint8_t address, uint8_t value, bool* writeAccepted = nullptr);
 
   // =========================================================================
   // Health Management

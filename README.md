@@ -223,9 +223,14 @@ idf.py -C examples/idf/basic_bringup set-target esp32s3 build
 idf.py -C examples/idf/basic_bringup set-target esp32s2 build
 ```
 
+Hardware validation has not been run in this hardening pass. Use
+`docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md` for the safe CLI recipe,
+bench-only persistent-write warnings, and per-board validation matrix.
+
 ## Documentation
 
 - `CHANGELOG.md` - full release history
+- `docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md` - hardware validation plan and CLI recipe
 - `docs/IDF_PORT.md` - ESP-IDF portability and validation guidance
 - `docs/IDF_PORT_IMPLEMENTATION.md` - ESP-IDF implementation notes
 
