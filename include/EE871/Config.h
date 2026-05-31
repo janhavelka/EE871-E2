@@ -23,6 +23,11 @@ using E2ReadLineFn = bool (*)(void* user);
 using E2DelayUsFn = void (*)(uint32_t us, void* user);
 
 /// @brief Configuration for EE871 driver.
+///
+/// The transport callbacks implement GPIO-style open-drain E2 line control:
+/// setting a line high releases it, and setting a line low drives it low.
+/// Callbacks must be bounded and deterministic. They must not call back into
+/// public methods on the same EE871 driver instance.
 struct Config {
   // === E2 Transport (required) ===
   E2SetLineFn setScl = nullptr;   ///< Set/release clock line
@@ -33,7 +38,7 @@ struct Config {
   void* busUser = nullptr;        ///< User context for callbacks
 
   // === Device Settings ===
-  uint8_t deviceAddress = 0;      ///< E2 device address (0-7)
+  uint8_t deviceAddress = 0;      ///< E2 protocol device address (0-7), not a hardware I2C address.
 
   // === Timing (E2 spec) ===
   uint16_t clockLowUs = 100;      ///< Minimum CLK low time, must be >= 100 us.

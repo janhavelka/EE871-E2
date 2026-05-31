@@ -53,13 +53,16 @@ Rules:
 
 ## E2 Bus Transport + HAL (Required)
 
+- EE871-E2 is a GPIO-style E2 bus driver, not a hardware I2C driver.
 - The library MUST NOT own the bus. It never touches `Wire` or I2C drivers directly.
 - `Config` MUST accept a transport adapter for the E2 HAL:
   - `set_scl(level)` / `set_sda(level)` where level=1 means release line (open-drain high), level=0 means pull low.
   - `read_scl()` / `read_sda()` for clock stretching and data sampling.
   - `delay_us(t)` for bit timing.
+- E2 line control, delays, and timebase MUST remain injected through callbacks or public inputs.
 - Transport errors MUST map to `Status` (no leaking platform-specific error codes).
-- The library MUST NOT configure bus timeouts, pull-ups, or pins.
+- The library MUST NOT configure bus timeouts, pull-ups, pins, GPIO drivers,
+  Arduino `Wire`, ESP-IDF handles, FreeRTOS tasks, logging, or global bus objects.
 
 ---
 
@@ -162,6 +165,12 @@ Rules:
 The driver follows a managed synchronous model with health tracking:
 
 - All public E2 operations are blocking but bounded by documented timeouts.
+- Public APIs that touch the E2 bus are not ISR-safe unless explicitly proven otherwise.
+- `EE871` instances are not thread-safe; callers must use one owner task/context
+  or externally serialize all access.
+- Shared GPIO/E2 bus users must serialize access outside the library.
+- Transport callbacks must be bounded, deterministic, and must not recursively
+  call into public methods on the same driver instance.
 - `tick()` may be used for periodic polling, measurement scheduling, or recovery policies.
 - Health is tracked via tracked transport wrappers; public API never calls `_updateHealth()` directly.
 - Recovery is manual via `recover()`; the application controls retry strategy.
@@ -258,6 +267,8 @@ Release steps:
   headers in `include/` or `src/`.
 - Core code must not own GPIO, timing, or bus resources; hardware access belongs
   behind injected callbacks/adapters/config.
+- Hardware validation and ESP-IDF build claims must not be invented. Record only
+  commands and hardware scenarios that were actually run.
 - Arduino examples may use Arduino APIs.
 - ESP-IDF examples must be native IDF programs using `app_main`, native driver
   headers, `esp_timer`, `vTaskDelay`, and fixed C buffers.

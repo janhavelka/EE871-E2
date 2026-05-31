@@ -38,8 +38,26 @@ struct SettingsSnapshot {
 };
 
 /// @brief Transport-agnostic EE871 CO2 sensor driver for the E2 bus.
+///
+/// EE871-E2 uses GPIO-style open-drain E2 signaling through injected line and
+/// delay callbacks. It is not an Arduino Wire, ESP-IDF hardware I2C, or other
+/// owned-bus driver.
+///
+/// Instances are not thread-safe. Use one owner task/context or externally
+/// serialize all public calls, including state-only accessors and tick().
+/// Shared users of the same GPIO/E2 bus must also serialize outside the
+/// library. Public methods that touch the E2 bus are blocking and are not
+/// ISR-safe because they may perform bus I/O and call the configured delay
+/// callback. Transport callbacks must be bounded and deterministic, and must
+/// not call public methods on the same EE871 instance recursively.
 class EE871 {
 public:
+  EE871() = default;
+  EE871(const EE871&) = delete;
+  EE871& operator=(const EE871&) = delete;
+  EE871(EE871&&) = delete;
+  EE871& operator=(EE871&&) = delete;
+
   // =========================================================================
   // Lifecycle
   // =========================================================================
@@ -306,7 +324,9 @@ public:
   /// @return Status::Ok() when the byte is read.
   Status readBusAddress(uint8_t& address);
 
-  /// Write bus address (0xC0) - requires power cycle to take effect
+  /// Write bus address (0xC0) - requires power cycle to take effect.
+  /// This updates persistent sensor configuration and does not retarget the
+  /// current driver session.
   /// @param address New address (0-7)
   /// @return OUT_OF_RANGE if address > 7
   Status writeBusAddress(uint8_t address);

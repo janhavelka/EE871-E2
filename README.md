@@ -1,6 +1,6 @@
 # EE871 E2 Driver Library
 
-Production-grade EE871 CO2 sensor driver for the E2 bus on ESP32 using Arduino/PlatformIO or ESP-IDF.
+Production-oriented EE871 CO2 sensor driver for the E2 bus on ESP32 using Arduino/PlatformIO or ESP-IDF.
 
 ## Features
 
@@ -10,6 +10,16 @@ Production-grade EE871 CO2 sensor driver for the E2 bus on ESP32 using Arduino/P
 - **Deterministic behavior** - bounded loops, explicit timeouts
 - **Managed synchronous** - blocking transfers with spec-compliant limits
 - **Feature guards** - optional EE871 registers are checked from cached capability flags
+
+## E2 Bus, Not Hardware I2C
+
+EE871-E2 uses GPIO-style open-drain E2 signaling. The library does not use
+Arduino `Wire`, ESP-IDF `driver/i2c_master`, or a hardware I2C peripheral.
+Applications provide `setScl`, `setSda`, `readScl`, `readSda`, and `delayUs`
+callbacks through `Config`.
+
+`Config::deviceAddress` is the 0-7 E2 protocol address encoded into the E2
+control byte. It is not an ESP-IDF or Arduino I2C device address.
 
 ## Installation
 
@@ -31,7 +41,8 @@ Copy `include/EE871/` and `src/` to your project.
 Use this repository as an ESP-IDF component with `EXTRA_COMPONENT_DIRS` or the
 metadata in `idf_component.yml`. The component builds only the framework-neutral
 core. Applications own the open-drain GPIO lines and inject `setScl`, `setSda`,
-`readScl`, `readSda`, and `delayUs` callbacks through `Config`.
+`readScl`, `readSda`, and `delayUs` callbacks through `Config`. The included
+ESP-IDF example uses GPIO callbacks, not `driver/i2c_master`.
 
 ## Quick Start
 
@@ -137,6 +148,18 @@ The driver is managed synchronous: E2 transactions block for bounded protocol ti
 
 The library never owns GPIO pins or an I2C/Wire instance. Applications provide `setScl`, `setSda`, `readScl`, `readSda`, and `delayUs` callbacks.
 
+## Threading, ISR, And Callback Contract
+
+`EE871::EE871` instances are not thread-safe. Use one owner task/context, or
+protect all public calls with an external mutex or equivalent serialization,
+including state-only accessors and `tick()`. Shared GPIO/E2 bus users must also
+serialize access outside the library.
+
+Public APIs that touch the E2 bus are blocking and are not ISR-safe because
+they can perform E2 bus I/O and call the configured delay callback. Transport
+callbacks must be bounded and deterministic, and must not call public methods
+on the same `EE871` instance recursively.
+
 ## Main API
 
 - Lifecycle: `begin`, `tick`, `end`
@@ -156,7 +179,9 @@ The library never owns GPIO pins or an I2C/Wire instance. Applications provide `
     available.
 - `examples/idf/basic_bringup/` - ESP-IDF GPIO E2 bring-up CLI using
   `examples/idf/common/E2GpioTransport.h`, with the same user-visible command
-  surface and diagnostics as the Arduino CLI.
+  surface and diagnostics as the Arduino CLI. This example owns GPIO setup for
+  bring-up and diagnostics; production applications should integrate the E2
+  callbacks into their own GPIO or bus manager.
 
 ## Building And Validation
 

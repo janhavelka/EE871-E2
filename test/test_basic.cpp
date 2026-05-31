@@ -1,6 +1,8 @@
 /// @file test_basic.cpp
 /// @brief Native contract tests for EE871 validation and lifecycle guards.
 
+#include <type_traits>
+
 #include <unity.h>
 
 #include "Arduino.h"
@@ -14,6 +16,11 @@ TwoWire Wire;
 #include "EE871/Status.h"
 
 using namespace EE871;
+
+static_assert(!std::is_copy_constructible_v<EE871::EE871>);
+static_assert(!std::is_copy_assignable_v<EE871::EE871>);
+static_assert(!std::is_move_constructible_v<EE871::EE871>);
+static_assert(!std::is_move_assignable_v<EE871::EE871>);
 
 void setUp() {}
 void tearDown() {}
