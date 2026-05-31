@@ -39,11 +39,11 @@ Official ESP-IDF references used for the port guidance, verified on
 
 ## ESP-IDF Readiness Verdict
 
-The core is ready for ESP-IDF component builds and remains framework-neutral.
-ESP-IDF packaging, the GPIO E2 adapter, and an interactive native IDF bring-up
-CLI are present. The remaining acceptance item is hardware validation on
-ESP32-S2 and ESP32-S3 boards with a real EE871 sensor, including missing-device
-and stuck-bus behavior.
+The core is structured for ESP-IDF component builds and remains
+framework-neutral. ESP-IDF packaging, the GPIO E2 adapter, and an interactive
+native IDF bring-up CLI are present. Acceptance still requires successful pure
+`idf.py` builds for ESP32-S2 and ESP32-S3, plus hardware validation with a real
+EE871 sensor, including missing-device and stuck-bus behavior.
 
 The driver should not be rewritten to call ESP-IDF GPIO or I2C APIs directly
 from the core. EE871 E2 is represented by bit-level open-drain callbacks in
@@ -60,7 +60,11 @@ from the core. EE871 E2 is represented by bit-level open-drain callbacks in
    - Accept this explicitly for the first IDF port or convert write completion
      into a `tick()`-driven state before claiming the driver is suitable for
      high-priority tasks.
-3. Hardware validation:
+3. Pure ESP-IDF build proof:
+   - Component metadata and the native IDF example are present.
+   - Successful `idf.py` builds still need to be captured locally or in CI
+     before claiming validated ESP-IDF build support.
+4. Hardware validation:
    - CLI behavior and builds can be checked without hardware.
    - Bus timing, pull-up behavior, clock stretching, and recovery still require
      bench validation.

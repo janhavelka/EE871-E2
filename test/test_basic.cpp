@@ -488,6 +488,20 @@ void test_co2_gain_high_byte_failure_sets_dirty() {
   TEST_ASSERT_EQUAL_UINT8(0x78, fake.memory(cmd::CUSTOM_CO2_GAIN_L));
 }
 
+void test_co2_gain_low_byte_verify_failure_sets_dirty() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+
+  fake.dropNextWriteCommitToAddress(cmd::CUSTOM_CO2_GAIN_L);
+  Status st = dev.writeCo2Gain(0x5678);
+
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::E2_ERROR),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_STRING("Write verify failed", st.msg);
+  assertDirtyWithOriginalError(dev, st);
+}
+
 void test_part_name_first_byte_verify_failure_sets_dirty() {
   FakeE2Transport fake;
   EE871::EE871 dev;
@@ -596,6 +610,7 @@ int main() {
   RUN_TEST(test_co2_offset_high_byte_failure_sets_dirty);
   RUN_TEST(test_co2_offset_low_byte_verify_failure_sets_dirty);
   RUN_TEST(test_co2_gain_high_byte_failure_sets_dirty);
+  RUN_TEST(test_co2_gain_low_byte_verify_failure_sets_dirty);
   RUN_TEST(test_part_name_first_byte_verify_failure_sets_dirty);
   RUN_TEST(test_dirty_error_preserves_first_failure);
   RUN_TEST(test_resync_persistent_config_clears_only_when_coherent);

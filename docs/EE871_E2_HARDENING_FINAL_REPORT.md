@@ -256,9 +256,10 @@ Prompt 05 code/test correction:
   `_writeCommandTracked()`, and `_customWriteDirect()` so callers can distinguish
   a clean pre-accept failure from a post-accept failure.
 - Added native tests for first-byte accepted/readback-failed cases:
-  `test_co2_offset_low_byte_verify_failure_sets_dirty` and
+  `test_co2_offset_low_byte_verify_failure_sets_dirty`,
+  `test_co2_gain_low_byte_verify_failure_sets_dirty`, and
   `test_part_name_first_byte_verify_failure_sets_dirty`.
-- Final native coverage is 30 test cases.
+- Final native coverage is 31 test cases.
 
 Public API changes across the branch:
 - `EE871::EE871` is now non-copyable and non-movable.
@@ -305,9 +306,15 @@ Documentation changes:
 - IDF docs now describe the example as diagnostic/basic bring-up and state that
   production users should integrate callbacks into their own GPIO or bus
   manager.
+- IDF port docs now state that pure `idf.py` build proof remains an acceptance
+  gap until captured locally or in CI.
 - Added `docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md` with concrete
   per-board/per-scenario hardware validation rows, all marked `NOT RUN`, plus a
   safe CLI recipe and persistent-write warnings.
+- The hardware validation matrix now labels its safe recipe as
+  non-persistent, keeps warm-up classification as an operator/application
+  validation concern, and requires configured-address follow-up for bus address
+  validation.
 
 Hardware validation status:
 - NOT RUN. No real ESP32-S2, ESP32-S3, EE871 sensor, wiring fault, pull-up,
@@ -331,9 +338,9 @@ Exact commands run in Prompt 05:
 - `python tools/check_cli_contract.py`: PASS, `CLI contract PASSED`.
 - `python tools/check_idf_example_contract.py`: PASS, `IDF example contract PASSED`.
 - `python scripts/generate_version.py check`: PASS, `include\EE871\Version.h` up to date.
-- `python -m platformio test -e native`: PASS, 30 test cases succeeded in 00:00:01.904.
-- `python -m platformio run -e ex_bringup_s3`: PASS, `SUCCESS` in 00:00:22.986.
-- `python -m platformio run -e ex_bringup_s2`: PASS, `SUCCESS` in 00:00:24.239.
+- `python -m platformio test -e native`: PASS, 31 test cases succeeded in 00:00:02.707.
+- `python -m platformio run -e ex_bringup_s3`: PASS, `SUCCESS` in 00:00:28.433.
+- `python -m platformio run -e ex_bringup_s2`: PASS, `SUCCESS` in 00:00:20.276.
 - `python -m platformio pkg pack`: PASS, wrote `ee871-e2-0.3.0.tar.gz`.
 - `Remove-Item -LiteralPath ...\ee871-e2-0.3.0.tar.gz`: generated package
   artifact removed; it is not intended to be tracked.
