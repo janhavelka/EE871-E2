@@ -5,6 +5,7 @@ import contextlib
 import io
 import pathlib
 import sys
+import time
 import unittest
 
 
@@ -330,6 +331,36 @@ Selftest result: pass=9 fail=1 skip=0
         meta = runner.metadata(args, pathlib.Path("hil_logs/example"), "", "branch", "abcdef")
 
         self.assertEqual("clean", meta["git_worktree"])
+
+    def test_startup_drain_waits_for_prompt_when_required(self) -> None:
+        class FakeSerial:
+            def __init__(self) -> None:
+                self.read_count = 0
+
+            @property
+            def in_waiting(self) -> int:
+                return 0
+
+            def read(self, _size: int) -> bytes:
+                self.read_count += 1
+                if self.read_count == 1:
+                    return b"booting\r\n"
+                if self.read_count < 5:
+                    time.sleep(0.002)
+                    return b""
+                return b"> "
+
+        text, reason, timed_out = runner.read_until_ready(
+            FakeSerial(),
+            timeout_s=0.2,
+            idle_s=0.001,
+            command=None,
+            require_prompt=True,
+        )
+
+        self.assertFalse(timed_out)
+        self.assertEqual("prompt", reason)
+        self.assertIn("> ", text)
 
 
 if __name__ == "__main__":

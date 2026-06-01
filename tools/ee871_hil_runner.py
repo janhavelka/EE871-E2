@@ -492,11 +492,17 @@ def response_has_completion(command: str, text: str) -> bool:
     return "Status:" in clean or PROMPT_RE.search(clean) is not None
 
 
-def read_until_ready(ser: object, timeout_s: float, idle_s: float, command: str | None = None) -> tuple[str, str, bool]:
+def read_until_ready(
+    ser: object,
+    timeout_s: float,
+    idle_s: float,
+    command: str | None = None,
+    require_prompt: bool = False,
+) -> tuple[str, str, bool]:
     deadline = time.monotonic() + timeout_s
     last_data_at = time.monotonic()
     data_seen = False
-    completion_seen = command is None
+    completion_seen = command is None and not require_prompt
     chunks: list[str] = []
 
     while time.monotonic() < deadline:
@@ -514,7 +520,7 @@ def read_until_ready(ser: object, timeout_s: float, idle_s: float, command: str 
             continue
         if data_seen and completion_seen and (time.monotonic() - last_data_at) >= idle_s:
             return "".join(chunks), "completion-idle" if command else "serial-idle", False
-        if data_seen and command is None and (time.monotonic() - last_data_at) >= idle_s:
+        if data_seen and command is None and not require_prompt and (time.monotonic() - last_data_at) >= idle_s:
             return "".join(chunks), "serial-idle", False
 
     return "".join(chunks), "timeout", True
@@ -1072,7 +1078,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             ser = open_serial(args)
             try:
-                initial_output, _, _ = read_until_ready(ser, args.timeout, args.idle, None)
+                initial_output, _, _ = read_until_ready(ser, args.timeout, args.idle, None, require_prompt=True)
                 for spec in plan:
                     if spec.operator_required or not spec.send:
                         row = run_operator_step(spec)
