@@ -446,7 +446,15 @@ GitHub Actions status:
   or operable program.
 - `gh run view <id> --log`: not run because `gh` is unavailable and no run ID
   was available locally.
-- GitHub Actions IDF build results remain unknown from this workstation.
+- Public GitHub API checks on 2026-06-01 found no workflow runs for
+  `hardening/ee871-e2-industry-readiness`, no runs for local HEAD
+  `6572a9dc325fa018e52cf631a0a1eccc2b3ab8b1` at the time of the check, and no
+  PR for this branch.
+- The latest visible CI run was `main` run `26721795125`, completed
+  successfully on 2026-05-31. Its jobs were `validate-library`,
+  `native-tests`, `build (ex_bringup_s3)`, and `build (ex_bringup_s2)`; it did
+  not include `idf-build`, so it does not prove pure ESP-IDF build success for
+  this branch.
 
 Local pure ESP-IDF status:
 - `idf.py --version`: FAIL locally. PowerShell reported: `The term 'idf.py' is
@@ -476,7 +484,7 @@ Focused-pass validation commands:
   emitted after editing the report.
 
 Remaining gap:
-- Install/authenticate `gh` or inspect GitHub Actions through another trusted
-  channel, then record the latest `idf-build` matrix result.
+- Open a PR or otherwise trigger GitHub Actions for this branch, then record the
+  `idf-build` matrix result for both `esp32s3` and `esp32s2`.
 - Alternatively install ESP-IDF locally and run both `idf.py -C
   examples/idf/basic_bringup ... build` commands.
