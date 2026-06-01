@@ -325,10 +325,10 @@ Hardware validation status:
   performed during this hardening pass.
 - The hardware validation matrix is a plan only. It does not claim pass/fail
   hardware evidence.
-- The current CLI does not expose `persistentConfigDirty()`,
-  `persistentConfigDirtyError()`, or `resyncPersistentConfig()` directly, so
-  hardware validation of those diagnostics needs API-level test firmware or a
-  future CLI command.
+- The diagnostic CLIs now expose `dirty` and `resync` commands for
+  `persistentConfigDirty`, `persistentConfigDirtyError`, and
+  `resyncPersistentConfig()` hardware-validation flow. Bench validation still
+  needs real hardware output.
 
 Exact commands run in Prompt 05:
 - `git checkout hardening/ee871-e2-industry-readiness`: already on branch.
@@ -369,8 +369,8 @@ Known remaining gaps:
   environment.
 - Real hardware validation must be executed using
   `docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md`.
-- Dirty diagnostics should be exposed through a CLI command or dedicated test
-  firmware for direct hardware validation.
+- Dirty/resync CLI diagnostics need hardware bench execution and captured
+  output. The software command surface is covered by repo-local contract checks.
 - Persistent write behavior needs bench validation, including power-cycle
   persistence and failed-write operator recovery.
 - `library.json` version and `CHANGELOG.md` were not updated for a release.
@@ -384,8 +384,8 @@ Future work for a full industry-grade claim:
 - Add hardware or jig-based tests for stuck SCL/SDA, wrong wiring/no sensor,
   unplug/replug, PEC/fault behavior if observable, warm-up, and stale sample
   behavior.
-- Add CLI/API surface to report persistent dirty diagnostics during hardware
-  validation.
+- Run the dirty/resync CLI flow on hardware and record output in the hardware
+  validation matrix.
 - Add release notes, versioning decision, and changelog entries before tagging.
 
 Compatibility and breaking-change notes:

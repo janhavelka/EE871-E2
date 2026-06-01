@@ -18,7 +18,44 @@ REQUIRED_COMMON = [
     "HealthView.h",
 ]
 
-MANDATORY_COMMANDS = ["help", "scan", "probe", "recover", "drv", "read", "verbose", "stress"]
+MANDATORY_COMMANDS = [
+    "help",
+    "scan",
+    "probe",
+    "recover",
+    "drv",
+    "dirty",
+    "resync",
+    "read",
+    "verbose",
+    "stress",
+]
+
+REQUIRED_FRAGMENTS = [
+    "persistentConfigDirty",
+    "persistentConfigDirtyError",
+    "persistentConfigDirtyError message",
+    "resyncNeeded",
+    "resyncPersistentConfig",
+    "Write persistent custom register (bench only)",
+    "Write persistent interval",
+    "Write persistent CO2 offset",
+    "Write persistent CO2 gain",
+]
+
+REQUIRED_PATTERNS = {
+    "dirty help entry": r'printHelpItem\(\s*"dirty"\s*,',
+    "resync help entry": r'printHelpItem\(\s*"resync"\s*,',
+    "dirty command dispatch": r'trimmed\s*==\s*"dirty"',
+    "resync command dispatch": r'trimmed\s*==\s*"resync"',
+    "dirty accessor": r"persistentConfigDirty",
+    "dirty error accessor": r"persistentConfigDirtyError",
+    "resync API": r"resyncPersistentConfig",
+    "driver health dirty output": r"void\s+printDriverHealth\s*\([^)]*\)\s*\{[\s\S]*?printPersistentDirtyFields\s*\(\s*settings\s*\)",
+    "status dirty summary": r"hasCo2Error\(\):[\s\S]*?printPersistentDirtySummaryIfDirty\s*\(",
+    "resync before after output": r'trimmed\s*==\s*"resync"[\s\S]*?Before:[\s\S]*?resyncPersistentConfig\s*\(\s*\)[\s\S]*?After:',
+    "dirty error code detail output": r"persistentConfigDirtyError:[\s\S]*?code=%u,\s*detail=%ld",
+}
 
 
 def fail(msg: str) -> None:
@@ -57,6 +94,14 @@ def main() -> int:
     for cmd in MANDATORY_COMMANDS:
         if re.search(rf"\b{re.escape(cmd)}\b", text) is None:
             fail(f"mandatory command '{cmd}' missing in {bringup_main.as_posix()}")
+
+    for fragment in REQUIRED_FRAGMENTS:
+        if fragment not in text:
+            fail(f"mandatory CLI dirty diagnostic fragment '{fragment}' missing")
+
+    for label, pattern in REQUIRED_PATTERNS.items():
+        if re.search(pattern, text) is None:
+            fail(f"missing {label} in {bringup_main.as_posix()}")
 
     if re.search(r"\bcfg\b", text) is None and re.search(r"\bsettings\b", text) is None:
         fail("either 'cfg' or 'settings' command must be present")

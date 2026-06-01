@@ -162,8 +162,25 @@ includes the same diagnostics. `resyncPersistentConfig()` re-reads the
 persistent fields and clears the dirty state only after the values are readable
 and coherent; unrelated successful reads do not clear it.
 
+The bring-up CLIs expose this through safe diagnostic commands:
+
+```text
+dirty
+resync
+```
+
+`dirty` prints `persistentConfigDirty`, the original dirty error status
+code/detail/message, and whether resync is needed. `resync` prints dirty state
+before and after calling `resyncPersistentConfig()`; it does not perform
+arbitrary writes and does not clear dirty state unless the core API reports
+successful verified resync. Normal safe commands such as `probe`, `status`,
+`read`, `selftest`, `stress`, and `stress_mix` should not create persistent
+dirty state.
+
 Treat persistent writes such as measurement interval, part name, CO2 offset,
-and CO2 gain as maintenance operations. They can have longer latency than
+and CO2 gain as maintenance operations. The CLI `reg write <addr> <value>`
+command can write arbitrary custom memory, including persistent/configuration
+addresses, and is bench-only. These operations can have longer latency than
 normal reads and may have sensor flash/endurance implications.
 
 ## Threading, ISR, And Callback Contract

@@ -324,6 +324,50 @@ void printStatus(const EE871::Status& st) {
   }
 }
 
+void printPersistentDirtyFields(const EE871::SettingsSnapshot& settings) {
+  const bool dirty = settings.persistentConfigDirty;
+  const EE871::Status dirtyErr = settings.persistentConfigDirtyError;
+  Serial.printf("  persistentConfigDirty: %s%s%s\n",
+                dirty ? LOG_COLOR_RED : LOG_COLOR_GREEN,
+                dirty ? "yes" : "no",
+                LOG_COLOR_RESET);
+  Serial.printf("  persistentConfigDirtyError: %s (code=%u, detail=%ld)\n",
+                errToStr(dirtyErr.code),
+                static_cast<unsigned>(dirtyErr.code),
+                static_cast<long>(dirtyErr.detail));
+  Serial.printf("  persistentConfigDirtyError message: %s\n",
+                (dirtyErr.msg && dirtyErr.msg[0]) ? dirtyErr.msg : "<none>");
+  Serial.printf("  resyncNeeded: %s%s%s\n",
+                dirty ? LOG_COLOR_RED : LOG_COLOR_GREEN,
+                dirty ? "yes" : "no",
+                LOG_COLOR_RESET);
+}
+
+void printPersistentDirtyState(const char* title) {
+  if (title != nullptr && title[0] != '\0') {
+    Serial.println(title);
+  }
+  EE871::SettingsSnapshot settings;
+  const EE871::Status snapshotStatus = device.getSettings(settings);
+  if (!snapshotStatus.ok()) {
+    printStatus(snapshotStatus);
+    return;
+  }
+  printPersistentDirtyFields(settings);
+}
+
+void printPersistentDirtySummaryIfDirty() {
+  EE871::SettingsSnapshot settings;
+  const EE871::Status snapshotStatus = device.getSettings(settings);
+  if (!snapshotStatus.ok()) {
+    printStatus(snapshotStatus);
+    return;
+  }
+  if (settings.persistentConfigDirty) {
+    printPersistentDirtyFields(settings);
+  }
+}
+
 bool ensureProbeOk() {
   auto st = device.probe();
   if (!st.ok()) {
@@ -407,6 +451,7 @@ void printDriverHealth() {
       Serial.printf("  Error msg: %s\n", lastErr.msg);
     }
   }
+  printPersistentDirtyFields(settings);
 }
 
 /// Print help
@@ -421,6 +466,8 @@ void printHelp() {
   cli::printHelpItem("probe", "Probe device (no health tracking)");
   cli::printHelpItem("recover", "Attempt recovery");
   cli::printHelpItem("drv", "Show driver state and health");
+  cli::printHelpItem("dirty", "Show persistent dirty-state diagnostics");
+  cli::printHelpItem("resync", "Verify persistent config; clear dirty on success");
   cli::printHelpItem("read", "Read CO2 average");
   cli::printHelpItem("cfg / settings", "Show driver state and feature flags");
   cli::printHelpItem("verbose [0|1]", "Toggle bus trace output (no args = show)");
@@ -435,7 +482,7 @@ void printHelp() {
   cli::printHelpItem("co2avg", "Read MV4 (averaged)");
   cli::printHelpItem("error", "Read error code (if status indicates error)");
   cli::printHelpItem("reg read <addr>", "Read custom register (0x00..0xFF)");
-  cli::printHelpItem("reg write <addr> <value>", "Write custom register and verify");
+  cli::printHelpItem("reg write <addr> <value>", "Write persistent custom register (bench only)");
   cli::printHelpItem("reg dump [start] [len]", "Dump custom registers (default all)");
   cli::printHelpItem("ctrl <main_nibble>", "Raw readControlByte(main_nibble)");
   cli::printHelpItem("u16 <main_lo> <main_hi>", "Raw readU16(main_lo, main_hi)");
@@ -447,28 +494,28 @@ void printHelp() {
   cli::printHelpItem("features", "Read feature support flags");
   cli::printHelpItem("serial", "Read serial number");
   cli::printHelpItem("partname", "Read part name");
-  cli::printHelpItem("partname <text>", "Write part name (16 bytes max)");
+  cli::printHelpItem("partname <text>", "Write persistent part name (16 bytes max)");
 
   cli::printHelpSection("Configuration");
   cli::printHelpItem("addr", "Read current bus address");
-  cli::printHelpItem("addr <0-7>", "Write bus address (needs power cycle)");
+  cli::printHelpItem("addr <0-7>", "Write persistent bus address (power cycle)");
   cli::printHelpItem("interval", "Read measurement interval");
-  cli::printHelpItem("interval <dec>", "Write interval (150..36000 deciseconds)");
+  cli::printHelpItem("interval <dec>", "Write persistent interval (150..36000 ds)");
   cli::printHelpItem("factor", "Read CO2 interval factor");
-  cli::printHelpItem("factor <val>", "Write CO2 interval factor");
+  cli::printHelpItem("factor <val>", "Write persistent CO2 interval factor");
   cli::printHelpItem("filter", "Read CO2 filter setting");
-  cli::printHelpItem("filter <val>", "Write CO2 filter");
+  cli::printHelpItem("filter <val>", "Write persistent CO2 filter");
   cli::printHelpItem("mode", "Read operating mode");
-  cli::printHelpItem("mode <val>", "Write operating mode (0..3)");
+  cli::printHelpItem("mode <val>", "Write persistent operating mode (0..3)");
 
   cli::printHelpSection("Calibration");
   cli::printHelpItem("offset", "Read CO2 offset (ppm)");
-  cli::printHelpItem("offset <val>", "Write CO2 offset (signed)");
+  cli::printHelpItem("offset <val>", "Write persistent CO2 offset (signed)");
   cli::printHelpItem("gain", "Read CO2 gain");
-  cli::printHelpItem("gain <val>", "Write CO2 gain");
+  cli::printHelpItem("gain <val>", "Write persistent CO2 gain");
   cli::printHelpItem("calpoints", "Read last calibration points");
   cli::printHelpItem("autoadj", "Read auto-adjust status");
-  cli::printHelpItem("autoadj start", "Start auto-adjustment (~5 min)");
+  cli::printHelpItem("autoadj start", "Start config-changing auto-adjustment (~5 min)");
 
   cli::printHelpSection("Bus Safety");
   cli::printHelpItem("buscheck", "Check if bus is idle");
@@ -898,6 +945,16 @@ void processCommand(const String& cmd) {
     LOGI("Probing device (no health tracking)...");
     auto st = device.probe();
     printStatus(st);
+  } else if (trimmed == "dirty") {
+    printPersistentDirtyState("=== Persistent Config Dirty State ===");
+  } else if (trimmed == "resync") {
+    Serial.println("=== Persistent Config Resync ===");
+    Serial.println("Before:");
+    printPersistentDirtyState(nullptr);
+    auto st = device.resyncPersistentConfig();
+    printStatus(st);
+    Serial.println("After:");
+    printPersistentDirtyState(nullptr);
   } else if (trimmed == "id") {
     uint16_t group = 0;
     uint8_t subgroup = 0;
@@ -932,6 +989,7 @@ void processCommand(const String& cmd) {
                         EE871::cmd::co2ErrorCodeName(code));
         }
       }
+      printPersistentDirtySummaryIfDirty();
     }
   } else if (trimmed == "co2fast") {
     uint16_t ppm = 0;

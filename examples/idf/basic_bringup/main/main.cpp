@@ -436,6 +436,50 @@ void printStatus(const EE871::Status& st) {
   }
 }
 
+void printPersistentDirtyFields(const EE871::SettingsSnapshot& settings) {
+  const bool dirty = settings.persistentConfigDirty;
+  const EE871::Status dirtyErr = settings.persistentConfigDirtyError;
+  std::printf("  persistentConfigDirty: %s%s%s\n",
+              dirty ? LOG_COLOR_RED : LOG_COLOR_GREEN,
+              dirty ? "yes" : "no",
+              LOG_COLOR_RESET);
+  std::printf("  persistentConfigDirtyError: %s (code=%u, detail=%ld)\n",
+              errToStr(dirtyErr.code),
+              static_cast<unsigned>(dirtyErr.code),
+              static_cast<long>(dirtyErr.detail));
+  std::printf("  persistentConfigDirtyError message: %s\n",
+              (dirtyErr.msg != nullptr && dirtyErr.msg[0] != '\0') ? dirtyErr.msg : "<none>");
+  std::printf("  resyncNeeded: %s%s%s\n",
+              dirty ? LOG_COLOR_RED : LOG_COLOR_GREEN,
+              dirty ? "yes" : "no",
+              LOG_COLOR_RESET);
+}
+
+void printPersistentDirtyState(const char* title) {
+  if (title != nullptr && title[0] != '\0') {
+    std::printf("%s\n", title);
+  }
+  EE871::SettingsSnapshot settings;
+  const EE871::Status snapshotStatus = device.getSettings(settings);
+  if (!snapshotStatus.ok()) {
+    printStatus(snapshotStatus);
+    return;
+  }
+  printPersistentDirtyFields(settings);
+}
+
+void printPersistentDirtySummaryIfDirty() {
+  EE871::SettingsSnapshot settings;
+  const EE871::Status snapshotStatus = device.getSettings(settings);
+  if (!snapshotStatus.ok()) {
+    printStatus(snapshotStatus);
+    return;
+  }
+  if (settings.persistentConfigDirty) {
+    printPersistentDirtyFields(settings);
+  }
+}
+
 bool ensureProbeOk() {
   auto st = device.probe();
   if (!st.ok()) {
@@ -512,6 +556,7 @@ void printDriverHealth() {
       std::printf("  Error msg: %s\n", lastErr.msg);
     }
   }
+  printPersistentDirtyFields(settings);
 }
 
 void printHelpSection(const char* title) {
@@ -538,6 +583,8 @@ void printHelp() {
   printHelpItem("probe", "Probe device (no health tracking)");
   printHelpItem("recover", "Attempt recovery");
   printHelpItem("drv", "Show driver state and health");
+  printHelpItem("dirty", "Show persistent dirty-state diagnostics");
+  printHelpItem("resync", "Verify persistent config; clear dirty on success");
   printHelpItem("read", "Read CO2 average");
   printHelpItem("cfg / settings", "Show driver state and feature flags");
   printHelpItem("verbose [0|1]", "Toggle bus trace output (no args = show)");
@@ -552,7 +599,7 @@ void printHelp() {
   printHelpItem("co2avg", "Read MV4 (averaged)");
   printHelpItem("error", "Read error code (if status indicates error)");
   printHelpItem("reg read <addr>", "Read custom register (0x00..0xFF)");
-  printHelpItem("reg write <addr> <value>", "Write custom register and verify");
+  printHelpItem("reg write <addr> <value>", "Write persistent custom register (bench only)");
   printHelpItem("reg dump [start] [len]", "Dump custom registers (default all)");
   printHelpItem("ctrl <main_nibble>", "Raw readControlByte(main_nibble)");
   printHelpItem("u16 <main_lo> <main_hi>", "Raw readU16(main_lo, main_hi)");
@@ -564,28 +611,28 @@ void printHelp() {
   printHelpItem("features", "Read feature support flags");
   printHelpItem("serial", "Read serial number");
   printHelpItem("partname", "Read part name");
-  printHelpItem("partname <text>", "Write part name (16 bytes max)");
+  printHelpItem("partname <text>", "Write persistent part name (16 bytes max)");
 
   printHelpSection("Configuration");
   printHelpItem("addr", "Read current bus address");
-  printHelpItem("addr <0-7>", "Write bus address (needs power cycle)");
+  printHelpItem("addr <0-7>", "Write persistent bus address (power cycle)");
   printHelpItem("interval", "Read measurement interval");
-  printHelpItem("interval <dec>", "Write interval (150..36000 deciseconds)");
+  printHelpItem("interval <dec>", "Write persistent interval (150..36000 ds)");
   printHelpItem("factor", "Read CO2 interval factor");
-  printHelpItem("factor <val>", "Write CO2 interval factor");
+  printHelpItem("factor <val>", "Write persistent CO2 interval factor");
   printHelpItem("filter", "Read CO2 filter setting");
-  printHelpItem("filter <val>", "Write CO2 filter");
+  printHelpItem("filter <val>", "Write persistent CO2 filter");
   printHelpItem("mode", "Read operating mode");
-  printHelpItem("mode <val>", "Write operating mode (0..3)");
+  printHelpItem("mode <val>", "Write persistent operating mode (0..3)");
 
   printHelpSection("Calibration");
   printHelpItem("offset", "Read CO2 offset (ppm)");
-  printHelpItem("offset <val>", "Write CO2 offset (signed)");
+  printHelpItem("offset <val>", "Write persistent CO2 offset (signed)");
   printHelpItem("gain", "Read CO2 gain");
-  printHelpItem("gain <val>", "Write CO2 gain");
+  printHelpItem("gain <val>", "Write persistent CO2 gain");
   printHelpItem("calpoints", "Read last calibration points");
   printHelpItem("autoadj", "Read auto-adjust status");
-  printHelpItem("autoadj start", "Start auto-adjustment (~5 min)");
+  printHelpItem("autoadj start", "Start config-changing auto-adjustment (~5 min)");
 
   printHelpSection("Bus Safety");
   printHelpItem("buscheck", "Check if bus is idle");
@@ -1792,6 +1839,16 @@ void processCommand(const char* input) {
     logInfo("Probing device (no health tracking)...");
     auto st = device.probe();
     printStatus(st);
+  } else if (std::strcmp(trimmed, "dirty") == 0) {
+    printPersistentDirtyState("=== Persistent Config Dirty State ===");
+  } else if (std::strcmp(trimmed, "resync") == 0) {
+    std::printf("=== Persistent Config Resync ===\n");
+    std::printf("Before:\n");
+    printPersistentDirtyState(nullptr);
+    auto st = device.resyncPersistentConfig();
+    printStatus(st);
+    std::printf("After:\n");
+    printPersistentDirtyState(nullptr);
   } else if (std::strcmp(trimmed, "id") == 0) {
     uint16_t group = 0;
     uint8_t subgroup = 0;
@@ -1829,6 +1886,7 @@ void processCommand(const char* input) {
                       EE871::cmd::co2ErrorCodeName(code));
         }
       }
+      printPersistentDirtySummaryIfDirty();
     }
   } else if (std::strcmp(trimmed, "co2fast") == 0) {
     uint16_t ppm = 0;

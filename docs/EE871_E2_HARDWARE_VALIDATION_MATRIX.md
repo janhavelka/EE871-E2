@@ -26,6 +26,7 @@ Safe non-persistent sequence:
 ```text
 version
 drv
+dirty
 buscheck
 levels
 probe
@@ -39,8 +40,12 @@ caps
 fw
 e2spec
 selftest
+dirty
 stress_mix 20
+dirty
 recover
+resync
+dirty
 drv
 ```
 
@@ -52,6 +57,12 @@ Notes:
 - `probe` is diagnostic-only and should not change health counters.
 - `status` can trigger a new EE871 measurement when the previous sample is old.
 - `read` reads the CO2 averaged value; `co2fast` reads MV3; `co2avg` reads MV4.
+- `dirty` is state-only and should report `persistentConfigDirty: no` on a
+  clean startup and after normal safe commands.
+- `resync` calls `resyncPersistentConfig()`. It performs verified persistent
+  configuration reads and must only clear dirty state when that API returns OK.
+- Normal `probe`, `read`, `selftest`, `stress`, and `stress_mix` commands should
+  not create persistent dirty state.
 - Record raw command output and timestamps for each board/sensor combination.
 
 Persistent-write commands are bench-only:
@@ -73,6 +84,7 @@ filter
 filter <value>
 mode
 mode <0..3>
+reg write <addr> <value>
 autoadj start
 ```
 
@@ -83,13 +95,13 @@ Warnings before persistent writes:
 - Persistent writes can have long delays and flash/endurance implications.
 - Only run persistent-write tests on a bench sensor where configuration changes
   are acceptable and the original values have been recorded.
-- After any failed multi-byte persistent write, check dirty diagnostics through
-  library instrumentation or a dedicated application wrapper before trusting
-  persistent configuration.
-- The current bring-up CLI does not expose `persistentConfigDirty()`,
-  `persistentConfigDirtyError()`, or `resyncPersistentConfig()` directly. Hardware
-  validation of those diagnostics requires a small API-level test firmware or a
-  future CLI command.
+- `reg write <addr> <value>` can write arbitrary custom memory, including
+  persistent/configuration addresses; treat it as a bench-only operation.
+- After any failed multi-byte persistent write, run `dirty` before trusting
+  persistent configuration. Use `resync` only to clear dirty state after the
+  driver confirms persistent fields are readable and coherent.
+- Induce or observe dirty state through the fake/native tests or dedicated test
+  firmware unless deliberately running the bench persistent-write matrix below.
 
 ## Board Matrix
 
@@ -104,7 +116,7 @@ Warnings before persistent writes:
 
 | ID | Scenario | Board(s) | CLI/API sequence | Expected behavior | Status | Evidence to capture |
 | --- | --- | --- | --- | --- | --- | --- |
-| F-01 | Power-up `begin()` with sensor present | S2, S3 | Power cycle, open monitor, inspect boot output, `drv` | Device initializes or reports a precise non-OK `Status`; driver state is READY on success. | NOT RUN | Boot log, `drv` output. |
+| F-01 | Power-up `begin()` with sensor present | S2, S3 | Power cycle, open monitor, inspect boot output, `drv`, `dirty` | Device initializes or reports a precise non-OK `Status`; driver state is READY on success and persistent dirty state is clean. | NOT RUN | Boot log, `drv` and `dirty` output. |
 | F-02 | Probe no-health-side-effects | S2, S3 | `drv`, `probe`, `drv` | Successful or failed `probe` does not change health counters/state. | NOT RUN | Before/after `drv` output. |
 | F-03 | Status read | S2, S3 | `status`, `drv` | Status byte read completes or returns bounded error; tracked success/failure updates health as documented. | NOT RUN | `status` output and health counters. |
 | F-04 | CO2 averaged read | S2, S3 | `read`, `co2avg` | MV4 averaged value is reported, or a precise bounded error is returned. | NOT RUN | CO2 ppm values and status. |
@@ -113,9 +125,10 @@ Warnings before persistent writes:
 | F-07 | Feature/cache sanity | S2, S3 | `features`, `caps`, `cfg` | Capability output is internally consistent and guards unsupported writes. | NOT RUN | Feature bytes and booleans. |
 | F-08 | Warm-up behavior | S2, S3 | Power cycle, run `status`, `read`, `co2avg` every 30 s during first 10 min | Operator/application validation treats readings as warm-up data until EE871 warm-up has elapsed. | NOT RUN | Timestamped ppm trend. |
 | F-09 | Stale sample behavior | S2, S3 | Compare `status`, wait 5-10 s, `co2avg`, repeat after >10 s | Status-triggered measurement behavior and sample freshness are observable and documented. | NOT RUN | Timestamped status/CO2 output. |
-| F-10 | Safe self-test | S2, S3 | `selftest` | Safe commands complete with expected pass/fail report; no persistent settings are changed. | NOT RUN | Self-test report. |
-| F-11 | Mixed read stress | S2, S3 | `stress_mix 100` | No hangs; failures, if any, are bounded and health counters match output. | NOT RUN | Stress summary. |
-| F-12 | Repeated CO2 read stress | S2, S3 | `stress 100` | No hangs; CO2 read success rate and health counters are recorded. | NOT RUN | Stress summary. |
+| F-10 | Safe self-test | S2, S3 | `dirty`, `selftest`, `dirty` | Safe commands complete with expected pass/fail report; no persistent settings are changed and persistent dirty remains clean. | NOT RUN | Self-test report and before/after dirty output. |
+| F-11 | Mixed read stress | S2, S3 | `dirty`, `stress_mix 100`, `dirty` | No hangs; failures, if any, are bounded and health counters match output; persistent dirty remains clean. | NOT RUN | Stress summary and dirty output. |
+| F-12 | Repeated CO2 read stress | S2, S3 | `dirty`, `stress 100`, `dirty` | No hangs; CO2 read success rate and health counters are recorded; persistent dirty remains clean. | NOT RUN | Stress summary and dirty output. |
+| F-13 | Dirty resync command on coherent config | S2, S3 | `dirty`, `resync`, `dirty` | `resync` returns precise status; if OK, dirty remains or becomes clean only through `resyncPersistentConfig()`. | NOT RUN | Before/resync/after dirty output. |
 
 ## Persistent Configuration Matrix
 
@@ -123,11 +136,11 @@ Run these only on a bench sensor after recording original values.
 
 | ID | Scenario | Board(s) | CLI/API sequence | Expected behavior | Status | Evidence to capture |
 | --- | --- | --- | --- | --- | --- | --- |
-| P-01 | Measurement interval write/readback | S2, S3 | `interval`, record value, `interval <bench_value>`, `interval` | Write returns OK and readback matches; on failure, persistent dirty diagnostics must be checked by the application. | NOT RUN | Before/write/after output. |
+| P-01 | Measurement interval write/readback | S2, S3 | `interval`, `dirty`, record value, `interval <bench_value>`, `interval`, `dirty` | Write returns OK and readback matches; on failure, `dirty` reports whether persistent state may be partial. | NOT RUN | Before/write/after output plus dirty diagnostics. |
 | P-02 | Measurement interval power-cycle persistence | S2, S3 | Run P-01, power cycle sensor and MCU, `interval` | Value persists across power cycle or documented sensor behavior explains difference. | NOT RUN | Pre/post power-cycle output. |
-| P-03 | CO2 offset write/readback | S2, S3 | `offset`, record value, `offset <bench_value>`, `offset` | Write returns OK and readback matches; dirty diagnostics checked on failure. | NOT RUN | Before/write/after output. |
-| P-04 | CO2 gain write/readback | S2, S3 | `gain`, record value, `gain <bench_value>`, `gain` | Write returns OK and readback matches; dirty diagnostics checked on failure. | NOT RUN | Before/write/after output. |
-| P-05 | Part name write/readback | S2, S3 | `partname`, record value, `partname <bench_text>`, `partname` | Write returns OK and readback matches. | NOT RUN | Before/write/after output. |
+| P-03 | CO2 offset write/readback | S2, S3 | `offset`, `dirty`, record value, `offset <bench_value>`, `offset`, `dirty` | Write returns OK and readback matches; dirty diagnostics checked on failure. | NOT RUN | Before/write/after output plus dirty diagnostics. |
+| P-04 | CO2 gain write/readback | S2, S3 | `gain`, `dirty`, record value, `gain <bench_value>`, `gain`, `dirty` | Write returns OK and readback matches; dirty diagnostics checked on failure. | NOT RUN | Before/write/after output plus dirty diagnostics. |
+| P-05 | Part name write/readback | S2, S3 | `partname`, `dirty`, record value, `partname <bench_text>`, `partname`, `dirty` | Write returns OK and readback matches; dirty diagnostics checked on failure. | NOT RUN | Before/write/after output plus dirty diagnostics. |
 | P-06 | Bus address write | S2, S3 | `addr`, record value, `addr <bench_addr>`, power cycle, `scan`; then rebuild/reconfigure firmware for the new address or use a dedicated test wrapper | Address change behaves as documented and does not retarget the current session until power cycle. | NOT RUN | Address read/scan output, configured-address follow-up output. |
 
 ## Fault And Recovery Matrix
