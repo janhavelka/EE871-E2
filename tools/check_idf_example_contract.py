@@ -36,6 +36,7 @@ IDF_REQUIRED_FRAGMENTS = [
     "persistentConfigDirty",
     "persistentConfigDirtyError",
     "persistentConfigDirtyError message",
+    "resyncNeeded",
     "resyncPersistentConfig",
     "Write persistent custom register (bench only)",
     "Write persistent interval",
