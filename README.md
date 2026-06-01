@@ -244,10 +244,26 @@ Hardware validation has not been run in this hardening pass. Use
 `docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md` for the safe CLI recipe,
 bench-only persistent-write warnings, and per-board validation matrix.
 
+For repeatable serial HIL evidence, build and upload the diagnostic CLI, then
+run:
+
+```bash
+python tools/ee871_hil_runner.py --port COMx
+python tools/ee871_hil_runner.py --port COMx --include-extended
+python tools/ee871_hil_runner.py --port COMx --include-unplug-replug
+python tools/ee871_hil_runner.py --port COMx --include-persistent-writes --confirm-persistent-writes
+```
+
+The default runner sequence is non-persistent and records `version`, `help`,
+`probe`, `read`, `selftest`, `drv`, `dirty`, `stress 50`, final `drv`, and
+final `dirty`. It writes a raw transcript, `summary.json`, and `summary.md`.
+Dry-runs and operator/fault steps are never reported as hardware `PASS`.
+
 ## Documentation
 
 - `CHANGELOG.md` - full release history
 - `docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md` - hardware validation plan and CLI recipe
+- `docs/EE871_E2_HIL_RUNNER.md` - automatic serial HIL runner usage and verdict rules
 - `docs/IDF_PORT.md` - ESP-IDF portability and validation guidance
 - `docs/IDF_PORT_IMPLEMENTATION.md` - ESP-IDF implementation notes
 

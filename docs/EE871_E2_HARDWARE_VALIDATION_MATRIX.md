@@ -8,6 +8,13 @@ results. No EE871 hardware tests were run while creating this document. Default
 status is `NOT RUN` until a test is executed and recorded with board, firmware,
 sensor serial/part, wiring, supply, pull-ups, and observed output.
 
+For repeatable evidence capture, use `tools/ee871_hil_runner.py` after flashing
+the diagnostic CLI. The runner records a raw serial transcript, structured JSON,
+and a Markdown summary. A runner `PASS` applies only to the selected automated
+serial command groups; it does not prove CO2 accuracy, warm-up suitability,
+fault tolerance, long-soak stability, calibration validity, or production
+readiness.
+
 Allowed statuses:
 
 - `NOT RUN` - scenario has not been executed.
@@ -22,6 +29,21 @@ Use the Arduino PlatformIO CLI example or the native ESP-IDF diagnostic/basic
 bring-up CLI. Both expose the same user-visible command surface.
 
 Safe non-persistent sequence:
+
+```text
+version
+help
+probe
+read
+selftest
+drv
+dirty
+stress 50
+drv
+dirty
+```
+
+Manual expanded safe sequence:
 
 ```text
 version
@@ -64,6 +86,17 @@ Notes:
 - Normal `probe`, `read`, `selftest`, `stress`, and `stress_mix` commands should
   not create persistent dirty state.
 - Record raw command output and timestamps for each board/sensor combination.
+- The automatic equivalent for the default safe sequence is:
+
+  ```bash
+  python tools/ee871_hil_runner.py --port COMx
+  ```
+
+- Extended safe repeatability can be captured with:
+
+  ```bash
+  python tools/ee871_hil_runner.py --port COMx --include-extended
+  ```
 
 Persistent-write commands are bench-only:
 
@@ -102,6 +135,25 @@ Warnings before persistent writes:
   driver confirms persistent fields are readable and coherent.
 - Induce or observe dirty state through the fake/native tests or dedicated test
   firmware unless deliberately running the bench persistent-write matrix below.
+- The HIL runner requires both `--include-persistent-writes` and
+  `--confirm-persistent-writes` before it sends persistent write commands. It
+  rewrites the parsed current measurement interval by default, or writes
+  `--maintenance-interval <deciseconds>` when provided. CO2 offset/gain writes
+  require explicit values.
+
+Example:
+
+```bash
+python tools/ee871_hil_runner.py --port COMx --include-persistent-writes --confirm-persistent-writes
+```
+
+Operator fault flows remain review-required evidence:
+
+```bash
+python tools/ee871_hil_runner.py --port COMx --include-unplug-replug
+python tools/ee871_hil_runner.py --port COMx --include-stuck-line
+python tools/ee871_hil_runner.py --port COMx --include-power-cycle
+```
 
 ## Board Matrix
 
