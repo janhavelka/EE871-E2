@@ -325,6 +325,12 @@ Selftest result: pass=9 fail=1 skip=0
         self.assertEqual(2, runner.exit_code_for_verdict(runner.VERDICT_OPERATOR))
         self.assertEqual(3, runner.exit_code_for_verdict(runner.VERDICT_INCOMPLETE))
 
+    def test_metadata_reports_clean_worktree_for_empty_git_status(self) -> None:
+        args = runner.parse_args(["--dry-run"])
+        meta = runner.metadata(args, pathlib.Path("hil_logs/example"), "", "branch", "abcdef")
+
+        self.assertEqual("clean", meta["git_worktree"])
+
 
 if __name__ == "__main__":
     unittest.main()

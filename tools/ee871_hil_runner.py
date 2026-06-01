@@ -103,7 +103,7 @@ def last_header_section(text: str, header: str) -> str:
     return sections[-1][1] if sections else text
 
 
-def git_value(*args: str) -> str:
+def git_value(*args: str, empty_value: str = "unknown") -> str:
     try:
         result = subprocess.run(
             ["git", *args],
@@ -114,7 +114,7 @@ def git_value(*args: str) -> str:
         )
     except (OSError, subprocess.CalledProcessError):
         return "unknown"
-    return result.stdout.strip() or "unknown"
+    return result.stdout.strip() or empty_value
 
 
 def parse_status(text: str) -> dict[str, Any]:
@@ -1054,7 +1054,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     confirm_persistent_runtime(args)
     plan = build_plan(args)
-    git_status = git_value("status", "--short")
+    git_status = git_value("status", "--short", empty_value="")
     git_branch = git_value("branch", "--show-current")
     git_commit = git_value("rev-parse", "--short=12", "HEAD")
     log_dir = make_log_dir(args.output_dir)
