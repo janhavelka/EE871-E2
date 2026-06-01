@@ -411,3 +411,72 @@ Field/industry-grade verdict:
 - Not yet field/industry-grade. Production-oriented hardening is complete for
   this branch, but physical fault validation and pure IDF CI evidence remain
   required before making an industry-grade claim.
+
+## Focused IDF Verification Pass - 2026-06-01
+
+Scope:
+- Verify whether the new pure ESP-IDF build coverage is proven locally or by
+  GitHub Actions.
+- Do not refactor the driver.
+
+Starting state:
+- Branch: `hardening/ee871-e2-industry-readiness`.
+- `git status --short`: clean.
+- Latest commits before this verification update:
+  - `5335424 docs: fix EE871 hardening metadata`
+  - `4012672 test: cover EE871 gain dirty-state verify failure`
+  - `f28a20f docs: clarify EE871 hardware validation recipe`
+  - `6248111 docs: finalize EE871 industry hardening report`
+  - `80e9fbf ci: add EE871 pure ESP-IDF build coverage`
+
+CI workflow status:
+- `.github/workflows/ci.yml` contains an `idf-build` job with a matrix for
+  `esp32s3` and `esp32s2`.
+- The job runs `python tools/check_idf_example_contract.py` before the IDF
+  action build.
+- The job uses `espressif/esp-idf-ci-action@v1` with
+  `esp_idf_version: v6.0.1` and `path: examples/idf/basic_bringup`.
+- YAML syntax check passed with `yaml.safe_load(...)`: `YAML parse OK`.
+- This proves the intended CI coverage is present and the workflow parses
+  locally. It does not prove that GitHub Actions has successfully run it.
+
+GitHub Actions status:
+- `gh --version; gh auth status; gh run list --limit 5`: FAIL locally because
+  PowerShell reported `gh` is not recognized as a cmdlet, function, script file,
+  or operable program.
+- `gh run view <id> --log`: not run because `gh` is unavailable and no run ID
+  was available locally.
+- GitHub Actions IDF build results remain unknown from this workstation.
+
+Local pure ESP-IDF status:
+- `idf.py --version`: FAIL locally. PowerShell reported: `The term 'idf.py' is
+  not recognized as the name of a cmdlet, function, script file, or operable
+  program.`
+- `idf.py -C examples/idf/basic_bringup set-target esp32s3 build`: not run
+  because `idf.py` is unavailable locally.
+- `idf.py -C examples/idf/basic_bringup set-target esp32s2 build`: not run
+  because `idf.py` is unavailable locally.
+
+Verification result:
+- Pure ESP-IDF build coverage is configured in CI, but pure ESP-IDF build
+  success is still unproven.
+- Do not claim pure IDF success until either:
+  - GitHub Actions shows the `idf-build` matrix passing for `esp32s3` and
+    `esp32s2`; or
+  - local `idf.py` builds pass for both targets.
+
+Focused-pass validation commands:
+- `python tools/check_idf_example_contract.py`: PASS,
+  `IDF example contract PASSED`.
+- `python tools/check_core_timing_guard.py`: PASS,
+  `Core timing guard PASSED`.
+- `python -m platformio test -e native`: PASS, 31 test cases succeeded in
+  00:00:09.291.
+- `git diff --check`: PASS; only Git line-ending conversion warnings were
+  emitted after editing the report.
+
+Remaining gap:
+- Install/authenticate `gh` or inspect GitHub Actions through another trusted
+  channel, then record the latest `idf-build` matrix result.
+- Alternatively install ESP-IDF locally and run both `idf.py -C
+  examples/idf/basic_bringup ... build` commands.
