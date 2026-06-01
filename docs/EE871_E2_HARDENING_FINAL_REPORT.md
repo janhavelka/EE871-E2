@@ -525,14 +525,13 @@ CI status:
 
 HIL status:
 - `tools/ee871_hil_runner.py` exists and is covered by host parser tests.
-- `hil_results/`: not present in the repository at the readiness check.
-- Safe default HIL run: not recorded.
-- Extended safe HIL run: not recorded.
+- Safe ESP32-S3 HIL evidence is now recorded in the later
+  "Safe Hardware HIL Validation - 2026-06-01" section.
 - Persistent-write HIL run: not recorded and still requires explicit bench-unit
   approval.
 - Earlier attempts to start hardware HIL were stopped because PlatformIO listed
   multiple plausible USB serial ports and no target EE871 CLI port was
-  identified. No hardware PASS is claimed.
+  identified. This was later resolved with user-confirmed `COM17`.
 
 Current validation commands:
 - `python tools/check_core_timing_guard.py`: PASS, `Core timing guard PASSED`.
@@ -554,8 +553,8 @@ Current validation commands:
 Remaining gaps:
 - Trigger and record GitHub Actions for this branch, including the pure-IDF
   `idf-build` matrix for `esp32s3` and `esp32s2`.
-- Run the safe default and extended safe HIL runner on the actual EE871 CLI
-  serial port and commit the text/JSON/Markdown evidence if reasonably sized.
+- Run ESP32-S2 hardware HIL and pure ESP-IDF hardware HIL if those targets are
+  required for the release evidence set.
 - Run persistent-write hardware validation only after explicit bench-unit
   approval, recording baseline values and restoration.
 - Run physical fault/jig validation for stuck SCL/SDA, no response, and
@@ -564,14 +563,94 @@ Remaining gaps:
   commit is made.
 
 Merge readiness verdict:
-- Not ready for an evidence-backed merge yet. Local guards and PlatformIO builds
-  pass, but the branch still lacks a GitHub Actions run and real HIL evidence.
+- Closer, but not fully evidence-backed yet. Local guards, PlatformIO builds,
+  and ESP32-S3 safe HIL pass; the branch still lacks GitHub Actions proof and
+  broader hardware/fault evidence.
 
 Release readiness verdict:
-- Not release-ready. Release is blocked on CI proof, hardware HIL evidence, a
-  major-version release decision, and final release notes/tag instructions.
+- Not release-ready. Release is still blocked on CI proof, persistent-write or
+  release-level hardware evidence as required, a major-version release
+  decision, and final release notes/tag instructions.
 
 Field/industry-grade verdict:
 - Not ready to claim industry-grade. The codebase is materially hardened, but
-  CI proof, real hardware HIL, persistent-write bench validation, and physical
-  fault validation remain open.
+  CI proof, persistent-write bench validation, ESP32-S2/ESP-IDF hardware
+  coverage, and physical fault validation remain open.
+
+## Safe Hardware HIL Validation - 2026-06-01
+
+Scope:
+- Run the safe default and extended non-persistent EE871 HIL runner on real
+  hardware.
+- Do not run persistent-write tests.
+- Record actual evidence in `hil_results/` and update the hardware validation
+  matrix.
+
+Hardware and firmware:
+- Serial port: `COM17`.
+- PlatformIO device list identified `COM17` as USB VID:PID `303A:1001`, serial
+  `1C:DB:D4:80:C9:40`.
+- Target: ESP32-S3, PlatformIO environment `ex_bringup_s3`.
+- Upload command used before final evidence capture:
+  `python -m platformio run -e ex_bringup_s3 -j 1 -t upload --upload-port COM17`.
+- Firmware build: `Jun  1 2026 20:57:04`.
+- EE871 library: `0.3.0 (84a46b6, 2026-06-01 20:57:01, clean)`.
+
+Runner correction before evidence:
+- The first post-upload HIL attempt showed the ESP32-S3 serial reset boot text
+  could offset the first commands. `tools/ee871_hil_runner.py` was updated to
+  wait for the CLI prompt during startup synchronization.
+- Regression coverage was added in `test/test_hil_runner_parser.py`.
+- Commit: `84a46b6 test: sync EE871 HIL runner after serial reset`.
+
+Safe default HIL result:
+- Command:
+  `python tools/ee871_hil_runner.py --port COM17 --baud 115200 --output-dir hil_results/safe_default`
+- Final verdict: PASS.
+- Counts: 10 PASS, 0 FAIL, 0 SKIP, 0 OPERATOR_REVIEW_REQUIRED.
+- Covered commands: `version`, `help`, `probe`, `read`, `selftest`, `drv`,
+  `dirty`, `stress 50`, `drv`, `dirty`.
+- Key results: `read` Status OK with CO2 avg `567 ppm`; `probe` Status OK;
+  `selftest` pass=27 fail=0 skip=0; `drv` READY/online yes/zero consecutive
+  failures; `stress 50` success=50 errors=0; persistent dirty stayed clean.
+- Artifacts:
+  - `hil_results/safe_default/ee871_20260601T185912Z/serial_transcript.txt`
+  - `hil_results/safe_default/ee871_20260601T185912Z/summary.json`
+  - `hil_results/safe_default/ee871_20260601T185912Z/summary.md`
+
+Extended safe HIL result:
+- Command:
+  `python tools/ee871_hil_runner.py --port COM17 --baud 115200 --include-extended --output-dir hil_results/extended_safe`
+- Final verdict: PASS.
+- Counts: 33 PASS, 0 FAIL, 0 SKIP, 0 OPERATOR_REVIEW_REQUIRED.
+- Covered commands include the safe default sequence, `stress 500`, ten repeated
+  `read` commands, three `probe`/`read`/`selftest` cycles, `recover`, `drv`,
+  and `dirty`.
+- Key results: `stress 500` success=500 errors=0; repeated reads returned
+  Status OK; repeated selftests reported pass=27 fail=0 skip=0; final driver
+  state READY/online yes/zero consecutive failures; persistent dirty stayed
+  clean.
+- Artifacts:
+  - `hil_results/extended_safe/ee871_20260601T185921Z/serial_transcript.txt`
+  - `hil_results/extended_safe/ee871_20260601T185921Z/summary.json`
+  - `hil_results/extended_safe/ee871_20260601T185921Z/summary.md`
+
+Manual resync check:
+- Commands: `dirty`, `resync`, `dirty`.
+- Final verdict: PASS.
+- Result: pre-resync dirty clean, `resync` Status OK, post-resync dirty clean.
+- Artifacts:
+  - `hil_results/manual_resync/ee871_20260601T190024Z/serial_transcript.txt`
+  - `hil_results/manual_resync/ee871_20260601T190024Z/summary.json`
+  - `hil_results/manual_resync/ee871_20260601T190024Z/summary.md`
+
+CLI alias note:
+- Help advertises `version / ver`; it does not advertise `rv`.
+- No `rv` alias was added because the current documented command surface is
+  clear and the HIL flow does not depend on `rv`.
+
+Remaining hardware gaps after this pass:
+- Persistent-write validation was not run.
+- Physical fault/jig validation was not run.
+- ESP32-S2 hardware HIL was not run.
+- Pure ESP-IDF hardware HIL was not run.

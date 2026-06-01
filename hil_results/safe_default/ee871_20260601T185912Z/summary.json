@@ -1,0 +1,327 @@
+{
+  "metadata": {
+    "tool": "ee871_hil_runner.py",
+    "tool_version": "1.0",
+    "timestamp_utc": "2026-06-01T18:59:12Z",
+    "port": "COM17",
+    "baud": 115200,
+    "timeout_s": 8.0,
+    "command_timeout_s": 20.0,
+    "idle_s": 0.35,
+    "output_dir": "hil_results\\safe_default\\ee871_20260601T185912Z",
+    "dry_run": false,
+    "board": "unspecified",
+    "target_name": "unspecified",
+    "operator": "unspecified",
+    "expected_device_address": 0,
+    "git_branch": "hardening/ee871-e2-industry-readiness",
+    "git_commit": "84a46b694c8b",
+    "git_worktree": "clean"
+  },
+  "final_verdict": "PASS",
+  "counts": {
+    "PASS": 10,
+    "FAIL": 0,
+    "SKIP": 0,
+    "OPERATOR_REVIEW_REQUIRED": 0
+  },
+  "parsed_state": {
+    "firmware_build": "Jun  1 2026 20:57:04",
+    "library_version": "0.3.0",
+    "library_full": "0.3.0 (84a46b6, 2026-06-01 20:57:01, clean)",
+    "library_build": "2026-06-01 20:57:01",
+    "library_commit": "84a46b6",
+    "library_git_status": "clean",
+    "last_selftest": {
+      "pass": 27,
+      "fail": 0,
+      "skip": 0
+    },
+    "driver_state": "READY",
+    "online": true,
+    "consecutive_failures": 0,
+    "total_success": 174,
+    "total_failures": 0,
+    "persistent_config_dirty": false,
+    "resync_needed": false,
+    "last_stress": {
+      "kind": "stress",
+      "total": 50,
+      "success": 50,
+      "errors": 0
+    }
+  },
+  "initial_serial_output_present": true,
+  "claim_boundary": "PASS is limited to the selected automated serial EE871 CLI command groups. It does not prove CO2 accuracy, warm-up suitability, persistent-write safety, fault tolerance, long-soak stability, calibration validity, or production readiness.",
+  "commands": [
+    {
+      "command": "version",
+      "planned_command": "version",
+      "description": "Print firmware and library version.",
+      "group": "safe",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.001,
+      "wait_reason": "prompt",
+      "destructive": false,
+      "operator_required": false,
+      "requires_opt_in": null,
+      "notes": "",
+      "parsed": {
+        "firmware_build": "Jun  1 2026 20:57:04",
+        "library_version": "0.3.0",
+        "library_full": "0.3.0 (84a46b6, 2026-06-01 20:57:01, clean)",
+        "library_build": "2026-06-01 20:57:01",
+        "library_commit": "84a46b6",
+        "library_git_status": "clean",
+        "command": "version"
+      },
+      "clean_excerpt": "=== Version Info ===\r\n  Example firmware build: Jun  1 2026 20:57:04\n  EE871 library version: 0.3.0\n  EE871 library full: 0.3.0 (84a46b6, 2026-06-01 20:57:01, clean)\n  EE871 library build: 2026-06-01 20:57:01\n  EE871 library commit: 84a46b6 (clean)\n  Sensor firmware: use command 'fw'\r\n> "
+    },
+    {
+      "command": "help",
+      "planned_command": "help",
+      "description": "Capture CLI command surface.",
+      "group": "safe",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.012,
+      "wait_reason": "prompt",
+      "destructive": false,
+      "operator_required": false,
+      "requires_opt_in": null,
+      "notes": "",
+      "parsed": {
+        "command": "help"
+      },
+      "clean_excerpt": "  - Write persistent CO2 filter\n  mode                             - Read operating mode\n  mode <val>                       - Write persistent operating mode (0..3)\n\n[Calibration]\n  offset                           - Read CO2 offset (ppm)\n  offset <val>                     - Write persistent CO2 offset (signed)\n  gain                             - Read CO2 gain\n  gain <val>                       - Write persistent CO2 gain\n  calpoints                        - Read last calibration points\n  autoadj                          - Read auto-adjust status\n  autoadj start                    - Start config-changing auto-adjustment (~5 min)\n\n[Bus Safety]\n  buscheck                         - Check if bus is idle\n  libreset                         - Bus reset via library\n\n[Diagnostics]\n  diag                             - Run full diagnostic suite\n  levels                           - Read current bus levels\n  pintest                          - Test pin toggle (MCU bus control)\n  clocktest                        - Generate clock pulses and verify\n  sniff                            - Toggle sniffer on/off\n  timing                           - Try different clock frequencies\n  busreset                         - Send 9 clocks to recover stuck bus\n  tx <hex>                         - Test transaction with control byte\n  libtest                          - Test all library commands (begin uses)\n  caps                             - Print feature capability booleans\n  trace stats                      - Show bus trace buffer stats\n  trace clear                      - Clear buffered trace events\n> "
+    },
+    {
+      "command": "probe",
+      "planned_command": "probe",
+      "description": "Probe device without health side effects.",
+      "group": "safe",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.013,
+      "wait_reason": "prompt",
+      "destructive": false,
+      "operator_required": false,
+      "requires_opt_in": null,
+      "notes": "",
+      "parsed": {
+        "statuses": [
+          {
+            "name": "OK",
+            "code": 0,
+            "detail": 0
+          }
+        ],
+        "status": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "command": "probe"
+      },
+      "clean_excerpt": "[I] Probing device (no health tracking)...\n  Status: OK (code=0, detail=0)\n  Message: OK\n> "
+    },
+    {
+      "command": "read",
+      "planned_command": "read",
+      "description": "Read CO2 averaged value.",
+      "group": "safe",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.013,
+      "wait_reason": "prompt",
+      "destructive": false,
+      "operator_required": false,
+      "requires_opt_in": null,
+      "notes": "",
+      "parsed": {
+        "statuses": [
+          {
+            "name": "OK",
+            "code": 0,
+            "detail": 0
+          }
+        ],
+        "status": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "co2_avg_ppm": 567,
+        "command": "read"
+      },
+      "clean_excerpt": "  Status: OK (code=0, detail=0)\n  Message: OK\n  CO2 avg: 567 ppm\n> "
+    },
+    {
+      "command": "selftest",
+      "planned_command": "selftest",
+      "description": "Run safe command self-test.",
+      "group": "safe",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.505,
+      "wait_reason": "prompt",
+      "destructive": false,
+      "operator_required": false,
+      "requires_opt_in": null,
+      "notes": "",
+      "parsed": {
+        "selftest": {
+          "pass": 27,
+          "fail": 0,
+          "skip": 0
+        },
+        "command": "selftest"
+      },
+      "clean_excerpt": "=== EE871 selftest (safe commands) ===\r\n  [PASS] probe responds\r\n  [PASS] probe no-health-side-effects\r\n  [PASS] readGroup\r\n  [PASS] group matches\r\n  [PASS] readSubgroup\r\n  [PASS] subgroup matches\r\n  [PASS] readAvailableMeasurements\r\n  [PASS] CO2 measurement bit present\r\n  [PASS] readFirmwareVersion\r\n  [PASS] readE2SpecVersion\r\n  [PASS] readOperatingFunctions\r\n  [PASS] readOperatingModeSupport\r\n  [PASS] readSpecialFeatures\r\n  [PASS] readStatus\r\n  [PASS] readCo2Fast\r\n  [PASS] readCo2Average\r\n  [PASS] readErrorCode\r\n  [PASS] readSerialNumber\r\n  [PASS] readPartName\r\n  [PASS] readBusAddress\r\n  [PASS] readMeasurementInterval\r\n  [PASS] readCo2IntervalFactor\r\n  [PASS] readOperatingMode\r\n  [PASS] readControlByte(MAIN_STATUS)\r\n  [PASS] readU16(MV4)\r\n  [PASS] recover\r\n  [PASS] isOnline\r\nSelftest result: pass=27 fail=0 skip=0\n> "
+    },
+    {
+      "command": "drv",
+      "planned_command": "drv",
+      "description": "Capture driver health.",
+      "group": "safe",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.001,
+      "wait_reason": "prompt",
+      "destructive": false,
+      "operator_required": false,
+      "requires_opt_in": null,
+      "notes": "",
+      "parsed": {
+        "driver_state": "READY",
+        "online": true,
+        "consecutive_failures": 0,
+        "total_success": 74,
+        "total_failures": 0,
+        "success_rate_pct": 100.0,
+        "persistent_config_dirty": false,
+        "persistent_config_dirty_error": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "persistent_config_dirty_error_message": "OK",
+        "resync_needed": false,
+        "command": "drv"
+      },
+      "clean_excerpt": "=== Driver Health ===\r\n  State: READY\n  Online: yes\n  Consecutive failures: 0\n  Total success: 74\n  Total failures: 0\n  Success rate: 100.0%\n  Last OK: 505 ms ago (at 298 ms)\n  Last error: never\r\n  persistentConfigDirty: no\n  persistentConfigDirtyError: OK (code=0, detail=0)\n  persistentConfigDirtyError message: OK\n  resyncNeeded: no\n> "
+    },
+    {
+      "command": "dirty",
+      "planned_command": "dirty",
+      "description": "Capture persistent dirty-state diagnostics.",
+      "group": "safe",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.001,
+      "wait_reason": "prompt",
+      "destructive": false,
+      "operator_required": false,
+      "requires_opt_in": null,
+      "notes": "",
+      "parsed": {
+        "persistent_config_dirty": false,
+        "persistent_config_dirty_error": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "persistent_config_dirty_error_message": "OK",
+        "resync_needed": false,
+        "command": "dirty"
+      },
+      "clean_excerpt": "=== Persistent Config Dirty State ===\r\n  persistentConfigDirty: no\n  persistentConfigDirtyError: OK (code=0, detail=0)\n  persistentConfigDirtyError message: OK\n  resyncNeeded: no\n> "
+    },
+    {
+      "command": "stress 50",
+      "planned_command": "stress 50",
+      "description": "Run bounded CO2 read stress.",
+      "group": "safe",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.644,
+      "wait_reason": "prompt",
+      "destructive": false,
+      "operator_required": false,
+      "requires_opt_in": null,
+      "notes": "",
+      "parsed": {
+        "stress": {
+          "kind": "stress",
+          "total": 50,
+          "success": 50,
+          "errors": 0
+        },
+        "health_delta_success": 100,
+        "health_delta_failures": 0,
+        "success_rate_pct": 100.0,
+        "command": "stress 50"
+      },
+      "clean_excerpt": "  Progress: 5/50 (10%, ok=5, fail=0)\n  Progress: 10/50 (20%, ok=10, fail=0)\n  Progress: 15/50 (30%, ok=15, fail=0)\n  Progress: 20/50 (40%, ok=20, fail=0)\n  Progress: 25/50 (50%, ok=25, fail=0)\n  Progress: 30/50 (60%, ok=30, fail=0)\n  Progress: 35/50 (70%, ok=35, fail=0)\n  Progress: 40/50 (80%, ok=40, fail=0)\n  Progress: 45/50 (90%, ok=45, fail=0)\n  Progress: 50/50 (100%, ok=50, fail=0)\n=== Stress Summary ===\r\n  Total: 50\n  Success: 50\n  Errors: 0\n  Success rate: 100.00%\n  Duration: 643 ms\n  Rate: 77.76 ops/s\n  Health delta: success +100, failures +0\n> "
+    },
+    {
+      "command": "drv",
+      "planned_command": "drv",
+      "description": "Capture driver health after stress.",
+      "group": "safe",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.001,
+      "wait_reason": "prompt",
+      "destructive": false,
+      "operator_required": false,
+      "requires_opt_in": null,
+      "notes": "",
+      "parsed": {
+        "driver_state": "READY",
+        "online": true,
+        "consecutive_failures": 0,
+        "total_success": 174,
+        "total_failures": 0,
+        "success_rate_pct": 100.0,
+        "persistent_config_dirty": false,
+        "persistent_config_dirty_error": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "persistent_config_dirty_error_message": "OK",
+        "resync_needed": false,
+        "command": "drv"
+      },
+      "clean_excerpt": "=== Driver Health ===\r\n  State: READY\n  Online: yes\n  Consecutive failures: 0\n  Total success: 174\n  Total failures: 0\n  Success rate: 100.0%\n  Last OK: 14 ms ago (at 1436 ms)\n  Last error: never\r\n  persistentConfigDirty: no\n  persistentConfigDirtyError: OK (code=0, detail=0)\n  persistentConfigDirtyError message: OK\n  resyncNeeded: no\n> "
+    },
+    {
+      "command": "dirty",
+      "planned_command": "dirty",
+      "description": "Confirm stress did not dirty persistent config.",
+      "group": "safe",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.001,
+      "wait_reason": "prompt",
+      "destructive": false,
+      "operator_required": false,
+      "requires_opt_in": null,
+      "notes": "",
+      "parsed": {
+        "persistent_config_dirty": false,
+        "persistent_config_dirty_error": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "persistent_config_dirty_error_message": "OK",
+        "resync_needed": false,
+        "command": "dirty"
+      },
+      "clean_excerpt": "=== Persistent Config Dirty State ===\r\n  persistentConfigDirty: no\n  persistentConfigDirtyError: OK (code=0, detail=0)\n  persistentConfigDirtyError message: OK\n  resyncNeeded: no\n> "
+    }
+  ]
+}

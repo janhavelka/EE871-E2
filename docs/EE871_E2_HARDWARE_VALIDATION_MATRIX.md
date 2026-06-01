@@ -1,12 +1,12 @@
 # EE871-E2 Hardware Validation Matrix
 
-Date: 2026-05-31
+Date: 2026-06-01
 Branch: `hardening/ee871-e2-industry-readiness`
 
-This matrix is a hardware validation plan, not a record of completed bench
-results. No EE871 hardware tests were run while creating this document. Default
-status is `NOT RUN` until a test is executed and recorded with board, firmware,
-sensor serial/part, wiring, supply, pull-ups, and observed output.
+This matrix started as a hardware validation plan and now also records completed
+bench evidence where available. Default status remains `NOT RUN` until a test is
+executed and recorded with board, firmware, serial port, sensor, wiring, supply,
+pull-ups, and observed output.
 
 For repeatable evidence capture, use `tools/ee871_hil_runner.py` after flashing
 the diagnostic CLI. The runner records a raw serial transcript, structured JSON,
@@ -157,26 +157,52 @@ python tools/ee871_hil_runner.py --port COMx --include-power-cycle
 
 ## Current Evidence Status
 
-As of the 2026-06-01 release-readiness pass, no real hardware HIL artifacts are
-present in this repository:
+Safe EE871 HIL evidence was recorded on 2026-06-01 using the Arduino diagnostic
+CLI on `COM17`.
 
-- `hil_results/`: not present.
-- Safe default HIL run: not recorded.
-- Extended safe HIL run: not recorded.
-- Persistent-write HIL run: not recorded and still requires explicit bench-unit
-  approval before execution.
+- Board/target: ESP32-S3, PlatformIO `ex_bringup_s3`.
+- Upload command: `python -m platformio run -e ex_bringup_s3 -j 1 -t upload --upload-port COM17`.
+- Firmware/library: firmware build `Jun  1 2026 20:57:04`, EE871 library
+  `0.3.0 (84a46b6, 2026-06-01 20:57:01, clean)`.
+- Safe default HIL: PASS, 10 PASS / 0 FAIL / 0 SKIP / 0 review.
+- Extended safe HIL: PASS, 33 PASS / 0 FAIL / 0 SKIP / 0 review.
+- Manual resync check: PASS, `dirty`, `resync`, `dirty`.
+- Safe `read`: OK, CO2 averaged value `567 ppm` in the safe-default run.
+- `selftest`: PASS, `pass=27 fail=0 skip=0`.
+- `drv`: READY, online yes, zero consecutive failures.
+- `stress 50`: PASS, `50/50`, 0 errors.
+- `stress 500`: PASS, `500/500`, 0 errors.
+- Persistent dirty state stayed clean: `persistentConfigDirty: no`,
+  `resyncNeeded: no` before/after safe stress and after manual `resync`.
+- `rv` is not advertised by help; help advertises `version / ver`. No alias was
+  added during this validation pass.
 
-An earlier hardware-run attempt was intentionally stopped because PlatformIO
-listed multiple plausible USB serial ports and no target EE871 CLI port was
-identified. Do not convert any row below from `NOT RUN` to `PASS` without a
-timestamped transcript, `summary.json`, and `summary.md` from the actual board
-and sensor.
+Artifacts:
+
+- Safe default transcript:
+  `hil_results/safe_default/ee871_20260601T185912Z/serial_transcript.txt`
+- Safe default JSON/Markdown:
+  `hil_results/safe_default/ee871_20260601T185912Z/summary.json`,
+  `hil_results/safe_default/ee871_20260601T185912Z/summary.md`
+- Extended safe transcript:
+  `hil_results/extended_safe/ee871_20260601T185921Z/serial_transcript.txt`
+- Extended safe JSON/Markdown:
+  `hil_results/extended_safe/ee871_20260601T185921Z/summary.json`,
+  `hil_results/extended_safe/ee871_20260601T185921Z/summary.md`
+- Manual resync transcript:
+  `hil_results/manual_resync/ee871_20260601T190024Z/serial_transcript.txt`
+- Manual resync JSON/Markdown:
+  `hil_results/manual_resync/ee871_20260601T190024Z/summary.json`,
+  `hil_results/manual_resync/ee871_20260601T190024Z/summary.md`
+
+Persistent-write HIL was not run and still requires explicit bench-unit approval
+before execution. Physical fault/jig tests were not run.
 
 ## Board Matrix
 
 | ID | Board | Framework/example | Target | Sensor | Pull-ups/level shift | Status | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| B-S3-A | ESP32-S3 dev board | `examples/01_basic_bringup_cli` | `ex_bringup_s3` | EE871-E2 bench sensor | External pull-ups, level shifter as required | NOT RUN | Record GPIOs, supply, cable length. |
+| B-S3-A | ESP32-S3 dev board | `examples/01_basic_bringup_cli` | `ex_bringup_s3` | EE871-E2 bench sensor | External pull-ups, level shifter as required | PASS | 2026-06-01 on `COM17`; safe default and extended safe HIL PASS. GPIOs from firmware: DATA=6, CLOCK=7. |
 | B-S2-A | ESP32-S2 dev board | `examples/01_basic_bringup_cli` | `ex_bringup_s2` | EE871-E2 bench sensor | External pull-ups, level shifter as required | NOT RUN | Record GPIOs, supply, cable length. |
 | B-S3-IDF | ESP32-S3 dev board | `examples/idf/basic_bringup` | `esp32s3` | EE871-E2 bench sensor | External pull-ups, level shifter as required | NOT RUN | Requires local or CI pure ESP-IDF build. |
 | B-S2-IDF | ESP32-S2 dev board | `examples/idf/basic_bringup` | `esp32s2` | EE871-E2 bench sensor | External pull-ups, level shifter as required | NOT RUN | Requires local or CI pure ESP-IDF build. |
@@ -185,19 +211,19 @@ and sensor.
 
 | ID | Scenario | Board(s) | CLI/API sequence | Expected behavior | Status | Evidence to capture |
 | --- | --- | --- | --- | --- | --- | --- |
-| F-01 | Power-up `begin()` with sensor present | S2, S3 | Power cycle, open monitor, inspect boot output, `drv`, `dirty` | Device initializes or reports a precise non-OK `Status`; driver state is READY on success and persistent dirty state is clean. | NOT RUN | Boot log, `drv` and `dirty` output. |
-| F-02 | Probe no-health-side-effects | S2, S3 | `drv`, `probe`, `drv` | Successful or failed `probe` does not change health counters/state. | NOT RUN | Before/after `drv` output. |
+| F-01 | Power-up `begin()` with sensor present | S2, S3 | Power cycle, open monitor, inspect boot output, `drv`, `dirty` | Device initializes or reports a precise non-OK `Status`; driver state is READY on success and persistent dirty state is clean. | PASS | Safe HIL boot/initial output plus `drv`/`dirty`: READY, online yes, dirty no. |
+| F-02 | Probe no-health-side-effects | S2, S3 | `drv`, `probe`, `drv` | Successful or failed `probe` does not change health counters/state. | PASS | Safe and extended HIL `probe`: Status OK; health stayed READY with zero failures. |
 | F-03 | Status read | S2, S3 | `status`, `drv` | Status byte read completes or returns bounded error; tracked success/failure updates health as documented. | NOT RUN | `status` output and health counters. |
-| F-04 | CO2 averaged read | S2, S3 | `read`, `co2avg` | MV4 averaged value is reported, or a precise bounded error is returned. | NOT RUN | CO2 ppm values and status. |
+| F-04 | CO2 averaged read | S2, S3 | `read`, `co2avg` | MV4 averaged value is reported, or a precise bounded error is returned. | PASS | Safe default `read`: Status OK, CO2 avg `567 ppm`. |
 | F-05 | CO2 fast read | S2, S3 | `co2fast` | MV3 fast-response value is reported, or a precise bounded error is returned. | NOT RUN | CO2 ppm value and status. |
 | F-06 | PEC success on normal reads | S2, S3 | `id`, `status`, `read`, `features` | Normal reads do not report `PEC_MISMATCH`. | NOT RUN | Command output. |
 | F-07 | Feature/cache sanity | S2, S3 | `features`, `caps`, `cfg` | Capability output is internally consistent and guards unsupported writes. | NOT RUN | Feature bytes and booleans. |
 | F-08 | Warm-up behavior | S2, S3 | Power cycle, run `status`, `read`, `co2avg` every 30 s during first 10 min | Operator/application validation treats readings as warm-up data until EE871 warm-up has elapsed. | NOT RUN | Timestamped ppm trend. |
 | F-09 | Stale sample behavior | S2, S3 | Compare `status`, wait 5-10 s, `co2avg`, repeat after >10 s | Status-triggered measurement behavior and sample freshness are observable and documented. | NOT RUN | Timestamped status/CO2 output. |
-| F-10 | Safe self-test | S2, S3 | `dirty`, `selftest`, `dirty` | Safe commands complete with expected pass/fail report; no persistent settings are changed and persistent dirty remains clean. | NOT RUN | Self-test report and before/after dirty output. |
+| F-10 | Safe self-test | S2, S3 | `dirty`, `selftest`, `dirty` | Safe commands complete with expected pass/fail report; no persistent settings are changed and persistent dirty remains clean. | PASS | Safe and extended HIL: `selftest` pass=27 fail=0 skip=0; dirty stayed clean. |
 | F-11 | Mixed read stress | S2, S3 | `dirty`, `stress_mix 100`, `dirty` | No hangs; failures, if any, are bounded and health counters match output; persistent dirty remains clean. | NOT RUN | Stress summary and dirty output. |
-| F-12 | Repeated CO2 read stress | S2, S3 | `dirty`, `stress 100`, `dirty` | No hangs; CO2 read success rate and health counters are recorded; persistent dirty remains clean. | NOT RUN | Stress summary and dirty output. |
-| F-13 | Dirty resync command on coherent config | S2, S3 | `dirty`, `resync`, `dirty` | `resync` returns precise status; if OK, dirty remains or becomes clean only through `resyncPersistentConfig()`. | NOT RUN | Before/resync/after dirty output. |
+| F-12 | Repeated CO2 read stress | S2, S3 | `dirty`, `stress 100`, `dirty` | No hangs; CO2 read success rate and health counters are recorded; persistent dirty remains clean. | PASS | Safe HIL `stress 50`: 50/50, 0 errors; extended HIL `stress 500`: 500/500, 0 errors; dirty stayed clean. |
+| F-13 | Dirty resync command on coherent config | S2, S3 | `dirty`, `resync`, `dirty` | `resync` returns precise status; if OK, dirty remains or becomes clean only through `resyncPersistentConfig()`. | PASS | Manual resync artifact: pre dirty clean, `resync` Status OK, post dirty clean. |
 
 ## Persistent Configuration Matrix
 

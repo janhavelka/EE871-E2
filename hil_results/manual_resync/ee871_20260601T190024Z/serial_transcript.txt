@@ -1,0 +1,77 @@
+EE871-E2 serial HIL transcript
+timestamp_utc=2026-06-01T19:00:24Z
+port=COM17
+baud=115200
+dry_run=False
+git_branch=hardening/ee871-e2-industry-readiness
+git_commit=84a46b694c8b
+git_worktree=dirty
+
+=== initial serial output ===
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x15 (USB_UART_CHIP_RESET),boot:0x8 (SPI_FAST_FLASH_BOOT)
+Saved PC:0x40379a3a
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x118c
+load:0x403c8700,len:0x4
+load:0x403c8704,len:0xc20
+load:0x403cb700,len:0x30e0
+entry 0x403c88b8
+
+=== EE871 Bringup Example ===
+[I] E2 initialized (DATA=6, CLOCK=7)
+[I] Device initialized successfully
+=== Driver Health ===
+  State: [32mREADY[0m
+  Online: [32myes[0m
+  Consecutive failures: [32m0[0m
+  Total success: [33m0[0m
+  Total failures: [32m0[0m
+  Success rate: [31m0.0%[0m
+  Last OK: never
+  Last error: never
+  persistentConfigDirty: [32mno[0m
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  persistentConfigDirtyError message: OK
+  resyncNeeded: [32mno[0m
+
+Type 'help' for commands
+> 
+
+=== command 1: dirty ===
+result=PASS reason= elapsed_s=0.001 wait=prompt
+=== Persistent Config Dirty State ===
+  persistentConfigDirty: [32mno[0m
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  persistentConfigDirtyError message: OK
+  resyncNeeded: [32mno[0m
+> 
+
+=== command 2: resync ===
+result=PASS reason= elapsed_s=0.2 wait=prompt
+=== Persistent Config Resync ===
+Before:
+  persistentConfigDirty: [32mno[0m
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  persistentConfigDirtyError message: OK
+  resyncNeeded: [32mno[0m
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+After:
+  persistentConfigDirty: [32mno[0m
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  persistentConfigDirtyError message: OK
+  resyncNeeded: [32mno[0m
+> 
+
+=== command 3: dirty ===
+result=PASS reason= elapsed_s=0.001 wait=prompt
+=== Persistent Config Dirty State ===
+  persistentConfigDirty: [32mno[0m
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  persistentConfigDirtyError message: OK
+  resyncNeeded: [32mno[0m
+> 
+
