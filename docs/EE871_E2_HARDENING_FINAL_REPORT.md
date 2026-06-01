@@ -423,11 +423,11 @@ Starting state:
 - Branch: `hardening/ee871-e2-industry-readiness`.
 - `git status --short`: clean.
 - Latest commits before this verification update:
-  - `5335424 docs: fix EE871 hardening metadata`
-  - `4012672 test: cover EE871 gain dirty-state verify failure`
-  - `f28a20f docs: clarify EE871 hardware validation recipe`
-  - `6248111 docs: finalize EE871 industry hardening report`
-  - `80e9fbf ci: add EE871 pure ESP-IDF build coverage`
+  - `bea6bb5 docs: prepare EE871 release readiness notes`
+  - `b063df9 test: add EE871 Python HIL runner`
+  - `c2ca189 test: require EE871 IDF dirty resync-needed output`
+  - `6bc102c feat: expose EE871 persistent dirty diagnostics in CLI`
+  - `953fec9 docs: record EE871 IDF build verification status`
 
 CI workflow status:
 - `.github/workflows/ci.yml` contains an `idf-build` job with a matrix for
@@ -441,20 +441,13 @@ CI workflow status:
   locally. It does not prove that GitHub Actions has successfully run it.
 
 GitHub Actions status:
-- `gh --version; gh auth status; gh run list --limit 5`: FAIL locally because
-  PowerShell reported `gh` is not recognized as a cmdlet, function, script file,
-  or operable program.
+- `gh run list --limit 5`: FAIL locally because PowerShell reported `gh` is
+  not recognized as a cmdlet, function, script file, or operable program.
 - `gh run view <id> --log`: not run because `gh` is unavailable and no run ID
   was available locally.
-- Public GitHub API checks on 2026-06-01 found no workflow runs for
-  `hardening/ee871-e2-industry-readiness`, no runs for local HEAD
-  `6572a9dc325fa018e52cf631a0a1eccc2b3ab8b1` at the time of the check, and no
-  PR for this branch.
-- The latest visible CI run was `main` run `26721795125`, completed
-  successfully on 2026-05-31. Its jobs were `validate-library`,
-  `native-tests`, `build (ex_bringup_s3)`, and `build (ex_bringup_s2)`; it did
-  not include `idf-build`, so it does not prove pure ESP-IDF build success for
-  this branch.
+- No GitHub Actions result was available locally during this pass.
+- Therefore, GitHub Actions does not currently prove pure ESP-IDF build success
+  for this branch.
 
 Local pure ESP-IDF status:
 - `idf.py --version`: FAIL locally. PowerShell reported: `The term 'idf.py' is
@@ -479,7 +472,7 @@ Focused-pass validation commands:
 - `python tools/check_core_timing_guard.py`: PASS,
   `Core timing guard PASSED`.
 - `python -m platformio test -e native`: PASS, 31 test cases succeeded in
-  00:00:09.291.
+  00:00:01.317.
 - `git diff --check`: PASS; only Git line-ending conversion warnings were
   emitted after editing the report.
 
@@ -524,13 +517,11 @@ CHANGELOG status:
   notes.
 
 CI status:
-- Local `gh --version`: FAIL; PowerShell reported that `gh` is not recognized.
-- Public GitHub Actions API check on 2026-06-01 for branch
-  `hardening/ee871-e2-industry-readiness`: `total_count = 0`.
-- Result: no GitHub Actions run proves this branch, and therefore the new
-  pure-IDF `idf-build` matrix is still unproven in CI.
-- Local pure `idf.py` builds remain unproven because `idf.py` was not available
-  in the previous focused IDF verification pass.
+- Local `gh` is unavailable in this PowerShell session, so GitHub Actions
+  results were not checked locally.
+- The CI workflow contains the intended pure-IDF `idf-build` matrix for
+  `esp32s3` and `esp32s2`, but no local GitHub Actions result proves it passed.
+- Local pure `idf.py` builds remain unproven because `idf.py` was not available.
 
 HIL status:
 - `tools/ee871_hil_runner.py` exists and is covered by host parser tests.
