@@ -155,6 +155,23 @@ python tools/ee871_hil_runner.py --port COMx --include-stuck-line
 python tools/ee871_hil_runner.py --port COMx --include-power-cycle
 ```
 
+## Current Evidence Status
+
+As of the 2026-06-01 release-readiness pass, no real hardware HIL artifacts are
+present in this repository:
+
+- `hil_results/`: not present.
+- Safe default HIL run: not recorded.
+- Extended safe HIL run: not recorded.
+- Persistent-write HIL run: not recorded and still requires explicit bench-unit
+  approval before execution.
+
+An earlier hardware-run attempt was intentionally stopped because PlatformIO
+listed multiple plausible USB serial ports and no target EE871 CLI port was
+identified. Do not convert any row below from `NOT RUN` to `PASS` without a
+timestamped transcript, `summary.json`, and `summary.md` from the actual board
+and sensor.
+
 ## Board Matrix
 
 | ID | Board | Framework/example | Target | Sensor | Pull-ups/level shift | Status | Notes |

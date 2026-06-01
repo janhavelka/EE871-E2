@@ -20,6 +20,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SettingsSnapshot`, `getSettings()`, `isInitialized()`, `getConfig()`, `driverState()`, `healthState()`, and `offlineThreshold()` for cache-only runtime and health inspection.
 - Command-table helpers for supported main-command read checks and CO2 error-code names.
 - Bring-up CLI status/error output now decodes CO2 error-code names.
+- Native fake E2 transport under `test/support/` for deterministic host-side
+  runtime fault injection at the GPIO-style callback boundary.
+- Runtime fault tests for stuck SCL timeout, PEC mismatch, device absence,
+  write verify mismatch, offline/recover, and probe health side effects.
+- Persistent configuration dirty diagnostics:
+  `persistentConfigDirty()`, `persistentConfigDirtyError()`,
+  `resyncPersistentConfig()`, and matching `SettingsSnapshot` fields.
+- Arduino and ESP-IDF diagnostic CLI commands for `dirty` and `resync`.
+- Pure ESP-IDF GitHub Actions `idf-build` matrix job for `esp32s3` and
+  `esp32s2`, plus an IDF example contract checker.
+- `tools/ee871_hil_runner.py`, a Python serial HIL evidence runner with safe,
+  extended-safe, persistent-write opt-in, and operator-fault plans.
+- Hardware validation matrix and HIL runner documentation.
 
 ### Changed
 - `library.json` now advertises both Arduino and ESP-IDF framework support.
@@ -34,11 +47,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checklist instead of a one-way periodic logger.
 - `AGENTS.md` now explicitly requires native ESP-IDF examples and forbids
   Arduino compatibility facades in IDF example code.
+- `EE871::EE871` is now explicitly non-copyable and non-movable.
+- Public docs now state the managed synchronous driver contract, callback
+  boundedness expectations, thread/ISR constraints, shared-bus serialization
+  requirements, and E2-versus-hardware-I2C boundary.
+- Multi-byte persistent writes now preserve the precise failing `Status` while
+  also recording that persistent sensor configuration may need resync or
+  operator inspection.
 
 ### Fixed
 - Byte-timeout accounting in E2 bit helpers now uses saturating arithmetic and avoids overflow in the elapsed-time accumulator.
 - Unsupported EE871 main-command reads now return `NOT_SUPPORTED` before E2 traffic, including two-byte reads.
 - `IN_PROGRESS` statuses are neutral for health tracking instead of counting as communication failures.
+- Dirty-state tracking now covers first-byte accepted/readback-failed cases for
+  multi-byte persistent writes.
+
+### Compatibility
+- Source compatibility break: code that copies or moves `EE871::EE871`
+  instances by value must be updated to keep drivers in stable storage and pass
+  references or pointers.
+- `SettingsSnapshot` layout changed. ABI/layout-sensitive users must rebuild
+  and should not persist or externally share raw snapshot layouts.
+- The current package version remains `0.3.0` because this is not a release
+  commit and release readiness is still blocked. The next release should use a
+  major-version bump under the repository's SemVer policy if these
+  source-compatibility changes are released.
+
+### Validation
+- Native host test coverage includes 31 PlatformIO test cases.
+- Arduino PlatformIO example builds for `ex_bringup_s3` and `ex_bringup_s2`
+  pass locally in the latest readiness run.
+- Pure ESP-IDF CI coverage is configured, but no GitHub Actions run exists for
+  `hardening/ee871-e2-industry-readiness` as of the latest readiness check.
+- Real hardware HIL evidence is not present in the repository yet; `hil_results/`
+  is absent and hardware matrix rows remain `NOT RUN`.
 
 ## [0.3.0] - 2026-03-01
 

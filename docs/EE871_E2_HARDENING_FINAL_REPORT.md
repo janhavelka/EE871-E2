@@ -488,3 +488,99 @@ Remaining gap:
   `idf-build` matrix result for both `esp32s3` and `esp32s2`.
 - Alternatively install ESP-IDF locally and run both `idf.py -C
   examples/idf/basic_bringup ... build` commands.
+
+## Release Readiness Pass - 2026-06-01
+
+Scope:
+- Prepare the branch for a merge/release decision after the hardening, CI, and
+  HIL-runner work.
+- Do not tag a release.
+- Do not claim hardware or CI evidence that is not present.
+
+Version inspection:
+- `library.json`: current package version is `0.3.0`.
+- `include/EE871/Version.h`: generated from `library.json`, reports
+  `0.3.0`, `VERSION_MAJOR = 0`, `VERSION_MINOR = 3`, `VERSION_PATCH = 0`.
+- `scripts/generate_version.py`: generator supports `check`, `sync`, `set`,
+  and `bump`; `check` confirms `Version.h` is up to date.
+- README and docs contain no separate release badge/version override requiring
+  synchronization.
+
+Version decision:
+- Version was not bumped in this pass because this is not a release commit and
+  the branch is not release-ready.
+- A future release containing the current public API changes should use a
+  major-version bump under this repository's SemVer policy. The reason is source
+  compatibility: `EE871::EE871` is now non-copyable and non-movable, and
+  `SettingsSnapshot` layout changed.
+- Normal users that construct one driver instance and rebuild should not need
+  source changes, but code that copied or moved `EE871` by value will no longer
+  compile.
+
+CHANGELOG status:
+- `CHANGELOG.md` now records core contract hardening, native fake E2 fault
+  tests, persistent dirty diagnostics, CLI dirty/resync diagnostics, IDF CI
+  coverage, the Python HIL runner, hardware validation status, and compatibility
+  notes.
+
+CI status:
+- Local `gh --version`: FAIL; PowerShell reported that `gh` is not recognized.
+- Public GitHub Actions API check on 2026-06-01 for branch
+  `hardening/ee871-e2-industry-readiness`: `total_count = 0`.
+- Result: no GitHub Actions run proves this branch, and therefore the new
+  pure-IDF `idf-build` matrix is still unproven in CI.
+- Local pure `idf.py` builds remain unproven because `idf.py` was not available
+  in the previous focused IDF verification pass.
+
+HIL status:
+- `tools/ee871_hil_runner.py` exists and is covered by host parser tests.
+- `hil_results/`: not present in the repository at the readiness check.
+- Safe default HIL run: not recorded.
+- Extended safe HIL run: not recorded.
+- Persistent-write HIL run: not recorded and still requires explicit bench-unit
+  approval.
+- Earlier attempts to start hardware HIL were stopped because PlatformIO listed
+  multiple plausible USB serial ports and no target EE871 CLI port was
+  identified. No hardware PASS is claimed.
+
+Current validation commands:
+- `python tools/check_core_timing_guard.py`: PASS, `Core timing guard PASSED`.
+- `python tools/check_cli_contract.py`: PASS, `CLI contract PASSED`.
+- `python tools/check_idf_example_contract.py`: PASS,
+  `IDF example contract PASSED`.
+- `python scripts/generate_version.py check`: PASS, `include\EE871\Version.h`
+  up to date.
+- `python -m platformio test -e native`: PASS, 31 test cases succeeded in
+  00:00:08.323.
+- `python -m platformio run -e ex_bringup_s3`: PASS, `SUCCESS` in
+  00:01:07.574.
+- `python -m platformio run -e ex_bringup_s2`: PASS, `SUCCESS` in
+  00:01:20.791.
+- `python -m platformio pkg pack`: PASS, wrote `ee871-e2-0.3.0.tar.gz`.
+- Generated package tarball removed after packing; it is not intended to be
+  tracked.
+
+Remaining gaps:
+- Trigger and record GitHub Actions for this branch, including the pure-IDF
+  `idf-build` matrix for `esp32s3` and `esp32s2`.
+- Run the safe default and extended safe HIL runner on the actual EE871 CLI
+  serial port and commit the text/JSON/Markdown evidence if reasonably sized.
+- Run persistent-write hardware validation only after explicit bench-unit
+  approval, recording baseline values and restoration.
+- Run physical fault/jig validation for stuck SCL/SDA, no response, and
+  unplug/replug recovery before any field/industry-grade claim.
+- Decide the release version and regenerate `Version.h` when an actual release
+  commit is made.
+
+Merge readiness verdict:
+- Not ready for an evidence-backed merge yet. Local guards and PlatformIO builds
+  pass, but the branch still lacks a GitHub Actions run and real HIL evidence.
+
+Release readiness verdict:
+- Not release-ready. Release is blocked on CI proof, hardware HIL evidence, a
+  major-version release decision, and final release notes/tag instructions.
+
+Field/industry-grade verdict:
+- Not ready to claim industry-grade. The codebase is materially hardened, but
+  CI proof, real hardware HIL, persistent-write bench validation, and physical
+  fault validation remain open.
