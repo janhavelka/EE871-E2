@@ -320,15 +320,15 @@ Documentation changes:
   validation.
 
 Hardware validation status:
-- NOT RUN. No real ESP32-S2, ESP32-S3, EE871 sensor, wiring fault, pull-up,
-  warm-up, stale-sample, unplug/replug, or persistent-write bench validation was
-  performed during this hardening pass.
-- The hardware validation matrix is a plan only. It does not claim pass/fail
-  hardware evidence.
+- NOT RUN during Prompt 05. No real ESP32-S2, ESP32-S3, EE871 sensor, wiring
+  fault, pull-up, warm-up, stale-sample, unplug/replug, or persistent-write bench
+  validation was performed during that pass.
+- At that point, the hardware validation matrix was a plan only. Later sections
+  in this report record ESP32-S3 safe HIL and persistent interval
+  write/readback/restore evidence.
 - The diagnostic CLIs now expose `dirty` and `resync` commands for
   `persistentConfigDirty`, `persistentConfigDirtyError`, and
-  `resyncPersistentConfig()` hardware-validation flow. Bench validation still
-  needs real hardware output.
+  `resyncPersistentConfig()` hardware-validation flow.
 
 Exact commands run in Prompt 05:
 - `git checkout hardening/ee871-e2-industry-readiness`: already on branch.
@@ -361,18 +361,18 @@ Commands not run and why:
   because `idf.py` is unavailable locally.
 - GitHub Actions result verification: not claimed in this report. The new CI
   job must be proven by a PR or workflow run.
-- Hardware CLI validation: not run because no hardware bench execution occurred
-  in this session.
+- Hardware CLI validation: not run during Prompt 05; later sections record
+  ESP32-S3 safe HIL and persistent interval write/readback/restore evidence.
 
 Known remaining gaps:
 - Pure ESP-IDF builds must pass in GitHub Actions or a local ESP-IDF
   environment.
-- Real hardware validation must be executed using
+- Broader real hardware validation must still be executed using
   `docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md`.
-- Dirty/resync CLI diagnostics need hardware bench execution and captured
-  output. The software command surface is covered by repo-local contract checks.
-- Persistent write behavior needs bench validation, including power-cycle
-  persistence and failed-write operator recovery.
+- Dirty/resync CLI diagnostics now have ESP32-S3 bench evidence; broader target
+  and physical-fault coverage remains open.
+- Persistent interval write/readback/restore now has bench evidence; power-cycle
+  persistence and failed-write operator recovery remain open.
 - `library.json` version and `CHANGELOG.md` were not updated for a release.
 - CI currently runs on main/master push and PR events; the new IDF job still
   needs a PR/workflow run to prove it.
@@ -527,8 +527,8 @@ HIL status:
 - `tools/ee871_hil_runner.py` exists and is covered by host parser tests.
 - Safe ESP32-S3 HIL evidence is now recorded in the later
   "Safe Hardware HIL Validation - 2026-06-01" section.
-- Persistent-write HIL run: not recorded and still requires explicit bench-unit
-  approval.
+- Persistent interval write/readback/restore evidence is now recorded in the
+  later "Persistent Configuration Hardware Validation - 2026-06-01" section.
 - Earlier attempts to start hardware HIL were stopped because PlatformIO listed
   multiple plausible USB serial ports and no target EE871 CLI port was
   identified. This was later resolved with user-confirmed `COM17`.
@@ -555,8 +555,10 @@ Remaining gaps:
   `idf-build` matrix for `esp32s3` and `esp32s2`.
 - Run ESP32-S2 hardware HIL and pure ESP-IDF hardware HIL if those targets are
   required for the release evidence set.
-- Run persistent-write hardware validation only after explicit bench-unit
-  approval, recording baseline values and restoration.
+- Persistent interval write/readback/restore is now recorded in the later
+  "Persistent Configuration Hardware Validation - 2026-06-01" section.
+  Power-cycle persistence, CO2 calibration writes, and bus-address write/recovery
+  remain unproven.
 - Run physical fault/jig validation for stuck SCL/SDA, no response, and
   unplug/replug recovery before any field/industry-grade claim.
 - Decide the release version and regenerate `Version.h` when an actual release
@@ -568,13 +570,13 @@ Merge readiness verdict:
   broader hardware/fault evidence.
 
 Release readiness verdict:
-- Not release-ready. Release is still blocked on CI proof, persistent-write or
-  release-level hardware evidence as required, a major-version release
-  decision, and final release notes/tag instructions.
+- Not release-ready. Release is still blocked on CI proof, remaining
+  release-level hardware evidence as required, a major-version release decision,
+  and final release notes/tag instructions.
 
 Field/industry-grade verdict:
 - Not ready to claim industry-grade. The codebase is materially hardened, but
-  CI proof, persistent-write bench validation, ESP32-S2/ESP-IDF hardware
+  CI proof, power-cycle persistent-write evidence, ESP32-S2/ESP-IDF hardware
   coverage, and physical fault validation remain open.
 
 ## Safe Hardware HIL Validation - 2026-06-01
@@ -650,7 +652,78 @@ CLI alias note:
   clear and the HIL flow does not depend on `rv`.
 
 Remaining hardware gaps after this pass:
-- Persistent-write validation was not run.
+- Persistent interval write/readback/restore is recorded in the next section,
+  but power-cycle persistence, CO2 calibration writes, and bus-address
+  write/recovery remain unproven.
 - Physical fault/jig validation was not run.
 - ESP32-S2 hardware HIL was not run.
 - Pure ESP-IDF hardware HIL was not run.
+
+## Persistent Configuration Hardware Validation - 2026-06-01
+
+Scope:
+- Validate persistent configuration behavior on approved bench hardware.
+- Use actual CLI commands and record baseline values before writing.
+- Prove measurement interval write/readback/restore without modifying CO2
+  calibration or bus address.
+
+Approval and hardware:
+- Operator approval: bench unit and configuration changes approved in chat.
+- Serial port: `COM17`, baud `115200`.
+- Local time: 2026-06-01 21:35 CEST (`2026-06-01T19:35:00Z`).
+- Target: ESP32-S3, PlatformIO environment `ex_bringup_s3`.
+- Firmware build: `Jun  1 2026 20:57:04`.
+- EE871 library: `0.3.0 (84a46b6, 2026-06-01 20:57:01, clean)`.
+
+Baseline persistent values:
+- Measurement interval: `150 ds` (`15.0 s`).
+- CO2 interval factor: `85`.
+- Operating mode: `0x55` (low power, measurement priority).
+- Bus address: `0`.
+- Part name: `EE871`.
+- Serial: `1920935602368A..`
+  (`31 39 32 30 39 33 35 36 30 32 33 36 38 41 00 00`).
+- CO2 offset: `0 ppm`.
+- CO2 gain: `32768`.
+- Baseline dirty state from `drv`: `persistentConfigDirty: no`,
+  `persistentConfigDirtyError: OK`, `resyncNeeded: no`.
+
+Commands and results:
+- Baseline read commands: `version`, `interval`, `factor`, `mode`, `addr`,
+  `partname`, `serial`, `offset`, `gain`, `drv`.
+- Measurement interval test: `interval 160`, wait `0.6 s`, `interval`,
+  `dirty`, `resync`, `dirty`.
+- Restore test: `interval 150`, wait `0.6 s`, `interval`, `dirty`, `resync`,
+  `dirty`.
+- Final read commands: `interval`, `factor`, `mode`, `addr`, `partname`,
+  `serial`, `offset`, `gain`, `drv`.
+- Final verdict: PASS, 31 PASS / 0 FAIL / 0 SKIP / 0 review.
+- `interval 160` returned OK and read back `160 ds`.
+- `interval 150` returned OK and restored/read back `150 ds`.
+- Dirty diagnostics stayed clean after the test write, after `resync`, after
+  restore, and at final `drv`.
+- Final driver state was READY, online yes, zero consecutive failures, zero
+  total failures.
+
+Scope boundaries:
+- Power-cycle persistence was not proven. No operator power-cycle step was
+  executed during the automated run.
+- CO2 offset/gain were read only and not modified, even with broad approval,
+  because the prompt prefers read-only calibration validation and the interval
+  write already proves persistent write/readback/restore on this bench unit.
+- Bus address was read only and not modified because no automated
+  post-power-cycle retarget/recovery path was used during this run.
+- Failed-write/operator recovery was not physically induced. Native fake tests
+  remain the evidence for partial persistent-write dirty/resync behavior.
+
+Artifacts:
+- `hil_results/persistent_config_validation/ee871_20260601T193500Z_interval_restore/serial_transcript.txt`
+- `hil_results/persistent_config_validation/ee871_20260601T193500Z_interval_restore/summary.json`
+- `hil_results/persistent_config_validation/ee871_20260601T193500Z_interval_restore/summary.md`
+
+Validation commands for this pass:
+- `python tools/check_cli_contract.py`: PASS, `CLI contract PASSED`.
+- `python -m platformio test -e native`: PASS, 31 test cases succeeded in
+  00:00:01.351.
+- `git diff --check`: PASS; only Git line-ending conversion warnings were
+  emitted for edited Markdown files.

@@ -195,14 +195,55 @@ Artifacts:
   `hil_results/manual_resync/ee871_20260601T190024Z/summary.json`,
   `hil_results/manual_resync/ee871_20260601T190024Z/summary.md`
 
-Persistent-write HIL was not run and still requires explicit bench-unit approval
-before execution. Physical fault/jig tests were not run.
+Persistent configuration validation was recorded on 2026-06-01 after explicit
+bench-unit approval. The bench run changed only the measurement interval, then
+restored the baseline:
+
+- Local time: 2026-06-01 21:35 CEST (`2026-06-01T19:35:00Z`).
+- Serial port: `COM17`, baud `115200`.
+- Board/target: ESP32-S3, PlatformIO `ex_bringup_s3`.
+- Firmware/library: firmware build `Jun  1 2026 20:57:04`, EE871 library
+  `0.3.0 (84a46b6, 2026-06-01 20:57:01, clean)`.
+- Baseline persistent values: interval `150 ds` (`15.0 s`), CO2 interval
+  factor `85`, operating mode `0x55` (low power, measurement priority), bus
+  address `0`, part name `EE871`, serial `1920935602368A..`
+  (`31 39 32 30 39 33 35 36 30 32 33 36 38 41 00 00`), CO2 offset `0 ppm`,
+  CO2 gain `32768`.
+- Baseline dirty state was clean through `drv`: `persistentConfigDirty: no`,
+  `persistentConfigDirtyError: OK`, `resyncNeeded: no`.
+- Commands run:
+  `version`, `interval`, `factor`, `mode`, `addr`, `partname`, `serial`,
+  `offset`, `gain`, `drv`, `interval 160`, `interval`, `dirty`, `resync`,
+  `dirty`, `interval 150`, `interval`, `dirty`, `resync`, `dirty`, final
+  `interval`, `factor`, `mode`, `addr`, `partname`, `serial`, `offset`, `gain`,
+  `drv`.
+- Results: all 31 captured steps passed; `interval 160` returned OK and read
+  back `160 ds`; `interval 150` returned OK and restored/read back `150 ds`;
+  `dirty` stayed clean after the test write, after `resync`, after restore, and
+  at final `drv`.
+- CO2 offset/gain were read only and not modified. Bus address was read only and
+  not modified because no automated post-power-cycle retarget/recovery path was
+  used during this run.
+- Power-cycle persistence was not performed; no operator power-cycle step was
+  executed during the automated run.
+- Failed-write/operator recovery was not physically induced; native fake tests
+  remain the evidence for partial persistent-write dirty/resync behavior.
+
+Artifacts:
+
+- Persistent validation transcript:
+  `hil_results/persistent_config_validation/ee871_20260601T193500Z_interval_restore/serial_transcript.txt`
+- Persistent validation JSON/Markdown:
+  `hil_results/persistent_config_validation/ee871_20260601T193500Z_interval_restore/summary.json`,
+  `hil_results/persistent_config_validation/ee871_20260601T193500Z_interval_restore/summary.md`
+
+Physical fault/jig tests were not run.
 
 ## Board Matrix
 
 | ID | Board | Framework/example | Target | Sensor | Pull-ups/level shift | Status | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| B-S3-A | ESP32-S3 dev board | `examples/01_basic_bringup_cli` | `ex_bringup_s3` | EE871-E2 bench sensor | External pull-ups, level shifter as required | PASS | 2026-06-01 on `COM17`; safe default and extended safe HIL PASS. GPIOs from firmware: DATA=6, CLOCK=7. |
+| B-S3-A | ESP32-S3 dev board | `examples/01_basic_bringup_cli` | `ex_bringup_s3` | EE871-E2 bench sensor | External pull-ups, level shifter as required | PASS | 2026-06-01 on `COM17`; safe default and extended safe HIL PASS; persistent interval write/readback/restore PASS. GPIOs from firmware: DATA=6, CLOCK=7. |
 | B-S2-A | ESP32-S2 dev board | `examples/01_basic_bringup_cli` | `ex_bringup_s2` | EE871-E2 bench sensor | External pull-ups, level shifter as required | NOT RUN | Record GPIOs, supply, cable length. |
 | B-S3-IDF | ESP32-S3 dev board | `examples/idf/basic_bringup` | `esp32s3` | EE871-E2 bench sensor | External pull-ups, level shifter as required | NOT RUN | Requires local or CI pure ESP-IDF build. |
 | B-S2-IDF | ESP32-S2 dev board | `examples/idf/basic_bringup` | `esp32s2` | EE871-E2 bench sensor | External pull-ups, level shifter as required | NOT RUN | Requires local or CI pure ESP-IDF build. |
@@ -231,10 +272,10 @@ Run these only on a bench sensor after recording original values.
 
 | ID | Scenario | Board(s) | CLI/API sequence | Expected behavior | Status | Evidence to capture |
 | --- | --- | --- | --- | --- | --- | --- |
-| P-01 | Measurement interval write/readback | S2, S3 | `interval`, `dirty`, record value, `interval <bench_value>`, `interval`, `dirty` | Write returns OK and readback matches; on failure, `dirty` reports whether persistent state may be partial. | NOT RUN | Before/write/after output plus dirty diagnostics. |
-| P-02 | Measurement interval power-cycle persistence | S2, S3 | Run P-01, power cycle sensor and MCU, `interval` | Value persists across power cycle or documented sensor behavior explains difference. | NOT RUN | Pre/post power-cycle output. |
-| P-03 | CO2 offset write/readback | S2, S3 | `offset`, `dirty`, record value, `offset <bench_value>`, `offset`, `dirty` | Write returns OK and readback matches; dirty diagnostics checked on failure. | NOT RUN | Before/write/after output plus dirty diagnostics. |
-| P-04 | CO2 gain write/readback | S2, S3 | `gain`, `dirty`, record value, `gain <bench_value>`, `gain`, `dirty` | Write returns OK and readback matches; dirty diagnostics checked on failure. | NOT RUN | Before/write/after output plus dirty diagnostics. |
+| P-01 | Measurement interval write/readback | S2, S3 | `interval`, `dirty`, record value, `interval <bench_value>`, `interval`, `dirty` | Write returns OK and readback matches; on failure, `dirty` reports whether persistent state may be partial. | PASS | 2026-06-01 on ESP32-S3 `COM17`: baseline `150 ds`, wrote `160 ds`, read back `160 ds`, dirty clean; restored `150 ds`, read back `150 ds`, dirty clean. |
+| P-02 | Measurement interval power-cycle persistence | S2, S3 | Run P-01, power cycle sensor and MCU, `interval` | Value persists across power cycle or documented sensor behavior explains difference. | NOT RUN | No operator power-cycle step was executed during the automated persistent validation run. |
+| P-03 | CO2 offset write/readback | S2, S3 | `offset`, `dirty`, record value, `offset <bench_value>`, `offset`, `dirty` | Write returns OK and readback matches; dirty diagnostics checked on failure. | NOT RUN | Read-only baseline/final value recorded as `0 ppm`; no calibration write was performed. |
+| P-04 | CO2 gain write/readback | S2, S3 | `gain`, `dirty`, record value, `gain <bench_value>`, `gain`, `dirty` | Write returns OK and readback matches; dirty diagnostics checked on failure. | NOT RUN | Read-only baseline/final value recorded as `32768`; no calibration write was performed. |
 | P-05 | Part name write/readback | S2, S3 | `partname`, `dirty`, record value, `partname <bench_text>`, `partname`, `dirty` | Write returns OK and readback matches; dirty diagnostics checked on failure. | NOT RUN | Before/write/after output plus dirty diagnostics. |
 | P-06 | Bus address write | S2, S3 | `addr`, record value, `addr <bench_addr>`, power cycle, `scan`; then rebuild/reconfigure firmware for the new address or use a dedicated test wrapper | Address change behaves as documented and does not retarget the current session until power cycle. | NOT RUN | Address read/scan output, configured-address follow-up output. |
 

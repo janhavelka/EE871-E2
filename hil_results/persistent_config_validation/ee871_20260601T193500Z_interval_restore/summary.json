@@ -1,0 +1,894 @@
+{
+  "metadata": {
+    "tool": "inline persistent validation harness using tools.ee871_hil_runner parsers",
+    "timestamp_utc": "2026-06-01T19:35:00Z",
+    "port": "COM17",
+    "baud": 115200,
+    "branch": "hardening/ee871-e2-industry-readiness",
+    "commit": "c808d67101df",
+    "git_worktree": "dirty",
+    "target_name": "ex_bringup_s3",
+    "board": "ESP32-S3 bench board",
+    "operator_approval": "bench unit and configuration changes approved in chat",
+    "write_delay_s": 0.6,
+    "power_cycle_persistence": "not performed; no operator power-cycle step was executed during this automated run",
+    "calibration_writes": "not performed; offset/gain read-only despite broad approval to avoid unnecessary calibration mutation",
+    "bus_address_write": "not performed; bus address read-only because no automated post-power-cycle retarget/recovery path was used"
+  },
+  "final_verdict": "PASS",
+  "counts": {
+    "PASS": 31,
+    "FAIL": 0,
+    "SKIP": 0,
+    "OPERATOR_REVIEW_REQUIRED": 0
+  },
+  "summary": {
+    "baseline_interval_ds": 150,
+    "test_interval_ds": 160,
+    "restored_interval_ds": 150,
+    "persistent_values_read_final": {
+      "measurement_interval_ds": 150,
+      "co2_interval_factor": 85,
+      "operating_mode_hex": "0x55",
+      "measure_mode": "low power",
+      "priority": "measurement",
+      "bus_address": 0,
+      "part_name_ascii": "EE871",
+      "serial_ascii": "1920935602368A..",
+      "serial_hex": "31 39 32 30 39 33 35 36 30 32 33 36 38 41 00 00",
+      "co2_offset_ppm": 0,
+      "co2_gain": 32768,
+      "persistent_config_dirty": false,
+      "resync_needed": false,
+      "driver_state": "READY",
+      "online": true,
+      "consecutive_failures": 0,
+      "total_failures": 0
+    },
+    "writes_performed": [
+      {
+        "command": "interval 160",
+        "result": "PASS",
+        "reason": ""
+      },
+      {
+        "command": "interval 150",
+        "result": "PASS",
+        "reason": ""
+      }
+    ],
+    "power_cycle_persistence": "not performed; no operator power-cycle step was executed during this automated run",
+    "calibration_writes": "not performed; offset/gain read-only despite broad approval to avoid unnecessary calibration mutation",
+    "bus_address_write": "not performed; bus address read-only because no automated post-power-cycle retarget/recovery path was used"
+  },
+  "parsed_state": {
+    "firmware_build": "Jun  1 2026 20:57:04",
+    "library_version": "0.3.0",
+    "library_full": "0.3.0 (84a46b6, 2026-06-01 20:57:01, clean)",
+    "library_build": "2026-06-01 20:57:01",
+    "library_commit": "84a46b6",
+    "library_git_status": "clean",
+    "measurement_interval_ds": 150,
+    "co2_interval_factor": 85,
+    "operating_mode": 85,
+    "operating_mode_hex": "0x55",
+    "measure_mode": "low power",
+    "priority": "measurement",
+    "device_address": 0,
+    "part_name_ascii": "EE871",
+    "serial_ascii": "1920935602368A..",
+    "serial_hex": "31 39 32 30 39 33 35 36 30 32 33 36 38 41 00 00",
+    "co2_offset_ppm": 0,
+    "co2_gain": 32768,
+    "driver_state": "READY",
+    "online": true,
+    "consecutive_failures": 0,
+    "total_success": 182,
+    "total_failures": 0,
+    "success_rate_pct": 100.0,
+    "persistent_config_dirty": false,
+    "persistent_config_dirty_error": {
+      "name": "OK",
+      "code": 0,
+      "detail": 0
+    },
+    "persistent_config_dirty_error_message": "OK",
+    "resync_needed": false
+  },
+  "commands": [
+    {
+      "command": "version",
+      "description": "Capture firmware/library version",
+      "group": "baseline",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.252,
+      "wait_reason": "prompt-idle",
+      "destructive": false,
+      "pre_drain": "",
+      "parsed": {
+        "firmware_build": "Jun  1 2026 20:57:04",
+        "library_version": "0.3.0",
+        "library_full": "0.3.0 (84a46b6, 2026-06-01 20:57:01, clean)",
+        "library_build": "2026-06-01 20:57:01",
+        "library_commit": "84a46b6",
+        "library_git_status": "clean",
+        "command": "version"
+      }
+    },
+    {
+      "command": "interval",
+      "description": "Read baseline interval",
+      "group": "baseline",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.284,
+      "wait_reason": "prompt-idle",
+      "destructive": false,
+      "pre_drain": "",
+      "parsed": {
+        "statuses": [
+          {
+            "name": "OK",
+            "code": 0,
+            "detail": 0
+          }
+        ],
+        "status": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "measurement_interval_ds": 150,
+        "command": "interval"
+      }
+    },
+    {
+      "command": "factor",
+      "description": "Read CO2 interval factor",
+      "group": "baseline",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.268,
+      "wait_reason": "prompt-idle",
+      "destructive": false,
+      "pre_drain": "",
+      "parsed": {
+        "statuses": [
+          {
+            "name": "OK",
+            "code": 0,
+            "detail": 0
+          }
+        ],
+        "status": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "command": "factor",
+        "co2_interval_factor": 85
+      }
+    },
+    {
+      "command": "mode",
+      "description": "Read operating mode",
+      "group": "baseline",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.326,
+      "wait_reason": "prompt-idle",
+      "destructive": false,
+      "pre_drain": "",
+      "parsed": {
+        "statuses": [
+          {
+            "name": "OK",
+            "code": 0,
+            "detail": 0
+          }
+        ],
+        "status": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "command": "mode",
+        "operating_mode": 85,
+        "operating_mode_hex": "0x55",
+        "measure_mode": "low power",
+        "priority": "measurement"
+      }
+    },
+    {
+      "command": "addr",
+      "description": "Read bus address",
+      "group": "baseline",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.267,
+      "wait_reason": "prompt-idle",
+      "destructive": false,
+      "pre_drain": "",
+      "parsed": {
+        "statuses": [
+          {
+            "name": "OK",
+            "code": 0,
+            "detail": 0
+          }
+        ],
+        "status": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "device_address": 0,
+        "command": "addr"
+      }
+    },
+    {
+      "command": "partname",
+      "description": "Read part name",
+      "group": "baseline",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.362,
+      "wait_reason": "prompt-idle",
+      "destructive": false,
+      "pre_drain": "",
+      "parsed": {
+        "statuses": [
+          {
+            "name": "OK",
+            "code": 0,
+            "detail": 0
+          }
+        ],
+        "status": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "command": "partname",
+        "part_name_ascii": "EE871"
+      }
+    },
+    {
+      "command": "serial",
+      "description": "Read serial number",
+      "group": "baseline",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.364,
+      "wait_reason": "prompt-idle",
+      "destructive": false,
+      "pre_drain": "",
+      "parsed": {
+        "statuses": [
+          {
+            "name": "OK",
+            "code": 0,
+            "detail": 0
+          }
+        ],
+        "status": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "command": "serial",
+        "serial_ascii": "1920935602368A..",
+        "serial_hex": "31 39 32 30 39 33 35 36 30 32 33 36 38 41 00 00"
+      }
+    },
+    {
+      "command": "offset",
+      "description": "Read CO2 offset",
+      "group": "baseline",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.282,
+      "wait_reason": "prompt-idle",
+      "destructive": false,
+      "pre_drain": "",
+      "parsed": {
+        "statuses": [
+          {
+            "name": "OK",
+            "code": 0,
+            "detail": 0
+          }
+        ],
+        "status": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "co2_offset_ppm": 0,
+        "command": "offset"
+      }
+    },
+    {
+      "command": "gain",
+      "description": "Read CO2 gain",
+      "group": "baseline",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.342,
+      "wait_reason": "prompt-idle",
+      "destructive": false,
+      "pre_drain": "",
+      "parsed": {
+        "statuses": [
+          {
+            "name": "OK",
+            "code": 0,
+            "detail": 0
+          }
+        ],
+        "status": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "co2_gain": 32768,
+        "command": "gain"
+      }
+    },
+    {
+      "command": "drv",
+      "description": "Capture baseline health and dirty state",
+      "group": "baseline",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.311,
+      "wait_reason": "prompt-idle",
+      "destructive": false,
+      "pre_drain": "",
+      "parsed": {
+        "driver_state": "READY",
+        "online": true,
+        "consecutive_failures": 0,
+        "total_success": 52,
+        "total_failures": 0,
+        "success_rate_pct": 100.0,
+        "persistent_config_dirty": false,
+        "persistent_config_dirty_error": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "persistent_config_dirty_error_message": "OK",
+        "resync_needed": false,
+        "command": "drv"
+      }
+    },
+    {
+      "command": "interval 160",
+      "description": "Write test interval 160 ds",
+      "group": "interval-write",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.657,
+      "wait_reason": "prompt-idle",
+      "destructive": true,
+      "pre_drain": "",
+      "parsed": {
+        "statuses": [
+          {
+            "name": "OK",
+            "code": 0,
+            "detail": 0
+          }
+        ],
+        "status": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "command": "interval 160"
+      }
+    },
+    {
+      "command": "wait 0.6s after interval 160",
+      "group": "wait",
+      "result": "PASS",
+      "reason": "waited 0.6s after persistent write command",
+      "elapsed_s": 0.601,
+      "parsed": {}
+    },
+    {
+      "command": "interval",
+      "description": "Read back test interval",
+      "group": "interval-write",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.283,
+      "wait_reason": "prompt-idle",
+      "destructive": false,
+      "pre_drain": "",
+      "parsed": {
+        "statuses": [
+          {
+            "name": "OK",
+            "code": 0,
+            "detail": 0
+          }
+        ],
+        "status": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "measurement_interval_ds": 160,
+        "command": "interval"
+      }
+    },
+    {
+      "command": "dirty",
+      "description": "Check dirty after test write",
+      "group": "interval-write",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.251,
+      "wait_reason": "prompt-idle",
+      "destructive": false,
+      "pre_drain": "",
+      "parsed": {
+        "persistent_config_dirty": false,
+        "persistent_config_dirty_error": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "persistent_config_dirty_error_message": "OK",
+        "resync_needed": false,
+        "command": "dirty"
+      }
+    },
+    {
+      "command": "resync",
+      "description": "Resync after test write",
+      "group": "interval-write",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.502,
+      "wait_reason": "prompt-idle",
+      "destructive": false,
+      "pre_drain": "",
+      "parsed": {
+        "statuses": [
+          {
+            "name": "OK",
+            "code": 0,
+            "detail": 0
+          }
+        ],
+        "status": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "persistent_config_dirty": false,
+        "persistent_config_dirty_error": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "persistent_config_dirty_error_message": "OK",
+        "resync_needed": false,
+        "command": "resync"
+      }
+    },
+    {
+      "command": "dirty",
+      "description": "Check dirty after test resync",
+      "group": "interval-write",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.253,
+      "wait_reason": "prompt-idle",
+      "destructive": false,
+      "pre_drain": "",
+      "parsed": {
+        "persistent_config_dirty": false,
+        "persistent_config_dirty_error": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "persistent_config_dirty_error_message": "OK",
+        "resync_needed": false,
+        "command": "dirty"
+      }
+    },
+    {
+      "command": "interval 150",
+      "description": "Restore baseline interval 150 ds",
+      "group": "restore",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.598,
+      "wait_reason": "prompt-idle",
+      "destructive": true,
+      "pre_drain": "",
+      "parsed": {
+        "statuses": [
+          {
+            "name": "OK",
+            "code": 0,
+            "detail": 0
+          }
+        ],
+        "status": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "command": "interval 150"
+      }
+    },
+    {
+      "command": "wait 0.6s after interval 150",
+      "group": "wait",
+      "result": "PASS",
+      "reason": "waited 0.6s after persistent write command",
+      "elapsed_s": 0.6,
+      "parsed": {}
+    },
+    {
+      "command": "interval",
+      "description": "Read back restored interval",
+      "group": "restore",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.284,
+      "wait_reason": "prompt-idle",
+      "destructive": false,
+      "pre_drain": "",
+      "parsed": {
+        "statuses": [
+          {
+            "name": "OK",
+            "code": 0,
+            "detail": 0
+          }
+        ],
+        "status": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "measurement_interval_ds": 150,
+        "command": "interval"
+      }
+    },
+    {
+      "command": "dirty",
+      "description": "Check dirty after restore",
+      "group": "restore",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.254,
+      "wait_reason": "prompt-idle",
+      "destructive": false,
+      "pre_drain": "",
+      "parsed": {
+        "persistent_config_dirty": false,
+        "persistent_config_dirty_error": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "persistent_config_dirty_error_message": "OK",
+        "resync_needed": false,
+        "command": "dirty"
+      }
+    },
+    {
+      "command": "resync",
+      "description": "Resync after restore",
+      "group": "restore",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.512,
+      "wait_reason": "prompt-idle",
+      "destructive": false,
+      "pre_drain": "",
+      "parsed": {
+        "statuses": [
+          {
+            "name": "OK",
+            "code": 0,
+            "detail": 0
+          }
+        ],
+        "status": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "persistent_config_dirty": false,
+        "persistent_config_dirty_error": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "persistent_config_dirty_error_message": "OK",
+        "resync_needed": false,
+        "command": "resync"
+      }
+    },
+    {
+      "command": "dirty",
+      "description": "Final dirty check after restore",
+      "group": "restore",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.311,
+      "wait_reason": "prompt-idle",
+      "destructive": false,
+      "pre_drain": "",
+      "parsed": {
+        "persistent_config_dirty": false,
+        "persistent_config_dirty_error": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "persistent_config_dirty_error_message": "OK",
+        "resync_needed": false,
+        "command": "dirty"
+      }
+    },
+    {
+      "command": "interval",
+      "description": "Final interval",
+      "group": "final",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.343,
+      "wait_reason": "prompt-idle",
+      "destructive": false,
+      "pre_drain": "",
+      "parsed": {
+        "statuses": [
+          {
+            "name": "OK",
+            "code": 0,
+            "detail": 0
+          }
+        ],
+        "status": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "measurement_interval_ds": 150,
+        "command": "interval"
+      }
+    },
+    {
+      "command": "factor",
+      "description": "Final CO2 interval factor",
+      "group": "final",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.329,
+      "wait_reason": "prompt-idle",
+      "destructive": false,
+      "pre_drain": "",
+      "parsed": {
+        "statuses": [
+          {
+            "name": "OK",
+            "code": 0,
+            "detail": 0
+          }
+        ],
+        "status": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "command": "factor",
+        "co2_interval_factor": 85
+      }
+    },
+    {
+      "command": "mode",
+      "description": "Final operating mode",
+      "group": "final",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.325,
+      "wait_reason": "prompt-idle",
+      "destructive": false,
+      "pre_drain": "",
+      "parsed": {
+        "statuses": [
+          {
+            "name": "OK",
+            "code": 0,
+            "detail": 0
+          }
+        ],
+        "status": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "command": "mode",
+        "operating_mode": 85,
+        "operating_mode_hex": "0x55",
+        "measure_mode": "low power",
+        "priority": "measurement"
+      }
+    },
+    {
+      "command": "addr",
+      "description": "Final bus address",
+      "group": "final",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.329,
+      "wait_reason": "prompt-idle",
+      "destructive": false,
+      "pre_drain": "",
+      "parsed": {
+        "statuses": [
+          {
+            "name": "OK",
+            "code": 0,
+            "detail": 0
+          }
+        ],
+        "status": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "device_address": 0,
+        "command": "addr"
+      }
+    },
+    {
+      "command": "partname",
+      "description": "Final part name",
+      "group": "final",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.416,
+      "wait_reason": "prompt-idle",
+      "destructive": false,
+      "pre_drain": "",
+      "parsed": {
+        "statuses": [
+          {
+            "name": "OK",
+            "code": 0,
+            "detail": 0
+          }
+        ],
+        "status": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "command": "partname",
+        "part_name_ascii": "EE871"
+      }
+    },
+    {
+      "command": "serial",
+      "description": "Final serial number",
+      "group": "final",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.419,
+      "wait_reason": "prompt-idle",
+      "destructive": false,
+      "pre_drain": "",
+      "parsed": {
+        "statuses": [
+          {
+            "name": "OK",
+            "code": 0,
+            "detail": 0
+          }
+        ],
+        "status": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "command": "serial",
+        "serial_ascii": "1920935602368A..",
+        "serial_hex": "31 39 32 30 39 33 35 36 30 32 33 36 38 41 00 00"
+      }
+    },
+    {
+      "command": "offset",
+      "description": "Final CO2 offset",
+      "group": "final",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.282,
+      "wait_reason": "prompt-idle",
+      "destructive": false,
+      "pre_drain": "",
+      "parsed": {
+        "statuses": [
+          {
+            "name": "OK",
+            "code": 0,
+            "detail": 0
+          }
+        ],
+        "status": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "co2_offset_ppm": 0,
+        "command": "offset"
+      }
+    },
+    {
+      "command": "gain",
+      "description": "Final CO2 gain",
+      "group": "final",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.281,
+      "wait_reason": "prompt-idle",
+      "destructive": false,
+      "pre_drain": "",
+      "parsed": {
+        "statuses": [
+          {
+            "name": "OK",
+            "code": 0,
+            "detail": 0
+          }
+        ],
+        "status": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "co2_gain": 32768,
+        "command": "gain"
+      }
+    },
+    {
+      "command": "drv",
+      "description": "Final health",
+      "group": "final",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.312,
+      "wait_reason": "prompt-idle",
+      "destructive": false,
+      "pre_drain": "",
+      "parsed": {
+        "driver_state": "READY",
+        "online": true,
+        "consecutive_failures": 0,
+        "total_success": 182,
+        "total_failures": 0,
+        "success_rate_pct": 100.0,
+        "persistent_config_dirty": false,
+        "persistent_config_dirty_error": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "persistent_config_dirty_error_message": "OK",
+        "resync_needed": false,
+        "command": "drv"
+      }
+    }
+  ]
+}
