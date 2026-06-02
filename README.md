@@ -1,6 +1,8 @@
 # EE871 E2 Driver Library
 
-Production-oriented EE871 CO2 sensor driver for the E2 bus on ESP32 using Arduino/PlatformIO or ESP-IDF.
+Production-oriented EE871-E2 driver with framework-neutral core, injected
+GPIO-style E2 transport, native fault-injection tests, Arduino and ESP-IDF
+examples, and HIL validation evidence.
 
 ## Features
 
@@ -10,6 +12,35 @@ Production-oriented EE871 CO2 sensor driver for the E2 bus on ESP32 using Arduin
 - **Deterministic behavior** - bounded loops, explicit timeouts
 - **Managed synchronous** - blocking transfers with spec-compliant limits
 - **Feature guards** - optional EE871 registers are checked from cached capability flags
+- **Dirty/resync diagnostics** - persistent multi-byte write failures are visible
+- **HIL evidence tooling** - serial runner emits transcript, JSON, and Markdown reports
+
+## Release And Validation Status
+
+Version metadata is set to `1.0.0` for this release candidate. The driver is
+production-oriented and validation-backed for the tested ESP32-S3/EE871 bench
+setup, but it is not a fully field-proven driver across every physical fault
+case.
+
+Recorded evidence:
+
+- Native tests: 31 passing.
+- Arduino PlatformIO builds: `ex_bringup_s3` and `ex_bringup_s2` pass locally
+  in the latest hardening/readiness runs.
+- ESP32-S3 safe default HIL: PASS on `COM17`.
+- ESP32-S3 extended safe HIL: PASS on `COM17`.
+- ESP32-S3 persistent measurement interval write/readback/restore: PASS on
+  `COM17`.
+- Physical unplug/replug recovery: PASS, operator-confirmed manual test; no
+  automated transcript is recorded.
+
+Remaining documented gaps:
+
+- Pure ESP-IDF build success must be verified by GitHub Actions or local
+  `idf.py` builds.
+- ESP32-S2 hardware HIL and pure ESP-IDF hardware HIL are not recorded.
+- Power-cycle persistence, CO2 calibration writes, bus-address write/recovery,
+  and stuck-line fault-jig tests are not recorded.
 
 ## E2 Bus, Not Hardware I2C
 
@@ -240,9 +271,9 @@ idf.py -C examples/idf/basic_bringup set-target esp32s3 build
 idf.py -C examples/idf/basic_bringup set-target esp32s2 build
 ```
 
-Hardware validation has not been run in this hardening pass. Use
-`docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md` for the safe CLI recipe,
-bench-only persistent-write warnings, and per-board validation matrix.
+Use `docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md` for the current evidence
+ledger, safe CLI recipe, bench-only persistent-write warnings, and remaining
+per-board validation gaps.
 
 For repeatable serial HIL evidence, build and upload the diagnostic CLI, then
 run:
@@ -261,11 +292,13 @@ Dry-runs and operator/fault steps are never reported as hardware `PASS`.
 
 ## Documentation
 
+- `docs/README.md` - documentation index and status map
 - `CHANGELOG.md` - full release history
 - `docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md` - hardware validation plan and CLI recipe
 - `docs/EE871_E2_HIL_RUNNER.md` - automatic serial HIL runner usage and verdict rules
 - `docs/IDF_PORT.md` - ESP-IDF portability and validation guidance
 - `docs/IDF_PORT_IMPLEMENTATION.md` - ESP-IDF implementation notes
+- `docs/EE871_E2_RELEASE_NOTES_1.0.0.md` - release notes and tagging checklist
 
 ## License
 

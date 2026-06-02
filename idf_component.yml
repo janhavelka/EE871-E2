@@ -1,5 +1,5 @@
-version: "0.3.0"
-description: "EE871 CO2 sensor driver for the E2 bus"
+version: "1.0.0"
+description: "Production-oriented EE871 CO2 sensor driver for GPIO-style E2 bus signaling"
 license: "MIT"
 url: "https://github.com/janhavelka/EE871-E2"
 targets:

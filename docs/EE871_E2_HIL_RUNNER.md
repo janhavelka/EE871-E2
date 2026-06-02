@@ -1,10 +1,19 @@
 # EE871-E2 Python HIL Runner
 
+Last updated: 2026-06-02
+
 `tools/ee871_hil_runner.py` drives the EE871 example serial CLI and records
 repeatable HIL evidence. The default plan is non-persistent. A runner `PASS`
 means the selected serial CLI transcript matched parser expectations; it is not
 a CO2 accuracy, calibration, long-soak, fault-tolerance, or production-readiness
 claim without the matching bench record.
+
+Recorded bench evidence is summarized in
+[EE871_E2_HARDWARE_VALIDATION_MATRIX.md](EE871_E2_HARDWARE_VALIDATION_MATRIX.md).
+As of this update, ESP32-S3 safe HIL and persistent measurement-interval
+write/readback/restore have PASS evidence on `COM17`; ESP32-S2, pure ESP-IDF
+hardware HIL, power-cycle persistence, and physical fault/jig validation remain
+unrecorded.
 
 ## Default Safe Run
 
@@ -132,6 +141,11 @@ The JSON and markdown summaries include the claim boundary. Record board model,
 target firmware, sensor serial/part, wiring, supply, pull-ups, level shifter,
 ambient conditions, and operator notes alongside these artifacts when converting
 a run into a formal validation record.
+
+Keep failed or review-required runs only when they are useful evidence. For a
+formal PASS record, commit the raw transcript plus `summary.json` and
+`summary.md` from the passing timestamped directory, not binary monitor captures
+or firmware build artifacts.
 
 ## Verdicts
 

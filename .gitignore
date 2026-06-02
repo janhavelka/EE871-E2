@@ -40,3 +40,9 @@ wifi_credentials.h
 # Auto-generated files
 include/YourLibrary/Version.h
 compile_commands.json
+docs/doxygen/
+
+# Generated packages
+*.tar.gz
+*.tgz
+*.zip

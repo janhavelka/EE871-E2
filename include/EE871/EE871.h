@@ -20,9 +20,13 @@ enum class DriverState : uint8_t {
   OFFLINE    ///< consecutiveFailures >= offlineThreshold
 };
 
-/// Snapshot of current configuration, cached feature flags, and driver health.
+/// @brief Snapshot of current configuration, cached feature flags, and driver health.
+///
+/// Snapshot access does not touch the E2 bus. The persistent dirty fields mirror
+/// persistentConfigDirty() and persistentConfigDirtyError() so diagnostics can
+/// inspect possible partial persistent writes without issuing new bus traffic.
 struct SettingsSnapshot {
-  Config config;                  ///< Active normalized configuration.
+  Config config;                  ///< Active normalized configuration copied from begin().
   DriverState state = DriverState::UNINIT; ///< Current coarse health state.
   bool initialized = false;       ///< True after successful begin().
   uint32_t nowMs = 0;             ///< Last tick() timestamp seen by the driver.
@@ -45,6 +49,10 @@ struct SettingsSnapshot {
 /// delay callbacks. It is not an Arduino Wire, ESP-IDF hardware I2C, or other
 /// owned-bus driver.
 ///
+/// The driver is non-copyable and non-movable so callback-owned state, cached
+/// health, and persistent dirty diagnostics stay associated with one stable
+/// instance.
+///
 /// Instances are not thread-safe. Use one owner task/context or externally
 /// serialize all public calls, including state-only accessors and tick().
 /// Shared users of the same GPIO/E2 bus must also serialize outside the
@@ -54,41 +62,75 @@ struct SettingsSnapshot {
 /// not call public methods on the same EE871 instance recursively.
 class EE871 {
 public:
+  /// @brief Construct an uninitialized driver instance.
   EE871() = default;
+
+  /// @brief Copying is disabled; keep driver instances in stable storage.
   EE871(const EE871&) = delete;
+  /// @brief Copy assignment is disabled; pass references or pointers instead.
   EE871& operator=(const EE871&) = delete;
+  /// @brief Moving is disabled; callbacks and diagnostics are instance-bound.
   EE871(EE871&&) = delete;
+  /// @brief Move assignment is disabled.
   EE871& operator=(EE871&&) = delete;
 
   // =========================================================================
   // Lifecycle
   // =========================================================================
 
-  /// Initialize the driver with configuration
-  /// @param config Configuration including E2 transport callbacks
-  /// @return Status::Ok() on success, error otherwise
+  /// Initialize the driver with configuration.
+  ///
+  /// begin() validates timing and callbacks, normalizes configuration, probes
+  /// the EE871, and caches feature flags. The driver does not configure GPIO,
+  /// pins, pull-ups, tasks, locks, or framework handles.
+  /// @param config Configuration including E2 transport callbacks.
+  /// @return Status::Ok() on success, error otherwise.
   Status begin(const Config& config);
 
-  /// Process periodic tasks (call regularly from loop)
-  /// @param nowMs Current timestamp in milliseconds
+  /// Record the latest application timestamp for diagnostics.
+  ///
+  /// The current driver performs synchronous bus operations in public API calls;
+  /// tick() does not advance hidden asynchronous E2 transfers.
+  /// @param nowMs Current timestamp in milliseconds.
   void tick(uint32_t nowMs);
 
-  /// Shutdown the driver and release resources.
+  /// End the driver session and clear runtime/cache state.
+  ///
+  /// The core driver owns no GPIO or framework resources, so application-owned
+  /// callback state remains the caller's responsibility.
   void end();
 
   // =========================================================================
   // Diagnostics
   // =========================================================================
 
-  /// Check if device is present on the bus (no health tracking)
-  /// @return Status::Ok() if device responds, error otherwise
+  /// Check if device is present on the bus.
+  ///
+  /// probe() uses raw diagnostic transfers and does not update health counters
+  /// or driver state.
+  /// @return Status::Ok() if device responds, error otherwise.
   Status probe();
 
-  /// Attempt to recover from DEGRADED/OFFLINE state
-  /// @return Status::Ok() if device now responsive, error otherwise
+  /// Attempt to recover from DEGRADED/OFFLINE state.
+  ///
+  /// Recovery performs bounded bus recovery/probe work and tracks failures
+  /// because the driver is initialized.
+  /// @return Status::Ok() if device now responsive, error otherwise.
   Status recover();
 
   /// Re-read persistent configuration and clear dirty diagnostics when coherent.
+  ///
+  /// This proves the persistent fields are readable and coherent by the
+  /// driver's rules. The current coherence check reads the global measurement
+  /// interval, CO2 offset, CO2 gain, and part name when the device advertises
+  /// part-name support, and verifies that the global interval is in range. It
+  /// cannot prove the values match operator/application intent unless the
+  /// application compares them with its own expected baseline. Dirty state
+  /// clears only after this API succeeds.
+  ///
+  /// This API touches the E2 bus, is blocking within configured timing/write
+  /// delay bounds, is not ISR-safe, and uses tracked operations that can update
+  /// health on transfer failure.
   /// @return Status::Ok() when persistent fields can be read and validated.
   Status resyncPersistentConfig();
 
@@ -165,10 +207,17 @@ public:
   uint8_t offlineThreshold() const { return _config.offlineThreshold; }
 
   /// Check if a multi-byte persistent write may have partially applied.
+  ///
+  /// EE871 persistent multi-byte writes are not bus-atomic. Dirty means sensor
+  /// persistent configuration may need operator inspection or a verified
+  /// resyncPersistentConfig(); unrelated successful reads do not clear it.
   /// @return true when persistent configuration needs explicit resync/inspection.
   bool persistentConfigDirty() const { return _persistentConfigDirty; }
 
   /// First error that marked persistent configuration dirty.
+  ///
+  /// The original failing status is preserved so diagnostics can report the
+  /// failure that created the dirty condition.
   /// @return Stored error status, or Status::Ok() when not dirty.
   Status persistentConfigDirtyError() const { return _persistentConfigDirtyError; }
 
@@ -202,9 +251,9 @@ public:
 
   /// Read a custom-memory block using pointer auto-increment.
   /// @param address First custom-memory address.
-  /// @param[out] buf Destination buffer.
-  /// @param len Number of bytes to read.
-  /// @return Status::Ok() when all bytes are read.
+  /// @param[out] buf Destination buffer; must be non-null when len > 0.
+  /// @param len Number of bytes to read; zero is rejected as INVALID_PARAM.
+  /// @return Status::Ok() when all bytes are read, INVALID_PARAM for invalid buffer/length.
   Status customRead(uint8_t address, uint8_t* buf, size_t len);
 
   /// Write one custom-memory byte with command 0x10 and verify by readback.
@@ -281,54 +330,64 @@ public:
   // Feature Support Queries (use cached values from begin())
   // =========================================================================
 
-  /// Check if serial number is readable
+  /// Check if serial number is readable.
+  /// @return true when cached feature flags advertise serial number support.
   bool hasSerialNumber() const { return (_operatingFunctions & cmd::FEATURE_SERIAL_NUMBER) != 0; }
 
-  /// Check if part name is readable/writable
+  /// Check if part name is readable/writable.
+  /// @return true when cached feature flags advertise part-name support.
   bool hasPartName() const { return (_operatingFunctions & cmd::FEATURE_PART_NAME) != 0; }
 
-  /// Check if bus address is configurable
+  /// Check if bus address is configurable.
+  /// @return true when cached feature flags advertise address configuration.
   bool hasAddressConfig() const { return (_operatingFunctions & cmd::FEATURE_ADDRESS_CONFIG) != 0; }
 
-  /// Check if global measurement interval is configurable
+  /// Check if global measurement interval is configurable.
+  /// @return true when cached feature flags advertise global interval support.
   bool hasGlobalInterval() const { return (_operatingFunctions & cmd::FEATURE_GLOBAL_INTERVAL) != 0; }
 
-  /// Check if specific (per-quantity) interval is configurable
+  /// Check if specific (per-quantity) interval is configurable.
+  /// @return true when cached feature flags advertise specific interval support.
   bool hasSpecificInterval() const { return (_operatingFunctions & cmd::FEATURE_SPECIFIC_INTERVAL) != 0; }
 
-  /// Check if measurement filter is configurable
+  /// Check if measurement filter is configurable.
+  /// @return true when cached feature flags advertise filter configuration.
   bool hasFilterConfig() const { return (_operatingFunctions & cmd::FEATURE_FILTER_CONFIG) != 0; }
 
-  /// Check if error code register exists
+  /// Check if error code register exists.
+  /// @return true when cached feature flags advertise error-code support.
   bool hasErrorCode() const { return (_operatingFunctions & cmd::FEATURE_ERROR_CODE) != 0; }
 
-  /// Check if low power mode is supported
+  /// Check if low power mode is supported.
+  /// @return true when cached mode flags advertise low-power mode.
   bool hasLowPowerMode() const { return (_operatingModeSupport & cmd::MODE_SUPPORT_LOW_POWER) != 0; }
 
-  /// Check if E2 priority mode is supported
+  /// Check if E2 priority mode is supported.
+  /// @return true when cached mode flags advertise E2 priority mode.
   bool hasE2Priority() const { return (_operatingModeSupport & cmd::MODE_SUPPORT_E2_PRIORITY) != 0; }
 
-  /// Check if auto adjustment is supported
+  /// Check if auto adjustment is supported.
+  /// @return true when cached special-feature flags advertise auto adjustment.
   bool hasAutoAdjust() const { return (_specialFeatures & cmd::SPECIAL_FEATURE_AUTO_ADJUST) != 0; }
 
   // =========================================================================
   // Identity Strings
   // =========================================================================
 
-  /// Read 16-byte serial number (0xA0-0xAF)
-  /// @param buf Buffer of at least 16 bytes
-  /// @return Status::Ok() when all 16 bytes are read.
+  /// Read 16-byte serial number (0xA0-0xAF).
+  /// @param[out] buf Buffer of at least cmd::CUSTOM_SERIAL_LEN bytes; not NUL-terminated by the driver.
+  /// @return Status::Ok() when all 16 bytes are read, INVALID_PARAM for null buffer.
   Status readSerialNumber(uint8_t* buf);
 
-  /// Read 16-byte part name (0xB0-0xBF)
-  /// @param buf Buffer of at least 16 bytes
-  /// @return Status::Ok() when all 16 bytes are read.
+  /// Read 16-byte part name (0xB0-0xBF).
+  /// @param[out] buf Buffer of at least cmd::CUSTOM_PART_NAME_LEN bytes; not NUL-terminated by the driver.
+  /// @return Status::Ok() when all 16 bytes are read, INVALID_PARAM for null buffer.
   Status readPartName(uint8_t* buf);
 
-  /// Write 16-byte part name (0xB0-0xBF)
-  /// @param buf Buffer of exactly 16 bytes
+  /// Write 16-byte part name (0xB0-0xBF).
+  /// @param buf Buffer of exactly cmd::CUSTOM_PART_NAME_LEN bytes; embedded NUL bytes are written as data.
   /// @return Status::Ok() when all bytes verify. A failure after one byte
-  /// succeeds marks persistent configuration dirty.
+  /// succeeds marks persistent configuration dirty; null buffer returns INVALID_PARAM.
   Status writePartName(const uint8_t* buf);
 
   // =========================================================================
@@ -362,9 +421,9 @@ public:
   /// @return Status::Ok() when the byte is read.
   Status readCo2IntervalFactor(int8_t& factor);
 
-  /// Write CO2-specific interval factor (0xCB)
+  /// Write CO2-specific interval factor (0xCB).
   /// @param factor Signed interval factor.
-  /// @return Status::Ok() when the byte verifies.
+  /// @return Status::Ok() when the byte verifies. This is a persistent single-byte write.
   Status writeCo2IntervalFactor(int8_t factor);
 
   // =========================================================================
@@ -378,7 +437,7 @@ public:
 
   /// Write CO2 filter setting (0xD3).
   /// @param filter Filter setting byte.
-  /// @return Status::Ok() when the byte verifies.
+  /// @return Status::Ok() when the byte verifies. This is a persistent single-byte write.
   Status writeCo2Filter(uint8_t filter);
 
   /// Read operating mode (0xD8)
@@ -387,11 +446,12 @@ public:
   /// @see cmd::OPERATING_MODE_* constants
   Status readOperatingMode(uint8_t& mode);
 
-  /// Write operating mode (0xD8)
-  /// bit0: 0=freerunning, 1=low power
-  /// bit1: 0=measurement priority, 1=E2 priority
+  /// Write operating mode (0xD8).
+  ///
+  /// bit0: 0=freerunning, 1=low power. bit1: 0=measurement priority,
+  /// 1=E2 priority.
   /// @param mode Operating-mode byte.
-  /// @return Status::Ok() when the byte verifies.
+  /// @return Status::Ok() when the byte verifies. This is a persistent single-byte write.
   Status writeOperatingMode(uint8_t mode);
 
   // =========================================================================
@@ -403,8 +463,11 @@ public:
   /// @return Status::Ok() when the byte is read.
   Status readAutoAdjustStatus(bool& running);
 
-  /// Start auto adjustment (cannot be stopped once started)
-  /// Device will return 0x55 during adjustment (~5 min)
+  /// Start auto adjustment (cannot be stopped once started).
+  ///
+  /// Device will return 0x55 during adjustment (~5 min). This is a
+  /// configuration-changing operation and should be treated as bench/maintenance
+  /// unless the application explicitly owns calibration workflow.
   /// @return Status::Ok() when the control byte verifies.
   Status startAutoAdjust();
 
@@ -475,13 +538,19 @@ public:
   // Bus Safety
   // =========================================================================
 
-  /// Reset bus state by clocking with SDA high
-  /// Use after timeout/stuck bus conditions
-  /// @return Ok if bus lines are free after reset
+  /// Reset bus state by clocking with SDA high.
+  ///
+  /// Use after timeout/stuck bus conditions. This touches E2 lines, is blocking
+  /// within configured timing bounds, and is not ISR-safe.
+  /// @return Ok if bus lines are free after reset.
   Status busReset();
 
-  /// Check if bus lines are idle (both high)
-  /// @return Ok if idle, BUS_STUCK if either line is low
+  /// Check if bus lines are idle (both high).
+  ///
+  /// This reads the configured line callbacks and does not issue an E2 transfer.
+  /// It is still not ISR-safe unless the application proves its callbacks are
+  /// ISR-safe.
+  /// @return Ok if idle, BUS_STUCK if either line is low.
   Status checkBusIdle();
 
 private:

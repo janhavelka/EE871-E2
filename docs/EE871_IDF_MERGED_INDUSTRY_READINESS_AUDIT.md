@@ -6,6 +6,29 @@ Branch: `audit/ee871-idf-merged-industry-readiness`
 Audit mode: report-only / no implementation
 IDF merge classification: `QUALIFYING_IDF_MERGED`
 
+## Current Status Note
+
+This is a historical report-only audit from 2026-05-29. It is useful for
+understanding why the hardening branch exists, but it is not the current status
+ledger.
+
+Use these current docs instead:
+
+- [EE871_E2_HARDENING_FINAL_REPORT.md](EE871_E2_HARDENING_FINAL_REPORT.md) for
+  branch hardening, validation, and release-readiness status.
+- [EE871_E2_HARDWARE_VALIDATION_MATRIX.md](EE871_E2_HARDWARE_VALIDATION_MATRIX.md)
+  for hardware evidence and remaining bench gaps.
+- [IDF_PORT.md](IDF_PORT.md) for current ESP-IDF port guidance.
+
+Several audit findings have since been addressed on
+`hardening/ee871-e2-industry-readiness`: native fake E2 fault tests,
+persistent dirty/resync diagnostics, explicit public API safety contracts, CLI
+dirty/resync commands, Python HIL evidence tooling, ESP32-S3 safe HIL evidence,
+and persistent interval write/readback/restore evidence. Pure ESP-IDF build
+success, ESP32-S2 hardware HIL, pure ESP-IDF hardware HIL, power-cycle
+persistence, and physical fault/jig validation remain open unless later docs
+record otherwise.
+
 ## Executive Summary
 
 The ESP-IDF port is merged into `main` and the core is mostly well shaped for production use: it is framework-neutral, transport-injected, and does not own Arduino, ESP-IDF, GPIO setup, or global bus objects. This repository is not a normal I2C device driver; it is an EE871 E2 GPIO-style bus driver, so the production risk is deterministic GPIO timing, clock-stretch handling, flash-write delays, and recovery behavior.
@@ -304,7 +327,7 @@ Present in CI:
 Not run:
 - `idf.py -C examples/idf/basic_bringup set-target esp32s3 build`: not run because `idf.py` is unavailable.
 - `idf.py -C examples/idf/basic_bringup set-target esp32s2 build`: not run because `idf.py` is unavailable.
-- Hardware validation: not run.
+- Hardware validation: not run during this 2026-05-29 audit.
 
 Missing:
 - Native fake E2 protocol/fault-injection suite.

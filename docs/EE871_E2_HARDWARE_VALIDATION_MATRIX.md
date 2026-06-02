@@ -1,6 +1,7 @@
 # EE871-E2 Hardware Validation Matrix
 
-Date: 2026-06-01
+Created: 2026-06-01
+Last updated: 2026-06-02
 Branch: `hardening/ee871-e2-industry-readiness`
 
 This matrix started as a hardware validation plan and now also records completed
@@ -14,6 +15,17 @@ and a Markdown summary. A runner `PASS` applies only to the selected automated
 serial command groups; it does not prove CO2 accuracy, warm-up suitability,
 fault tolerance, long-soak stability, calibration validity, or production
 readiness.
+
+Current evidence summary:
+
+- ESP32-S3 Arduino diagnostic CLI on `COM17`: safe default HIL PASS, extended
+  safe HIL PASS, manual dirty/resync PASS, persistent interval
+  write/readback/restore PASS.
+- Physical unplug/replug recovery: PASS as an operator-confirmed manual test on
+  2026-06-02. No automated HIL transcript artifact is recorded for this step.
+- ESP32-S2 hardware HIL: not recorded.
+- Pure ESP-IDF hardware HIL: not recorded.
+- Power-cycle persistence and stuck-line fault/jig validation: not recorded.
 
 Allowed statuses:
 
@@ -164,6 +176,10 @@ CLI on `COM17`.
 - Upload command: `python -m platformio run -e ex_bringup_s3 -j 1 -t upload --upload-port COM17`.
 - Firmware/library: firmware build `Jun  1 2026 20:57:04`, EE871 library
   `0.3.0 (84a46b6, 2026-06-01 20:57:01, clean)`.
+- Version note: these hardware artifacts were captured before the final
+  `1.0.0` version metadata/docs polish. Keep the exact firmware/library version
+  above when citing these transcripts; the final release-polish pass did not
+  add a new hardware transcript.
 - Safe default HIL: PASS, 10 PASS / 0 FAIL / 0 SKIP / 0 review.
 - Extended safe HIL: PASS, 33 PASS / 0 FAIL / 0 SKIP / 0 review.
 - Manual resync check: PASS, `dirty`, `resync`, `dirty`.
@@ -176,6 +192,11 @@ CLI on `COM17`.
   `resyncNeeded: no` before/after safe stress and after manual `resync`.
 - `rv` is not advertised by help; help advertises `version / ver`. No alias was
   added during this validation pass.
+
+Physical unplug/replug recovery was confirmed by the operator on 2026-06-02 as
+an operator-confirmed manual test. This is recorded as PASS for the unplug/replug
+scenario only. It is not automated HIL evidence, and no raw transcript artifact
+exists for this manual physical recovery step.
 
 Artifacts:
 
@@ -237,13 +258,13 @@ Artifacts:
   `hil_results/persistent_config_validation/ee871_20260601T193500Z_interval_restore/summary.json`,
   `hil_results/persistent_config_validation/ee871_20260601T193500Z_interval_restore/summary.md`
 
-Physical fault/jig tests were not run.
+Stuck-line fault/jig tests were not run.
 
 ## Board Matrix
 
 | ID | Board | Framework/example | Target | Sensor | Pull-ups/level shift | Status | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| B-S3-A | ESP32-S3 dev board | `examples/01_basic_bringup_cli` | `ex_bringup_s3` | EE871-E2 bench sensor | External pull-ups, level shifter as required | PASS | 2026-06-01 on `COM17`; safe default and extended safe HIL PASS; persistent interval write/readback/restore PASS. GPIOs from firmware: DATA=6, CLOCK=7. |
+| B-S3-A | ESP32-S3 dev board | `examples/01_basic_bringup_cli` | `ex_bringup_s3` | EE871-E2 bench sensor | External pull-ups, level shifter as required | PASS | 2026-06-01 on `COM17`; safe default and extended safe HIL PASS; persistent interval write/readback/restore PASS. 2026-06-02 operator-confirmed manual unplug/replug recovery PASS. GPIOs from firmware: DATA=6, CLOCK=7. |
 | B-S2-A | ESP32-S2 dev board | `examples/01_basic_bringup_cli` | `ex_bringup_s2` | EE871-E2 bench sensor | External pull-ups, level shifter as required | NOT RUN | Record GPIOs, supply, cable length. |
 | B-S3-IDF | ESP32-S3 dev board | `examples/idf/basic_bringup` | `esp32s3` | EE871-E2 bench sensor | External pull-ups, level shifter as required | NOT RUN | Requires local or CI pure ESP-IDF build. |
 | B-S2-IDF | ESP32-S2 dev board | `examples/idf/basic_bringup` | `esp32s2` | EE871-E2 bench sensor | External pull-ups, level shifter as required | NOT RUN | Requires local or CI pure ESP-IDF build. |
@@ -284,7 +305,7 @@ Run these only on a bench sensor after recording original values.
 | ID | Scenario | Board(s) | CLI/API sequence | Expected behavior | Status | Evidence to capture |
 | --- | --- | --- | --- | --- | --- | --- |
 | R-01 | Wrong wiring or no sensor | S2, S3 | Disconnect sensor, boot, `probe`, `status`, `drv` | Initialization or reads fail with bounded non-OK status; no hang. | NOT RUN | Boot log, command output, health counters. |
-| R-02 | Unplug/replug recovery | S2, S3 | Start connected, `read`, unplug, repeated `read`, replug, `recover`, `drv` | Tracked failures degrade/offline as configured; successful `recover` returns READY. | NOT RUN | Timestamped health transitions. |
+| R-02 | Unplug/replug recovery | S2, S3 | Start connected, `read`, unplug, repeated `read`, replug, `recover`, `drv` | Tracked failures degrade/offline as configured; successful `recover` returns READY. | PASS | 2026-06-02 operator-confirmed manual physical unplug/replug recovery PASS on the ESP32-S3 bench setup. Evidence type: operator-confirmed manual test. No automated HIL transcript artifact exists; automated HIL evidence remains separate. |
 | R-03 | SDA stuck low | S2, S3 | Use fault jig to pull SDA low, `buscheck`, `libreset`, `drv` | `BUS_STUCK` or precise bounded error; no unbounded wait. | NOT RUN | Jig setup and command output. |
 | R-04 | SCL stuck low / clock stretch timeout | S2, S3 | Use fault jig to pull SCL low, `status`, `buscheck`, `libreset` | Timeout or `BUS_STUCK` within configured deadline; no hang. | NOT RUN | Timing notes and output. |
 | R-05 | SDA forced high/no ACK | S2, S3 | Use fault jig/open line, `probe`, `status` | NACK/no-response error is bounded and health rules match `probe` vs tracked reads. | NOT RUN | Command output. |

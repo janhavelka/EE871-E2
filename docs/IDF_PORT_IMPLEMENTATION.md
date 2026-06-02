@@ -1,7 +1,12 @@
 # EE871-E2 ESP-IDF Port Implementation Notes
 
-Date: 2026-05-31.
+Created: 2026-05-31.
+Last updated: 2026-06-02.
 Branch: `hardening/ee871-e2-industry-readiness`.
+
+Status: implementation files and CI contract are present. Pure ESP-IDF build
+success is still unproven until local `idf.py` builds or GitHub Actions
+`idf-build` matrix logs are recorded.
 
 ## Scope
 
@@ -46,8 +51,12 @@ Branch: `hardening/ee871-e2-industry-readiness`.
 
 ## Remaining Validation
 
-- `idf.py` is not on PATH in this shell, so native ESP-IDF builds for `esp32s3`
-  and `esp32s2` are pending.
-- Hardware smoke remains pending for bus idle, line-level checks, `begin()`,
-  `probe()`, status reads, CO2 reads, missing-device timeout, and stuck-bus
-  behavior.
+- `idf.py` was not on PATH in this shell, so local native ESP-IDF builds for
+  `esp32s3` and `esp32s2` remain pending.
+- GitHub Actions contains the intended `idf-build` matrix, but a passing run was
+  not available locally when last checked.
+- Arduino ESP32-S3 safe HIL and persistent interval write/readback/restore have
+  bench evidence. Pure ESP-IDF hardware HIL remains pending.
+- Hardware smoke remains pending for pure ESP-IDF bus idle, line-level checks,
+  `begin()`, `probe()`, status reads, CO2 reads, missing-device timeout, and
+  stuck-bus behavior.

@@ -1,7 +1,26 @@
 # EE871-E2 Hardening Final Report
 
-Date: 2026-05-31
+Started: 2026-05-31
+Last updated: 2026-06-02
 Branch: `hardening/ee871-e2-industry-readiness`
+
+## Current Status Summary
+
+- Core hardening, native fake E2 fault tests, persistent dirty diagnostics, CLI
+  dirty/resync diagnostics, IDF example contract checks, and the Python HIL
+  runner are implemented.
+- ESP32-S3 Arduino hardware evidence is recorded for safe default HIL, extended
+  safe HIL, manual dirty/resync, and persistent interval write/readback/restore.
+- Physical unplug/replug recovery is recorded as PASS from an
+  operator-confirmed manual test on 2026-06-02; no automated transcript artifact
+  exists for that step.
+- Pure ESP-IDF build success remains unproven until either GitHub Actions shows
+  the `idf-build` matrix passing for `esp32s3` and `esp32s2`, or local `idf.py`
+  builds pass for both targets.
+- ESP32-S2 hardware HIL, pure ESP-IDF hardware HIL, power-cycle persistence, and
+  stuck-line fault/jig validation remain open.
+- This report is chronological. For the latest hardware evidence table, use
+  [EE871_E2_HARDWARE_VALIDATION_MATRIX.md](EE871_E2_HARDWARE_VALIDATION_MATRIX.md).
 
 ## Prompt 01 - Core Contracts And Public API Safety
 
@@ -655,7 +674,9 @@ Remaining hardware gaps after this pass:
 - Persistent interval write/readback/restore is recorded in the next section,
   but power-cycle persistence, CO2 calibration writes, and bus-address
   write/recovery remain unproven.
-- Physical fault/jig validation was not run.
+- Physical unplug/replug recovery was later operator-confirmed as PASS on
+  2026-06-02. No automated transcript artifact exists for that manual step.
+- Stuck-line fault/jig validation was not run.
 - ESP32-S2 hardware HIL was not run.
 - Pure ESP-IDF hardware HIL was not run.
 
@@ -727,3 +748,96 @@ Validation commands for this pass:
   00:00:01.351.
 - `git diff --check`: PASS; only Git line-ending conversion warnings were
   emitted for edited Markdown files.
+
+## Final Release Polish - 1.0.0
+
+Scope:
+- Final documentation and release-readiness polish before merge/tag decision.
+- No driver behavior changes were made in this pass.
+- Version metadata was bumped to `1.0.0` through the repository version tooling.
+
+Doxygen and public API docs:
+- Public header Doxygen now documents the GPIO-style E2 boundary, the fact that
+  the core is not Arduino `Wire` or ESP-IDF hardware I2C, callback ownership,
+  blocking/timing expectations, thread/ISR safety, callback reentrancy limits,
+  health tracking, non-copyable/non-movable driver compatibility, and the
+  persistent dirty/resync model.
+- `CommandTable.h`, `Config.h`, `EE871.h`, `Status.h`, and the generated
+  `Version.h` template were polished for useful API documentation.
+- `Doxyfile` project version is `1.0.0`; generated HTML output remains ignored
+  and was removed after the Doxygen run.
+
+README/docs/changelog/release notes:
+- `README.md` now uses production-oriented wording without claiming full
+  field-proof status.
+- `docs/README.md` indexes the maintained docs and separates current guidance
+  from historical audit records and PDF extracts.
+- `CHANGELOG.md` contains the `1.0.0` release section and compare links.
+- `docs/EE871_E2_RELEASE_NOTES_1.0.0.md` records release summary,
+  compatibility, validation evidence, known limitations, migration notes, HIL
+  artifact paths, and a release checklist.
+
+Hardware matrix finalization:
+- ESP32-S3 Arduino safe HIL remains recorded as PASS.
+- ESP32-S3 Arduino extended safe HIL remains recorded as PASS.
+- ESP32-S3 persistent measurement interval write/readback/restore remains
+  recorded as PASS.
+- Physical unplug/replug recovery is recorded as PASS from an
+  operator-confirmed manual test on 2026-06-02. It is not automated HIL
+  evidence, and no raw transcript artifact exists for that manual physical
+  step.
+- Hardware transcripts were captured before the final `1.0.0` version
+  metadata/docs polish and still show their exact firmware/library version.
+
+Final validation commands:
+- `python tools/check_core_timing_guard.py`: PASS.
+- `python tools/check_cli_contract.py`: PASS.
+- `python tools/check_idf_example_contract.py`: PASS.
+- `python scripts/generate_version.py check`: PASS, `Version.h` up to date.
+- `python -m py_compile tools/ee871_hil_runner.py`: PASS.
+- `doxygen --version`: `1.15.0`.
+- `doxygen Doxyfile`: PASS, no warnings emitted.
+- `python -m platformio test -e native`: PASS, 31/31 tests in 00:00:01.405.
+- `python -m platformio run -e ex_bringup_s3`: PASS in 00:00:21.670.
+- `python -m platformio run -e ex_bringup_s2`: PASS in 00:00:21.579.
+- `python -m platformio pkg pack`: PASS; generated
+  `ee871-e2-1.0.0.tar.gz` was removed before staging.
+- `git diff --check`: PASS; Git reported only expected line-ending conversion
+  warnings for edited files.
+- Core framework-boundary scan of `include/` and `src/`: PASS; no Arduino,
+  `Wire`, hardware I2C, `String`, `Serial`, `TwoWire`, or `HardwareSerial`
+  usage in core code.
+
+Unavailable local verification:
+- `idf.py --version`: unavailable in this workspace,
+  `CommandNotFoundException`.
+- Local pure IDF builds for `esp32s3` and `esp32s2`: not run because `idf.py`
+  is unavailable.
+- `gh run list --limit 5`: unavailable in this workspace,
+  `CommandNotFoundException`; GitHub Actions IDF matrix status is not visible
+  locally through `gh`.
+
+Remaining limitations:
+- Pure ESP-IDF build success still needs proof from GitHub Actions or local
+  `idf.py` builds.
+- ESP32-S2 hardware HIL is not recorded.
+- Pure ESP-IDF hardware HIL is not recorded.
+- Power-cycle persistence is not proven.
+- CO2 calibration writes and bus-address write/recovery were intentionally not
+  tested on hardware.
+- Stuck-line fault-jig validation for SDA/SCL is not recorded.
+
+Merge readiness verdict:
+- Ready after final checks and CI pass.
+
+Release readiness verdict:
+- Ready for `1.0.0` if maintainers accept the documented limitations: pure IDF
+  CI must be verified by GitHub Actions or local IDF, ESP32-S2 hardware HIL and
+  fault-jig tests remain future validation, and the existing HIL transcripts
+  predate the final version metadata/docs polish.
+
+Field/industry-grade wording:
+- Use "production-oriented and validation-backed for the tested
+  ESP32-S3/EE871 bench setup."
+- Do not claim "fully field-proven" or equivalent coverage across all physical
+  fault cases.

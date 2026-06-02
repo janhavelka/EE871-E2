@@ -1,6 +1,8 @@
 # EE871-E2 Document Inventory
 
-Compact driver notes live in `docs/extracted-md/00_*.md` through `08_*.md`. Raw text extracted from the PDFs lives in `docs/pdf-extracted-md/`; use it for search, then verify exact tables against the PDFs under `docs/`.
+Compact driver notes live in `docs/extracted-md/01_*.md` through `08_*.md`.
+Raw text extracted from the PDFs lives in `docs/pdf-extracted-md/`; use it for
+search, then verify exact tables against the PDFs under `docs/`.
 
 | Source PDF / note | Pages | Use for driver work |
 |---|---:|---|
