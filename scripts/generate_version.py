@@ -227,40 +227,40 @@ def _render_version_header(namespace: str, version: str) -> str:
 
 namespace {namespace} {{
 
-/// @brief Major version (breaking changes).
+/// @brief Major semantic version; incremented for breaking source/API changes.
 static constexpr uint16_t VERSION_MAJOR = {major};
 
-/// @brief Minor version (backward-compatible features).
+/// @brief Minor semantic version; incremented for backward-compatible features.
 static constexpr uint16_t VERSION_MINOR = {minor};
 
-/// @brief Patch version (backward-compatible fixes).
+/// @brief Patch semantic version; incremented for backward-compatible fixes.
 static constexpr uint16_t VERSION_PATCH = {patch};
 
-/// @brief Full semantic version string.
+/// @brief Full semantic version string from library.json.
 static constexpr const char* VERSION = {prefix}_VERSION_STRING;
 
 /// @brief Encoded version for numeric comparison: MAJOR*10000 + MINOR*100 + PATCH.
 static constexpr uint32_t VERSION_CODE = {version_code};
 
-/// @brief Backward-compatible alias used by older repositories.
+/// @brief Backward-compatible numeric version alias.
 static constexpr int VERSION_INT = {version_code};
 
-/// @brief Build date string.
+/// @brief Build date string injected by PlatformIO or compiler defaults.
 static constexpr const char* BUILD_DATE = {prefix}_BUILD_DATE;
 
-/// @brief Build time string.
+/// @brief Build time string injected by PlatformIO or compiler defaults.
 static constexpr const char* BUILD_TIME = {prefix}_BUILD_TIME;
 
-/// @brief Build timestamp string.
+/// @brief Build timestamp string composed from build date/time metadata.
 static constexpr const char* BUILD_TIMESTAMP = {prefix}_BUILD_TIMESTAMP;
 
-/// @brief Git commit string.
+/// @brief Git commit string injected by the build script when available.
 static constexpr const char* GIT_COMMIT = {prefix}_GIT_COMMIT;
 
-/// @brief Git working tree status string.
+/// @brief Git working tree status string, typically "clean", "dirty", or "unknown".
 static constexpr const char* GIT_STATUS = {prefix}_GIT_STATUS;
 
-/// @brief Full version string with build metadata.
+/// @brief Full version string with commit, timestamp, and working-tree status.
 static constexpr const char* VERSION_FULL = {prefix}_VERSION_FULL;
 
 }}  // namespace {namespace}

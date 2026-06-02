@@ -1,7 +1,7 @@
 {
   "name": "ee871-e2",
-  "version": "0.3.0",
-  "description": "EE871 CO2 sensor driver for the E2 bus (ESP32 Arduino/PlatformIO).",
+  "version": "1.0.0",
+  "description": "Production-oriented EE871 CO2 sensor driver for GPIO-style E2 bus signaling.",
   "keywords": [
     "ee871",
     "e2",
@@ -12,7 +12,8 @@
     "arduino",
     "platformio",
     "embedded",
-    "non-blocking",
+    "bounded",
+    "synchronous",
     "sensor"
   ],
   "authors": [
@@ -34,9 +35,16 @@
   },
   "license": "MIT",
   "homepage": "https://github.com/janhavelka/EE871-E2",
-  "frameworks": ["arduino", "espidf"],
-  "platforms": ["espressif32"],
-  "headers": ["EE871/EE871.h"],
+  "frameworks": [
+    "arduino",
+    "espidf"
+  ],
+  "platforms": [
+    "espressif32"
+  ],
+  "headers": [
+    "EE871/EE871.h"
+  ],
   "build": {
     "includeDir": "include",
     "srcDir": "src"

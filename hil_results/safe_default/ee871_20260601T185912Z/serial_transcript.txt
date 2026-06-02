@@ -1,0 +1,256 @@
+EE871-E2 serial HIL transcript
+timestamp_utc=2026-06-01T18:59:12Z
+port=COM17
+baud=115200
+dry_run=False
+git_branch=hardening/ee871-e2-industry-readiness
+git_commit=84a46b694c8b
+git_worktree=clean
+
+=== initial serial output ===
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x15 (USB_UART_CHIP_RESET),boot:0x8 (SPI_FAST_FLASH_BOOT)
+Saved PC:0x40379a3a
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x118c
+load:0x403c8700,len:0x4
+load:0x403c8704,len:0xc20
+load:0x403cb700,len:0x30e0
+entry 0x403c88b8
+
+=== EE871 Bringup Example ===
+[I] E2 initialized (DATA=6, CLOCK=7)
+[I] Device initialized successfully
+=== Driver Health ===
+  State: [32mREADY[0m
+  Online: [32myes[0m
+  Consecutive failures: [32m0[0m
+  Total success: [33m0[0m
+  Total failures: [32m0[0m
+  Success rate: [31m0.0%[0m
+  Last OK: never
+  Last error: never
+  persistentConfigDirty: [32mno[0m
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  persistentConfigDirtyError message: OK
+  resyncNeeded: [32mno[0m
+
+Type 'help' for commands
+> 
+
+=== command 1: version ===
+result=PASS reason= elapsed_s=0.001 wait=prompt
+=== Version Info ===
+  Example firmware build: Jun  1 2026 20:57:04
+  EE871 library version: 0.3.0
+  EE871 library full: 0.3.0 (84a46b6, 2026-06-01 20:57:01, clean)
+  EE871 library build: 2026-06-01 20:57:01
+  EE871 library commit: 84a46b6 (clean)
+  Sensor firmware: use command 'fw'
+> 
+
+=== command 2: help ===
+result=PASS reason= elapsed_s=0.012 wait=prompt
+
+[36m=== EE871-E2 CLI Help ===[0m
+
+[32m[Common][0m
+  [36mhelp / ?                        [0m - Show this help
+  [36mversion / ver                   [0m - Print firmware and library version info
+  [36mscan                            [0m - Scan all 8 E2 addresses
+  [36mprobe                           [0m - Probe device (no health tracking)
+  [36mrecover                         [0m - Attempt recovery
+  [36mdrv                             [0m - Show driver state and health
+  [36mdirty                           [0m - Show persistent dirty-state diagnostics
+  [36mresync                          [0m - Verify persistent config; clear dirty on success
+  [36mread                            [0m - Read CO2 average
+  [36mcfg / settings                  [0m - Show driver state and feature flags
+  [36mverbose [0|1]                   [0m - Toggle bus trace output (no args = show)
+  [36mstress [N]                      [0m - Repeated CO2 average reads
+  [36mstress_mix [N]                  [0m - Mixed safe read operations
+  [36mselftest                        [0m - Safe command self-test with report
+
+[32m[Device Commands][0m
+  [36mid                              [0m - Read group/subgroup/available bits
+  [36mstatus                          [0m - Read status byte (starts measurement)
+  [36mco2fast                         [0m - Read MV3 (fast response)
+  [36mco2avg                          [0m - Read MV4 (averaged)
+  [36merror                           [0m - Read error code (if status indicates error)
+  [36mreg read <addr>                 [0m - Read custom register (0x00..0xFF)
+  [36mreg write <addr> <value>        [0m - Write persistent custom register (bench only)
+  [36mreg dump [start] [len]          [0m - Dump custom registers (default all)
+  [36mctrl <main_nibble>              [0m - Raw readControlByte(main_nibble)
+  [36mu16 <main_lo> <main_hi>         [0m - Raw readU16(main_lo, main_hi)
+  [36mptr <addr16>                    [0m - Set custom pointer
+
+[32m[Device Info][0m
+  [36mfw                              [0m - Read firmware version
+  [36me2spec                          [0m - Read E2 spec version
+  [36mfeatures                        [0m - Read feature support flags
+  [36mserial                          [0m - Read serial number
+  [36mpartname                        [0m - Read part name
+  [36mpartname <text>                 [0m - Write persistent part name (16 bytes max)
+
+[32m[Configuration][0m
+  [36maddr                            [0m - Read current bus address
+  [36maddr <0-7>                      [0m - Write persistent bus address (power cycle)
+  [36minterval                        [0m - Read measurement interval
+  [36minterval <dec>                  [0m - Write persistent interval (150..36000 ds)
+  [36mfactor                          [0m - Read CO2 interval factor
+  [36mfactor <val>                    [0m - Write persistent CO2 interval factor
+  [36mfilter                          [0m - Read CO2 filter setting
+  [36mfilter <val>                    [0m - Write persistent CO2 filter
+  [36mmode                            [0m - Read operating mode
+  [36mmode <val>                      [0m - Write persistent operating mode (0..3)
+
+[32m[Calibration][0m
+  [36moffset                          [0m - Read CO2 offset (ppm)
+  [36moffset <val>                    [0m - Write persistent CO2 offset (signed)
+  [36mgain                            [0m - Read CO2 gain
+  [36mgain <val>                      [0m - Write persistent CO2 gain
+  [36mcalpoints                       [0m - Read last calibration points
+  [36mautoadj                         [0m - Read auto-adjust status
+  [36mautoadj start                   [0m - Start config-changing auto-adjustment (~5 min)
+
+[32m[Bus Safety][0m
+  [36mbuscheck                        [0m - Check if bus is idle
+  [36mlibreset                        [0m - Bus reset via library
+
+[32m[Diagnostics][0m
+  [36mdiag                            [0m - Run full diagnostic suite
+  [36mlevels                          [0m - Read current bus levels
+  [36mpintest                         [0m - Test pin toggle (MCU bus control)
+  [36mclocktest                       [0m - Generate clock pulses and verify
+  [36msniff                           [0m - Toggle sniffer on/off
+  [36mtiming                          [0m - Try different clock frequencies
+  [36mbusreset                        [0m - Send 9 clocks to recover stuck bus
+  [36mtx <hex>                        [0m - Test transaction with control byte
+  [36mlibtest                         [0m - Test all library commands (begin uses)
+  [36mcaps                            [0m - Print feature capability booleans
+  [36mtrace stats                     [0m - Show bus trace buffer stats
+  [36mtrace clear                     [0m - Clear buffered trace events
+> 
+
+=== command 3: probe ===
+result=PASS reason= elapsed_s=0.013 wait=prompt
+[36m[I][0m Probing device (no health tracking)...
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+> 
+
+=== command 4: read ===
+result=PASS reason= elapsed_s=0.013 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 567 ppm
+> 
+
+=== command 5: selftest ===
+result=PASS reason= elapsed_s=0.505 wait=prompt
+=== EE871 selftest (safe commands) ===
+  [[32mPASS[0m] probe responds
+  [[32mPASS[0m] probe no-health-side-effects
+  [[32mPASS[0m] readGroup
+  [[32mPASS[0m] group matches
+  [[32mPASS[0m] readSubgroup
+  [[32mPASS[0m] subgroup matches
+  [[32mPASS[0m] readAvailableMeasurements
+  [[32mPASS[0m] CO2 measurement bit present
+  [[32mPASS[0m] readFirmwareVersion
+  [[32mPASS[0m] readE2SpecVersion
+  [[32mPASS[0m] readOperatingFunctions
+  [[32mPASS[0m] readOperatingModeSupport
+  [[32mPASS[0m] readSpecialFeatures
+  [[32mPASS[0m] readStatus
+  [[32mPASS[0m] readCo2Fast
+  [[32mPASS[0m] readCo2Average
+  [[32mPASS[0m] readErrorCode
+  [[32mPASS[0m] readSerialNumber
+  [[32mPASS[0m] readPartName
+  [[32mPASS[0m] readBusAddress
+  [[32mPASS[0m] readMeasurementInterval
+  [[32mPASS[0m] readCo2IntervalFactor
+  [[32mPASS[0m] readOperatingMode
+  [[32mPASS[0m] readControlByte(MAIN_STATUS)
+  [[32mPASS[0m] readU16(MV4)
+  [[32mPASS[0m] recover
+  [[32mPASS[0m] isOnline
+Selftest result: pass=[32m27[0m fail=[32m0[0m skip=[0m0[0m
+> 
+
+=== command 6: drv ===
+result=PASS reason= elapsed_s=0.001 wait=prompt
+=== Driver Health ===
+  State: [32mREADY[0m
+  Online: [32myes[0m
+  Consecutive failures: [32m0[0m
+  Total success: [32m74[0m
+  Total failures: [32m0[0m
+  Success rate: [32m100.0%[0m
+  Last OK: 505 ms ago (at 298 ms)
+  Last error: never
+  persistentConfigDirty: [32mno[0m
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  persistentConfigDirtyError message: OK
+  resyncNeeded: [32mno[0m
+> 
+
+=== command 7: dirty ===
+result=PASS reason= elapsed_s=0.001 wait=prompt
+=== Persistent Config Dirty State ===
+  persistentConfigDirty: [32mno[0m
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  persistentConfigDirtyError message: OK
+  resyncNeeded: [32mno[0m
+> 
+
+=== command 8: stress 50 ===
+result=PASS reason= elapsed_s=0.644 wait=prompt
+  Progress: 5/50 ([31m10%[0m, ok=[32m5[0m, fail=[32m0[0m)
+  Progress: 10/50 ([31m20%[0m, ok=[32m10[0m, fail=[32m0[0m)
+  Progress: 15/50 ([31m30%[0m, ok=[32m15[0m, fail=[32m0[0m)
+  Progress: 20/50 ([31m40%[0m, ok=[32m20[0m, fail=[32m0[0m)
+  Progress: 25/50 ([31m50%[0m, ok=[32m25[0m, fail=[32m0[0m)
+  Progress: 30/50 ([31m60%[0m, ok=[32m30[0m, fail=[32m0[0m)
+  Progress: 35/50 ([31m70%[0m, ok=[32m35[0m, fail=[32m0[0m)
+  Progress: 40/50 ([33m80%[0m, ok=[32m40[0m, fail=[32m0[0m)
+  Progress: 45/50 ([33m90%[0m, ok=[32m45[0m, fail=[32m0[0m)
+  Progress: 50/50 ([32m100%[0m, ok=[32m50[0m, fail=[32m0[0m)
+=== Stress Summary ===
+  Total: 50
+  Success: [32m50[0m
+  Errors: [32m0[0m
+  Success rate: [32m100.00%[0m
+  Duration: 643 ms
+  Rate: 77.76 ops/s
+  Health delta: [32msuccess +100[0m, [32mfailures +0[0m
+> 
+
+=== command 9: drv ===
+result=PASS reason= elapsed_s=0.001 wait=prompt
+=== Driver Health ===
+  State: [32mREADY[0m
+  Online: [32myes[0m
+  Consecutive failures: [32m0[0m
+  Total success: [32m174[0m
+  Total failures: [32m0[0m
+  Success rate: [32m100.0%[0m
+  Last OK: 14 ms ago (at 1436 ms)
+  Last error: never
+  persistentConfigDirty: [32mno[0m
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  persistentConfigDirtyError message: OK
+  resyncNeeded: [32mno[0m
+> 
+
+=== command 10: dirty ===
+result=PASS reason= elapsed_s=0.001 wait=prompt
+=== Persistent Config Dirty State ===
+  persistentConfigDirty: [32mno[0m
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  persistentConfigDirtyError message: OK
+  resyncNeeded: [32mno[0m
+> 
+

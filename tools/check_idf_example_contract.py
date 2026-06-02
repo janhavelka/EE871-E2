@@ -33,10 +33,31 @@ IDF_REQUIRED_FRAGMENTS = [
     "readU16",
     "customRead",
     "customWrite",
+    "persistentConfigDirty",
+    "persistentConfigDirtyError",
+    "persistentConfigDirtyError message",
+    "resyncNeeded",
+    "resyncPersistentConfig",
+    "Write persistent custom register (bench only)",
+    "Write persistent interval",
+    "Write persistent CO2 offset",
+    "Write persistent CO2 gain",
     "recover",
     "busReset",
     "checkBusIdle",
 ]
+
+IDF_REQUIRED_PATTERNS = {
+    "dirty command dispatch": r'std::strcmp\(\s*trimmed\s*,\s*"dirty"\s*\)\s*==\s*0',
+    "resync command dispatch": r'std::strcmp\(\s*trimmed\s*,\s*"resync"\s*\)\s*==\s*0',
+    "dirty accessor": r"persistentConfigDirty",
+    "dirty error accessor": r"persistentConfigDirtyError",
+    "resync API": r"resyncPersistentConfig",
+    "driver health dirty output": r"void\s+printDriverHealth\s*\([^)]*\)\s*\{[\s\S]*?printPersistentDirtyFields\s*\(\s*settings\s*\)",
+    "status dirty summary": r"hasCo2Error\(\):[\s\S]*?printPersistentDirtySummaryIfDirty\s*\(",
+    "resync before after output": r'std::strcmp\(\s*trimmed\s*,\s*"resync"\s*\)\s*==\s*0[\s\S]*?Before:[\s\S]*?resyncPersistentConfig\s*\(\s*\)[\s\S]*?After:',
+    "dirty error code detail output": r"persistentConfigDirtyError:[\s\S]*?code=%u,\s*detail=%ld",
+}
 
 STALE_IDF_WORDING = [
     "minimal idf example",
@@ -80,6 +101,10 @@ def main() -> int:
     for fragment in IDF_REQUIRED_FRAGMENTS:
         if fragment not in idf:
             fail(f"IDF CLI missing required fragment: {fragment!r}")
+
+    for label, pattern in IDF_REQUIRED_PATTERNS.items():
+        if re.search(pattern, idf) is None:
+            fail(f"IDF CLI missing {label}")
 
     if "driver/gpio.h" not in transport:
         fail("ESP-IDF E2 GPIO transport must use driver/gpio.h")

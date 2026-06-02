@@ -341,6 +341,8 @@ Status EE871::getSettings(SettingsSnapshot& out) const {
   out.consecutiveFailures = _consecutiveFailures;
   out.totalFailures = _totalFailures;
   out.totalSuccess = _totalSuccess;
+  out.persistentConfigDirty = _persistentConfigDirty;
+  out.persistentConfigDirtyError = _persistentConfigDirtyError;
   return Status::Ok();
 }
 
@@ -364,6 +366,18 @@ void EE871::_resetStoppedState() {
   _consecutiveFailures = 0;
   _totalFailures = 0;
   _totalSuccess = 0;
+}
+
+void EE871::_markPersistentConfigDirty(const Status& st) {
+  if (!_persistentConfigDirty) {
+    _persistentConfigDirty = true;
+    _persistentConfigDirtyError = st;
+  }
+}
+
+void EE871::_clearPersistentConfigDirty() {
+  _persistentConfigDirty = false;
+  _persistentConfigDirtyError = Status::Ok();
 }
 
 Status EE871::probe() {
@@ -408,6 +422,45 @@ Status EE871::recover() {
     return Status::Ok();
   }
   return st;
+}
+
+Status EE871::resyncPersistentConfig() {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
+
+  uint16_t interval = 0;
+  Status st = readMeasurementInterval(interval);
+  if (!st.ok()) {
+    return st;
+  }
+  if (interval < cmd::INTERVAL_MIN_DECISEC ||
+      interval > cmd::INTERVAL_MAX_DECISEC) {
+    return Status::Error(Err::OUT_OF_RANGE, "Interval out of range", interval);
+  }
+
+  int16_t offset = 0;
+  st = readCo2Offset(offset);
+  if (!st.ok()) {
+    return st;
+  }
+
+  uint16_t gain = 0;
+  st = readCo2Gain(gain);
+  if (!st.ok()) {
+    return st;
+  }
+
+  if (hasPartName()) {
+    uint8_t partName[cmd::CUSTOM_PART_NAME_LEN] = {};
+    st = readPartName(partName);
+    if (!st.ok()) {
+      return st;
+    }
+  }
+
+  _clearPersistentConfigDirty();
+  return Status::Ok();
 }
 
 Status EE871::readControlByte(uint8_t mainCommandNibble, uint8_t& data) {
@@ -516,8 +569,19 @@ Status EE871::customWrite(uint8_t address, uint8_t value) {
     return writeMeasurementInterval(interval);
   }
 
+  return _customWriteDirect(address, value);
+}
+
+Status EE871::_customWriteDirect(uint8_t address, uint8_t value, bool* writeAccepted) {
+  if (writeAccepted != nullptr) {
+    *writeAccepted = false;
+  }
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
+
   const uint8_t control = cmd::makeControlWrite(cmd::MAIN_CUSTOM_WRITE, _config.deviceAddress);
-  Status st = _writeCommandTracked(control, address, value);
+  Status st = _writeCommandTracked(control, address, value, writeAccepted);
   if (!st.ok()) {
     return st;
   }
@@ -554,12 +618,17 @@ Status EE871::writeMeasurementInterval(uint16_t intervalDeciSeconds) {
   const uint8_t low = static_cast<uint8_t>(intervalDeciSeconds & 0xFF);
   const uint8_t high = static_cast<uint8_t>(intervalDeciSeconds >> 8);
 
-  Status st = _writeCommandTracked(control, cmd::CUSTOM_INTERVAL_L, low);
+  bool lowAccepted = false;
+  Status st = _writeCommandTracked(control, cmd::CUSTOM_INTERVAL_L, low, &lowAccepted);
   if (!st.ok()) {
+    if (lowAccepted) {
+      _markPersistentConfigDirty(st);
+    }
     return st;
   }
   st = _writeCommandTracked(control, cmd::CUSTOM_INTERVAL_H, high);
   if (!st.ok()) {
+    _markPersistentConfigDirty(st);
     return st;
   }
 
@@ -569,16 +638,20 @@ Status EE871::writeMeasurementInterval(uint16_t intervalDeciSeconds) {
   uint8_t verifyHigh = 0;
   st = customRead(cmd::CUSTOM_INTERVAL_L, verifyLow);
   if (!st.ok()) {
+    _markPersistentConfigDirty(st);
     return st;
   }
   st = customRead(cmd::CUSTOM_INTERVAL_H, verifyHigh);
   if (!st.ok()) {
+    _markPersistentConfigDirty(st);
     return st;
   }
   const uint16_t verify = static_cast<uint16_t>(verifyLow) |
                           (static_cast<uint16_t>(verifyHigh) << 8);
   if (verify != intervalDeciSeconds) {
-    return Status::Error(Err::E2_ERROR, "Interval verify failed", verify);
+    Status err = Status::Error(Err::E2_ERROR, "Interval verify failed", verify);
+    _markPersistentConfigDirty(err);
+    return err;
   }
   return Status::Ok();
 }
@@ -704,8 +777,12 @@ Status EE871::writePartName(const uint8_t* buf) {
     return Status::Error(Err::NOT_SUPPORTED, "Part name not supported");
   }
   for (uint8_t i = 0; i < cmd::CUSTOM_PART_NAME_LEN; ++i) {
-    Status st = customWrite(cmd::CUSTOM_PART_NAME_START + i, buf[i]);
+    bool accepted = false;
+    Status st = _customWriteDirect(cmd::CUSTOM_PART_NAME_START + i, buf[i], &accepted);
     if (!st.ok()) {
+      if (i > 0 || accepted) {
+        _markPersistentConfigDirty(st);
+      }
       return st;
     }
   }
@@ -864,11 +941,21 @@ Status EE871::readCo2Offset(int16_t& offset) {
 
 Status EE871::writeCo2Offset(int16_t offset) {
   const uint16_t raw = static_cast<uint16_t>(offset);
-  Status st = customWrite(cmd::CUSTOM_CO2_OFFSET_L, static_cast<uint8_t>(raw & 0xFF));
+  bool lowAccepted = false;
+  Status st = _customWriteDirect(cmd::CUSTOM_CO2_OFFSET_L,
+                                 static_cast<uint8_t>(raw & 0xFF),
+                                 &lowAccepted);
   if (!st.ok()) {
+    if (lowAccepted) {
+      _markPersistentConfigDirty(st);
+    }
     return st;
   }
-  return customWrite(cmd::CUSTOM_CO2_OFFSET_H, static_cast<uint8_t>(raw >> 8));
+  st = _customWriteDirect(cmd::CUSTOM_CO2_OFFSET_H, static_cast<uint8_t>(raw >> 8));
+  if (!st.ok()) {
+    _markPersistentConfigDirty(st);
+  }
+  return st;
 }
 
 Status EE871::readCo2Gain(uint16_t& gain) {
@@ -887,11 +974,21 @@ Status EE871::readCo2Gain(uint16_t& gain) {
 }
 
 Status EE871::writeCo2Gain(uint16_t gain) {
-  Status st = customWrite(cmd::CUSTOM_CO2_GAIN_L, static_cast<uint8_t>(gain & 0xFF));
+  bool lowAccepted = false;
+  Status st = _customWriteDirect(cmd::CUSTOM_CO2_GAIN_L,
+                                 static_cast<uint8_t>(gain & 0xFF),
+                                 &lowAccepted);
   if (!st.ok()) {
+    if (lowAccepted) {
+      _markPersistentConfigDirty(st);
+    }
     return st;
   }
-  return customWrite(cmd::CUSTOM_CO2_GAIN_H, static_cast<uint8_t>(gain >> 8));
+  st = _customWriteDirect(cmd::CUSTOM_CO2_GAIN_H, static_cast<uint8_t>(gain >> 8));
+  if (!st.ok()) {
+    _markPersistentConfigDirty(st);
+  }
+  return st;
 }
 
 Status EE871::readCo2CalPoints(uint16_t& lower, uint16_t& upper) {
@@ -1037,7 +1134,12 @@ Status EE871::_readControlByteTracked(uint8_t controlByte, uint8_t& data) {
   return _updateHealth(st);
 }
 
-Status EE871::_writeCommandRaw(uint8_t controlByte, uint8_t addressByte, uint8_t dataByte) {
+Status EE871::_writeCommandRaw(uint8_t controlByte, uint8_t addressByte, uint8_t dataByte,
+                               bool* writeAccepted) {
+  if (writeAccepted != nullptr) {
+    *writeAccepted = false;
+  }
+
   Status st = e2Start(_config);
   if (!st.ok()) {
     return st;
@@ -1109,6 +1211,10 @@ Status EE871::_writeCommandRaw(uint8_t controlByte, uint8_t addressByte, uint8_t
     return Status::Error(Err::NACK, "PEC NACK");
   }
 
+  if (writeAccepted != nullptr) {
+    *writeAccepted = true;
+  }
+
   st = e2Stop(_config);
   if (!st.ok()) {
     return st;
@@ -1116,8 +1222,9 @@ Status EE871::_writeCommandRaw(uint8_t controlByte, uint8_t addressByte, uint8_t
   return st;
 }
 
-Status EE871::_writeCommandTracked(uint8_t controlByte, uint8_t addressByte, uint8_t dataByte) {
-  Status st = _writeCommandRaw(controlByte, addressByte, dataByte);
+Status EE871::_writeCommandTracked(uint8_t controlByte, uint8_t addressByte, uint8_t dataByte,
+                                   bool* writeAccepted) {
+  Status st = _writeCommandRaw(controlByte, addressByte, dataByte, writeAccepted);
   return _updateHealth(st);
 }
 

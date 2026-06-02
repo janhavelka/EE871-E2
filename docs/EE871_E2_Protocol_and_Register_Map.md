@@ -1,7 +1,16 @@
 ﻿# EE871 E2 Protocol + Register Map (Implementation Reference)
 
 **Target device:** EE871 CO2 probe, E2 interface, **0...5% CO2 (0...50,000 ppm)**.  
-This document is a **complete implementation reference** for writing an E2 master library.
+This document is a **curated implementation reference** for writing an E2 master library.
+
+Last reviewed: 2026-06-02.
+
+This is the curated implementation reference. It condenses the vendor PDFs and
+the driver requirements into one working protocol document. For release or
+safety-critical decisions, verify any disputed value against the source PDFs
+listed in Section 14. Current validation status lives in
+[EE871_E2_HARDWARE_VALIDATION_MATRIX.md](EE871_E2_HARDWARE_VALIDATION_MATRIX.md),
+not in this protocol reference.
 
 ---
 

@@ -1,6 +1,6 @@
 # EE871-E2 ESP-IDF v6.0.1 Port Guide
 
-Last audited: 2026-05-19
+Last audited: 2026-06-02
 
 Scope: first-class ESP-IDF support while keeping the Arduino/PlatformIO example
 and public driver core usable. The framework-neutral driver core is shared; the
@@ -36,14 +36,24 @@ Official ESP-IDF references used for the port guidance, verified on
 - `platformio.ini` owns Arduino example and native-test builds; ESP-IDF builds
   use the root `CMakeLists.txt`, `idf_component.yml`, and the
   `examples/idf/basic_bringup` CMake project.
+- `.github/workflows/ci.yml` includes an `idf-build` matrix job for `esp32s3`
+  and `esp32s2` and runs `tools/check_idf_example_contract.py` before the IDF
+  action build.
+- Local pure `idf.py` builds are still unproven in this workspace because
+  `idf.py` was not available when checked. No GitHub Actions pass record was
+  available locally.
 
 ## ESP-IDF Readiness Verdict
 
-The core is ready for ESP-IDF component builds and remains framework-neutral.
-ESP-IDF packaging, the GPIO E2 adapter, and an interactive native IDF bring-up
-CLI are present. The remaining acceptance item is hardware validation on
-ESP32-S2 and ESP32-S3 boards with a real EE871 sensor, including missing-device
-and stuck-bus behavior.
+The core is structured for ESP-IDF component builds and remains
+framework-neutral. ESP-IDF packaging, the GPIO E2 adapter, and an interactive
+native IDF bring-up CLI are present. CI coverage for pure IDF builds is
+configured, but acceptance still requires evidence that the CI matrix or local
+`idf.py` builds passed for ESP32-S2 and ESP32-S3.
+
+Hardware evidence currently exists for the Arduino ESP32-S3 diagnostic CLI, not
+for pure ESP-IDF hardware HIL. Missing-device and stuck-bus behavior still need
+bench or jig validation.
 
 The driver should not be rewritten to call ESP-IDF GPIO or I2C APIs directly
 from the core. EE871 E2 is represented by bit-level open-drain callbacks in
@@ -60,10 +70,16 @@ from the core. EE871 E2 is represented by bit-level open-drain callbacks in
    - Accept this explicitly for the first IDF port or convert write completion
      into a `tick()`-driven state before claiming the driver is suitable for
      high-priority tasks.
-3. Hardware validation:
-   - CLI behavior and builds can be checked without hardware.
-   - Bus timing, pull-up behavior, clock stretching, and recovery still require
-     bench validation.
+3. Pure ESP-IDF build proof:
+   - Component metadata and the native IDF example are present.
+   - CI is configured for the `esp32s3` and `esp32s2` matrix.
+   - Successful `idf.py` builds or GitHub Actions logs still need to be captured
+     before claiming validated ESP-IDF build support.
+4. Hardware validation:
+   - Arduino ESP32-S3 safe and persistent interval HIL evidence is recorded in
+     `docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md`.
+   - Pure ESP-IDF hardware HIL, bus timing, pull-up behavior, clock stretching,
+     and recovery still require bench validation.
 
 ## Files To Change
 
@@ -185,18 +201,22 @@ declare:
 idf_component_register(
   SRCS "main.cpp"
   INCLUDE_DIRS "." "../../common"
-  REQUIRES ee871-e2 esp_driver_gpio esp_timer
+  REQUIRES "EE871-E2" esp_driver_gpio esp_rom esp_timer freertos
 )
 ```
 
 If the IDF adapter is promoted into the component rather than example code,
 place it in a separate optional source file and add `PRIV_REQUIRES
-esp_driver_gpio esp_timer`.
+esp_driver_gpio esp_rom esp_timer`.
 
 ## ESP-IDF Example Behavior
 
-`examples/idf/basic_bringup` provides an interactive serial CLI equivalent to
-`examples/01_basic_bringup_cli`:
+`examples/idf/basic_bringup` provides a diagnostic/basic bring-up interactive
+serial CLI equivalent to `examples/01_basic_bringup_cli`. It owns the E2 GPIO
+lines for demonstration; production applications should integrate the callbacks
+into their own GPIO or bus manager and externally serialize access if multiple
+tasks can touch the same `EE871` instance or E2 lines. EE871-E2 uses GPIO-style
+E2 signaling, not ESP-IDF `driver/i2c_master` or hardware I2C.
 
 1. Configure target in code constants:
    - SCL GPIO.
@@ -239,9 +259,10 @@ Arduino:
 - `python -m platformio run -e ex_bringup_s2`
 
 ESP-IDF:
-- `idf.py set-target esp32s3`
-- `idf.py build` in `examples/idf/basic_bringup`
-- Repeat for `esp32s2` if the project target matrix requires it.
+- `idf.py -C examples/idf/basic_bringup set-target esp32s3 build`
+- `idf.py -C examples/idf/basic_bringup set-target esp32s2 build`
+- If local `idf.py` is unavailable, record the latest GitHub Actions
+  `idf-build` matrix result instead.
 - Hardware smoke:
   - Bus idle SCL/SDA high before begin.
   - `begin()` succeeds against a known EE871 device.
@@ -284,6 +305,6 @@ Static checks:
 5. Run `python -m platformio run -e ex_bringup_s3`.
 6. Run `python -m platformio run -e ex_bringup_s2`.
 7. Build the IDF example for ESP32-S3 and ESP32-S2 with `idf.py` when ESP-IDF
-   is available.
+   is available, or record the passing GitHub Actions `idf-build` matrix.
 8. Hardware-test `begin()`, `probe()`, status read, CO2 reads, bus diagnostics,
    self-test/stress workflows, missing-device timeout, and stuck-bus recovery.

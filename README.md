@@ -1,6 +1,8 @@
 # EE871 E2 Driver Library
 
-Production-grade EE871 CO2 sensor driver for the E2 bus on ESP32 using Arduino/PlatformIO or ESP-IDF.
+Production-oriented EE871-E2 driver with framework-neutral core, injected
+GPIO-style E2 transport, native fault-injection tests, Arduino and ESP-IDF
+examples, and HIL validation evidence.
 
 ## Features
 
@@ -10,6 +12,45 @@ Production-grade EE871 CO2 sensor driver for the E2 bus on ESP32 using Arduino/P
 - **Deterministic behavior** - bounded loops, explicit timeouts
 - **Managed synchronous** - blocking transfers with spec-compliant limits
 - **Feature guards** - optional EE871 registers are checked from cached capability flags
+- **Dirty/resync diagnostics** - persistent multi-byte write failures are visible
+- **HIL evidence tooling** - serial runner emits transcript, JSON, and Markdown reports
+
+## Release And Validation Status
+
+Version metadata is set to `1.0.0` for this release candidate. The driver is
+production-oriented and validation-backed for the tested ESP32-S3/EE871 bench
+setup, but it is not a fully field-proven driver across every physical fault
+case.
+
+Recorded evidence:
+
+- Native tests: 31 passing.
+- Arduino PlatformIO builds: `ex_bringup_s3` and `ex_bringup_s2` pass locally
+  in the latest hardening/readiness runs.
+- ESP32-S3 safe default HIL: PASS on `COM17`.
+- ESP32-S3 extended safe HIL: PASS on `COM17`.
+- ESP32-S3 persistent measurement interval write/readback/restore: PASS on
+  `COM17`.
+- Physical unplug/replug recovery: PASS, operator-confirmed manual test; no
+  automated transcript is recorded.
+
+Remaining documented gaps:
+
+- Pure ESP-IDF build success must be verified by GitHub Actions or local
+  `idf.py` builds.
+- ESP32-S2 hardware HIL and pure ESP-IDF hardware HIL are not recorded.
+- Power-cycle persistence, CO2 calibration writes, bus-address write/recovery,
+  and stuck-line fault-jig tests are not recorded.
+
+## E2 Bus, Not Hardware I2C
+
+EE871-E2 uses GPIO-style open-drain E2 signaling. The library does not use
+Arduino `Wire`, ESP-IDF `driver/i2c_master`, or a hardware I2C peripheral.
+Applications provide `setScl`, `setSda`, `readScl`, `readSda`, and `delayUs`
+callbacks through `Config`.
+
+`Config::deviceAddress` is the 0-7 E2 protocol address encoded into the E2
+control byte. It is not an ESP-IDF or Arduino I2C device address.
 
 ## Installation
 
@@ -31,7 +72,8 @@ Copy `include/EE871/` and `src/` to your project.
 Use this repository as an ESP-IDF component with `EXTRA_COMPONENT_DIRS` or the
 metadata in `idf_component.yml`. The component builds only the framework-neutral
 core. Applications own the open-drain GPIO lines and inject `setScl`, `setSda`,
-`readScl`, `readSda`, and `delayUs` callbacks through `Config`.
+`readScl`, `readSda`, and `delayUs` callbacks through `Config`. The included
+ESP-IDF example uses GPIO callbacks, not `driver/i2c_master`.
 
 ## Quick Start
 
@@ -137,10 +179,58 @@ The driver is managed synchronous: E2 transactions block for bounded protocol ti
 
 The library never owns GPIO pins or an I2C/Wire instance. Applications provide `setScl`, `setSda`, `readScl`, `readSda`, and `delayUs` callbacks.
 
+## Persistent Configuration Writes
+
+Multi-byte persistent writes are not bus-atomic on EE871-E2. A low byte can
+commit before a high byte fails, or a write can be accepted before a later
+readback verify fails. If this happens, persistent sensor configuration may be
+partially changed and should be treated as dirty until it is explicitly
+resynced or inspected.
+
+Use `persistentConfigDirty()` and `persistentConfigDirtyError()` to detect the
+condition and retrieve the original failing `Status`. `SettingsSnapshot`
+includes the same diagnostics. `resyncPersistentConfig()` re-reads the
+persistent fields and clears the dirty state only after the values are readable
+and coherent; unrelated successful reads do not clear it.
+
+The bring-up CLIs expose this through safe diagnostic commands:
+
+```text
+dirty
+resync
+```
+
+`dirty` prints `persistentConfigDirty`, the original dirty error status
+code/detail/message, and whether resync is needed. `resync` prints dirty state
+before and after calling `resyncPersistentConfig()`; it does not perform
+arbitrary writes and does not clear dirty state unless the core API reports
+successful verified resync. Normal safe commands such as `probe`, `status`,
+`read`, `selftest`, `stress`, and `stress_mix` should not create persistent
+dirty state.
+
+Treat persistent writes such as measurement interval, part name, CO2 offset,
+and CO2 gain as maintenance operations. The CLI `reg write <addr> <value>`
+command can write arbitrary custom memory, including persistent/configuration
+addresses, and is bench-only. These operations can have longer latency than
+normal reads and may have sensor flash/endurance implications.
+
+## Threading, ISR, And Callback Contract
+
+`EE871::EE871` instances are not thread-safe. Use one owner task/context, or
+protect all public calls with an external mutex or equivalent serialization,
+including state-only accessors and `tick()`. Shared GPIO/E2 bus users must also
+serialize access outside the library.
+
+Public APIs that touch the E2 bus are blocking and are not ISR-safe because
+they can perform E2 bus I/O and call the configured delay callback. Transport
+callbacks must be bounded and deterministic, and must not call public methods
+on the same `EE871` instance recursively.
+
 ## Main API
 
 - Lifecycle: `begin`, `tick`, `end`
-- Diagnostics: `probe`, `recover`, `busReset`, `checkBusIdle`
+- Diagnostics: `probe`, `recover`, `resyncPersistentConfig`, `busReset`,
+  `checkBusIdle`, `persistentConfigDirty`, `persistentConfigDirtyError`
 - Identification: `readGroup`, `readSubgroup`, `readFirmwareVersion`, `readE2SpecVersion`
 - Measurements: `readStatus`, `readCo2Fast`, `readCo2Average`, `readErrorCode`
 - Custom memory/config: `customRead`, `customWrite`, `writeMeasurementInterval`, bus address, filter, operating mode, auto-adjust, calibration helpers
@@ -154,9 +244,13 @@ The library never owns GPIO pins or an I2C/Wire instance. Applications provide `
 - `examples/01_basic_bringup_cli/` - Interactive CLI for testing
   - Status/error output decodes CO2 error-code names when the feature is
     available.
-- `examples/idf/basic_bringup/` - ESP-IDF GPIO E2 bring-up CLI using
+- `examples/idf/basic_bringup/` - ESP-IDF GPIO E2 diagnostic/basic bring-up CLI using
   `examples/idf/common/E2GpioTransport.h`, with the same user-visible command
-  surface and diagnostics as the Arduino CLI.
+  surface and diagnostics as the Arduino CLI. This example owns GPIO setup for
+  bring-up and diagnostics; production applications should integrate the E2
+  callbacks into their own GPIO or bus manager and externally serialize access
+  if multiple tasks can touch the same `EE871` instance or E2 lines. EE871-E2
+  uses GPIO-style E2 signaling, not ESP-IDF `driver/i2c_master` or hardware I2C.
 
 ## Building And Validation
 
@@ -173,17 +267,38 @@ When ESP-IDF is installed, build the IDF example from
 `examples/idf/basic_bringup`:
 
 ```bash
-idf.py set-target esp32s3
-idf.py build
-idf.py set-target esp32s2
-idf.py build
+idf.py -C examples/idf/basic_bringup set-target esp32s3 build
+idf.py -C examples/idf/basic_bringup set-target esp32s2 build
 ```
+
+Use `docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md` for the current evidence
+ledger, safe CLI recipe, bench-only persistent-write warnings, and remaining
+per-board validation gaps.
+
+For repeatable serial HIL evidence, build and upload the diagnostic CLI, then
+run:
+
+```bash
+python tools/ee871_hil_runner.py --port COMx
+python tools/ee871_hil_runner.py --port COMx --include-extended
+python tools/ee871_hil_runner.py --port COMx --include-unplug-replug
+python tools/ee871_hil_runner.py --port COMx --include-persistent-writes --confirm-persistent-writes
+```
+
+The default runner sequence is non-persistent and records `version`, `help`,
+`probe`, `read`, `selftest`, `drv`, `dirty`, `stress 50`, final `drv`, and
+final `dirty`. It writes a raw transcript, `summary.json`, and `summary.md`.
+Dry-runs and operator/fault steps are never reported as hardware `PASS`.
 
 ## Documentation
 
+- `docs/README.md` - documentation index and status map
 - `CHANGELOG.md` - full release history
+- `docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md` - hardware validation plan and CLI recipe
+- `docs/EE871_E2_HIL_RUNNER.md` - automatic serial HIL runner usage and verdict rules
 - `docs/IDF_PORT.md` - ESP-IDF portability and validation guidance
 - `docs/IDF_PORT_IMPLEMENTATION.md` - ESP-IDF implementation notes
+- `docs/EE871_E2_RELEASE_NOTES_1.0.0.md` - release notes and tagging checklist
 
 ## License
 

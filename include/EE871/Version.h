@@ -12,7 +12,7 @@
 #include <stdint.h>
 
 #ifndef EE871_VERSION_STRING
-#define EE871_VERSION_STRING "0.3.0"
+#define EE871_VERSION_STRING "1.0.0"
 #endif
 
 #ifndef EE871_BUILD_DATE
@@ -41,40 +41,40 @@
 
 namespace EE871 {
 
-/// @brief Major version (breaking changes).
-static constexpr uint16_t VERSION_MAJOR = 0;
+/// @brief Major semantic version; incremented for breaking source/API changes.
+static constexpr uint16_t VERSION_MAJOR = 1;
 
-/// @brief Minor version (backward-compatible features).
-static constexpr uint16_t VERSION_MINOR = 3;
+/// @brief Minor semantic version; incremented for backward-compatible features.
+static constexpr uint16_t VERSION_MINOR = 0;
 
-/// @brief Patch version (backward-compatible fixes).
+/// @brief Patch semantic version; incremented for backward-compatible fixes.
 static constexpr uint16_t VERSION_PATCH = 0;
 
-/// @brief Full semantic version string.
+/// @brief Full semantic version string from library.json.
 static constexpr const char* VERSION = EE871_VERSION_STRING;
 
 /// @brief Encoded version for numeric comparison: MAJOR*10000 + MINOR*100 + PATCH.
-static constexpr uint32_t VERSION_CODE = 300;
+static constexpr uint32_t VERSION_CODE = 10000;
 
-/// @brief Backward-compatible alias used by older repositories.
-static constexpr int VERSION_INT = 300;
+/// @brief Backward-compatible numeric version alias.
+static constexpr int VERSION_INT = 10000;
 
-/// @brief Build date string.
+/// @brief Build date string injected by PlatformIO or compiler defaults.
 static constexpr const char* BUILD_DATE = EE871_BUILD_DATE;
 
-/// @brief Build time string.
+/// @brief Build time string injected by PlatformIO or compiler defaults.
 static constexpr const char* BUILD_TIME = EE871_BUILD_TIME;
 
-/// @brief Build timestamp string.
+/// @brief Build timestamp string composed from build date/time metadata.
 static constexpr const char* BUILD_TIMESTAMP = EE871_BUILD_TIMESTAMP;
 
-/// @brief Git commit string.
+/// @brief Git commit string injected by the build script when available.
 static constexpr const char* GIT_COMMIT = EE871_GIT_COMMIT;
 
-/// @brief Git working tree status string.
+/// @brief Git working tree status string, typically "clean", "dirty", or "unknown".
 static constexpr const char* GIT_STATUS = EE871_GIT_STATUS;
 
-/// @brief Full version string with build metadata.
+/// @brief Full version string with commit, timestamp, and working-tree status.
 static constexpr const char* VERSION_FULL = EE871_VERSION_FULL;
 
 }  // namespace EE871

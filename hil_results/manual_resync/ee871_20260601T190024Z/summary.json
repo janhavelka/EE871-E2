@@ -1,0 +1,126 @@
+{
+  "metadata": {
+    "tool": "ee871_hil_runner.py",
+    "tool_version": "1.0",
+    "timestamp_utc": "2026-06-01T19:00:24Z",
+    "port": "COM17",
+    "baud": 115200,
+    "timeout_s": 8.0,
+    "command_timeout_s": 20.0,
+    "idle_s": 0.35,
+    "output_dir": "hil_results\\manual_resync\\ee871_20260601T190024Z",
+    "dry_run": false,
+    "board": "unspecified",
+    "target_name": "unspecified",
+    "operator": "unspecified",
+    "expected_device_address": 0,
+    "git_branch": "hardening/ee871-e2-industry-readiness",
+    "git_commit": "84a46b694c8b",
+    "git_worktree": "dirty"
+  },
+  "final_verdict": "PASS",
+  "counts": {
+    "PASS": 3,
+    "FAIL": 0,
+    "SKIP": 0,
+    "OPERATOR_REVIEW_REQUIRED": 0
+  },
+  "parsed_state": {
+    "persistent_config_dirty": false,
+    "resync_needed": false
+  },
+  "initial_serial_output_present": true,
+  "claim_boundary": "PASS is limited to the selected automated serial EE871 CLI command groups. It does not prove CO2 accuracy, warm-up suitability, persistent-write safety, fault tolerance, long-soak stability, calibration validity, or production readiness.",
+  "commands": [
+    {
+      "command": "dirty",
+      "planned_command": "dirty",
+      "description": "Manual pre-resync dirty check.",
+      "group": "manual-safe",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.001,
+      "wait_reason": "prompt",
+      "destructive": false,
+      "operator_required": false,
+      "requires_opt_in": null,
+      "notes": "",
+      "parsed": {
+        "persistent_config_dirty": false,
+        "persistent_config_dirty_error": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "persistent_config_dirty_error_message": "OK",
+        "resync_needed": false,
+        "command": "dirty"
+      },
+      "clean_excerpt": "=== Persistent Config Dirty State ===\r\n  persistentConfigDirty: no\n  persistentConfigDirtyError: OK (code=0, detail=0)\n  persistentConfigDirtyError message: OK\n  resyncNeeded: no\n> "
+    },
+    {
+      "command": "resync",
+      "planned_command": "resync",
+      "description": "Manual persistent config resync check.",
+      "group": "manual-safe",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.2,
+      "wait_reason": "prompt",
+      "destructive": false,
+      "operator_required": false,
+      "requires_opt_in": null,
+      "notes": "",
+      "parsed": {
+        "statuses": [
+          {
+            "name": "OK",
+            "code": 0,
+            "detail": 0
+          }
+        ],
+        "status": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "persistent_config_dirty": false,
+        "persistent_config_dirty_error": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "persistent_config_dirty_error_message": "OK",
+        "resync_needed": false,
+        "command": "resync"
+      },
+      "clean_excerpt": "=== Persistent Config Resync ===\r\nBefore:\r\n  persistentConfigDirty: no\n  persistentConfigDirtyError: OK (code=0, detail=0)\n  persistentConfigDirtyError message: OK\n  resyncNeeded: no\n  Status: OK (code=0, detail=0)\n  Message: OK\nAfter:\r\n  persistentConfigDirty: no\n  persistentConfigDirtyError: OK (code=0, detail=0)\n  persistentConfigDirtyError message: OK\n  resyncNeeded: no\n> "
+    },
+    {
+      "command": "dirty",
+      "planned_command": "dirty",
+      "description": "Manual post-resync dirty check.",
+      "group": "manual-safe",
+      "result": "PASS",
+      "reason": "",
+      "elapsed_s": 0.001,
+      "wait_reason": "prompt",
+      "destructive": false,
+      "operator_required": false,
+      "requires_opt_in": null,
+      "notes": "",
+      "parsed": {
+        "persistent_config_dirty": false,
+        "persistent_config_dirty_error": {
+          "name": "OK",
+          "code": 0,
+          "detail": 0
+        },
+        "persistent_config_dirty_error_message": "OK",
+        "resync_needed": false,
+        "command": "dirty"
+      },
+      "clean_excerpt": "=== Persistent Config Dirty State ===\r\n  persistentConfigDirty: no\n  persistentConfigDirtyError: OK (code=0, detail=0)\n  persistentConfigDirtyError message: OK\n  resyncNeeded: no\n> "
+    }
+  ]
+}

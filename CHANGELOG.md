@@ -7,38 +7,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+No changes yet.
+
+## [1.0.0] - 2026-06-02
+
 ### Added
-- ESP-IDF component metadata (`CMakeLists.txt`, `idf_component.yml`) for the
-  framework-neutral E2 driver core.
-- ESP-IDF GPIO E2 adapter and `examples/idf/basic_bringup` application-owned
-  transport example.
-- ESP-IDF bring-up CLI now mirrors the Arduino CLI command surface, formatting,
-  diagnostics, health/error reporting, raw/register access, probe/recover/reset,
-  self-test, stress, and demo workflows.
-- `tools/check_idf_example_contract.py` verifies Arduino/ESP-IDF CLI help parity
-  and guards against stale IDF example wording.
-- `SettingsSnapshot`, `getSettings()`, `isInitialized()`, `getConfig()`, `driverState()`, `healthState()`, and `offlineThreshold()` for cache-only runtime and health inspection.
-- Command-table helpers for supported main-command read checks and CO2 error-code names.
-- Bring-up CLI status/error output now decodes CO2 error-code names.
+- Framework-neutral EE871-E2 core with injected GPIO-style E2 callbacks.
+- Arduino and native ESP-IDF diagnostic/basic bring-up examples.
+- Deterministic native fake E2 transport for host-side runtime fault injection.
+- Runtime fault tests for stuck SCL timeout, PEC mismatch, device absence,
+  write verify mismatch, offline/recover, and probe health side effects.
+- Persistent configuration dirty diagnostics:
+  `persistentConfigDirty()`, `persistentConfigDirtyError()`,
+  `resyncPersistentConfig()`, and matching `SettingsSnapshot` fields.
+- Arduino and ESP-IDF diagnostic CLI commands for `dirty` and `resync`.
+- Pure ESP-IDF GitHub Actions `idf-build` matrix job for `esp32s3` and
+  `esp32s2`, plus an IDF example contract checker.
+- `tools/ee871_hil_runner.py`, a Python serial HIL evidence runner with safe,
+  extended-safe, persistent-write opt-in, and operator-fault plans.
+- Hardware validation matrix, HIL runner documentation, documentation index, and
+  1.0.0 release notes.
+- `SettingsSnapshot`, `getSettings()`, `isInitialized()`, `getConfig()`,
+  `driverState()`, `healthState()`, and `offlineThreshold()` for cache-only
+  runtime and health inspection.
+- Command-table helpers for supported main-command read checks and CO2
+  error-code names.
 
 ### Changed
-- `library.json` now advertises both Arduino and ESP-IDF framework support.
-- Release metadata now matches the published repository, maintainer contact,
-  and `0.3.0` changelog baseline.
-- Reference documentation now uses human-readable vendor PDF names and separates compact protocol notes from full PDF extractions under `docs/extracted-md/` and `docs/pdf-extracted-md/`.
-- `Config::offlineThreshold = 0` now normalizes to one, and `begin()` / `end()` reset stale cached runtime and feature state.
-- High-level optional-feature helpers now consistently return `NOT_INITIALIZED` before parameter or capability checks when called before `begin()`.
-- `writeOperatingMode()` now validates unsupported bit fields before capability checks.
-- README and `Config` Doxygen now document timing bounds, health behavior, feature guards, and callback ownership more explicitly.
-- ESP-IDF port documentation now describes the interactive CLI and validation
-  checklist instead of a one-way periodic logger.
-- `AGENTS.md` now explicitly requires native ESP-IDF examples and forbids
-  Arduino compatibility facades in IDF example code.
+- Public docs clarify that EE871-E2 uses GPIO-style E2 signaling, not Arduino
+  `Wire`, ESP-IDF `driver/i2c_master`, or a hardware I2C peripheral.
+- Public API contracts document blocking behavior, timing bounds,
+  thread-safety, ISR-safety, callback restrictions, and shared-bus
+  serialization requirements.
+- `EE871::EE871` is non-copyable and non-movable.
+- `SettingsSnapshot` includes persistent dirty diagnostics.
+- Package/docs describe the driver as managed synchronous and bounded rather
+  than non-blocking.
+- `library.json` and `idf_component.yml` now advertise both Arduino and ESP-IDF
+  framework/component support.
+- ESP-IDF port documentation describes the interactive diagnostic CLI and
+  validation checklist.
+- `Config::offlineThreshold = 0` normalizes to one, and `begin()` / `end()`
+  reset stale cached runtime and feature state.
+- High-level optional-feature helpers consistently return `NOT_INITIALIZED`
+  before parameter or capability checks when called before `begin()`.
+- `writeOperatingMode()` validates unsupported bit fields before capability
+  checks.
 
 ### Fixed
-- Byte-timeout accounting in E2 bit helpers now uses saturating arithmetic and avoids overflow in the elapsed-time accumulator.
-- Unsupported EE871 main-command reads now return `NOT_SUPPORTED` before E2 traffic, including two-byte reads.
-- `IN_PROGRESS` statuses are neutral for health tracking instead of counting as communication failures.
+- Byte-timeout accounting in E2 bit helpers uses saturating arithmetic and avoids
+  overflow in the elapsed-time accumulator.
+- Unsupported EE871 main-command reads return `NOT_SUPPORTED` before E2 traffic,
+  including two-byte reads.
+- `IN_PROGRESS` statuses are neutral for health tracking instead of counting as
+  communication failures.
+- Dirty-state tracking covers first-byte accepted/readback-failed cases for
+  multi-byte persistent writes.
+
+### Validation
+- Native tests: 31 passing.
+- Arduino ESP32-S3/S2 PlatformIO builds: passing in local readiness runs.
+- ESP32-S3 safe HIL: PASS.
+- ESP32-S3 extended safe HIL: PASS.
+- ESP32-S3 persistent interval write/readback/restore: PASS.
+- Physical unplug/replug recovery: PASS, operator-confirmed manual test with no
+  automated transcript artifact.
+- Pure ESP-IDF build: CI coverage is configured, but local `idf.py` and GitHub
+  Actions proof remain unverified in this workspace.
+- Remaining unrun items: ESP32-S2 hardware HIL, pure ESP-IDF hardware HIL,
+  stuck-line fault-jig tests, power-cycle persistence, CO2 calibration writes,
+  and bus-address write/recovery.
+
+### Compatibility
+- Source compatibility break: code that copies or moves `EE871::EE871`
+  instances by value must keep drivers in stable storage and pass references or
+  pointers instead.
+- `SettingsSnapshot` layout changed. ABI/layout-sensitive users must rebuild
+  and should not persist or externally share raw snapshot layouts.
+- Normal one-instance users should only need to rebuild.
+
+### Known Limitations
+- Physical fault-jig validation is incomplete.
+- Pure ESP-IDF build proof depends on a passing GitHub Actions matrix or local
+  ESP-IDF environment.
+- CO2 calibration writes were intentionally not tested on hardware.
+- Power-cycle persistence was not proven.
 
 ## [0.3.0] - 2026-03-01
 
@@ -90,7 +143,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial release with template structure
 - ESP32-S2 and ESP32-S3 support
 
-[Unreleased]: https://github.com/janhavelka/EE871-E2/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/janhavelka/EE871-E2/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/janhavelka/EE871-E2/compare/v0.3.0...v1.0.0
 [0.3.0]: https://github.com/janhavelka/EE871-E2/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/janhavelka/EE871-E2/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/janhavelka/EE871-E2/compare/v0.1.1...v0.2.0
