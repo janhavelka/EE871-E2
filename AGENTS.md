@@ -48,6 +48,43 @@ Rules:
 - No heap allocation in steady state (no `String`, `std::vector`, `new` in normal ops).
 - No logging in library code; examples may log.
 - No macros for constants; use `static constexpr`. Macros only for conditional compile or logging helpers.
+- Prefer the simplest implementation that preserves protocol correctness,
+  bounded timing, precise diagnostics, and source compatibility. Do not add
+  generic frameworks, service registries, async engines, hidden schedulers, or
+  broad abstractions for one device-specific need.
+- Field stability is higher priority than API convenience. If a shortcut would
+  hide a side effect, collapse useful error detail, or make recovery ambiguous,
+  use the explicit and testable path instead.
+
+---
+
+## Simplicity, Safety, and Field Robustness
+
+- Keep the core library boring: small public APIs, explicit state, fixed-size
+  data, and direct protocol helpers.
+- Fail closed on invalid configuration, unsupported identity, missing CO2
+  capability, bus-stuck conditions, PEC mismatch, or range violations. Do not
+  silently continue with guessed behavior.
+- Preserve distinguishable failures. Do not collapse timeout, NACK, bus-stuck,
+  clock-stretch timeout, PEC mismatch, invalid config, unsupported feature,
+  sensor-status error, and out-of-range data into a generic failure.
+- Use `DEVICE_NOT_FOUND` only for definite absence/presence failure. Use
+  `NOT_SUPPORTED`, `OUT_OF_RANGE`, `PEC_MISMATCH`, `BUS_STUCK`, `TIMEOUT`,
+  `NACK`, or a more precise existing code when the device responded but the
+  result is invalid or unsupported.
+- Do not hide bus or sensor side effects inside convenience APIs unless the API
+  name, docs, examples, and tests make the side effect explicit.
+- Prefer explicit recovery over background magic. The application owns retry
+  cadence, power policy, and aggregate health decisions.
+- Once the driver is `OFFLINE`, normal bus operations should fail quickly with a
+  precise status until explicit recovery succeeds. Diagnostics and recovery
+  paths may still touch the bus.
+- Keep sensor-domain failures separate from transport health. A reported CO2
+  sensor status error or validated out-of-range reading is not the same as an
+  E2 communication failure when bus I/O succeeded.
+- Every field-facing feature needs native fake coverage for success, absence,
+  timeout/NACK or equivalent transfer failure, boundary values, and state
+  transitions before it is treated as production-ready.
 
 ---
 
@@ -157,6 +194,53 @@ Rules:
 - 0x10 or 0x50 writes can take up to 150 ms; slave may hold CLK low during this time.
 - 0xC6/0xC7 interval write commits after both bytes; delay up to 300 ms.
 - After any write, wait with a deadline and read back to verify.
+- Persistent custom-memory writes, interval writes, address writes, and
+  maintenance calibration writes must be explicit. Do not hide persistence
+  behind read or normal sampling APIs.
+- Multi-step or persistent writes must either keep cached state and hardware
+  synchronized or expose an explicit dirty/resync-needed diagnostic.
+- Dirty or partial persistent state may be cleared only after a successful full
+  readback, resync, recover, or documented verification path.
+- Do not add new persistent-write APIs without documenting whether they are
+  maintenance operations and how partial write failure is diagnosed.
+
+---
+
+## Measurement and Status Semantics
+
+- Raw MV3/MV4 reads and checked sample reads are different APIs. Keep that
+  distinction visible in names, docs, examples, and tests.
+- Status reads are side-effecting: reading status can start or trigger a new
+  measurement and reset timing under documented conditions.
+- For checked CO2 sample helpers, read the required measured value first and
+  read status second so the status evaluates the last measured value and starts
+  the next measurement sequence.
+- Do not read status only to make a raw value API look safer. If a helper reads
+  status, the helper name and documentation must make that explicit.
+- Warm-up state, triggered-measurement delay, stale-data policy, unsupported
+  MV1/MV2 access, CO2 status errors, PEC mismatch, and out-of-range values must
+  remain distinguishable through API status, result metadata, or documentation.
+- Do not invent sample freshness, warmup, or owner scheduling policy inside the
+  core library. Applications decide cadence and field policy.
+
+---
+
+## Concurrency, ISR, and Validation Honesty
+
+- Driver instances are not thread-safe. Applications must externally serialize
+  access when multiple tasks share a driver or physical E2 lines.
+- Public APIs are not ISR-safe unless a specific API explicitly documents and
+  proves otherwise. E2 signaling, delay callbacks, health tracking, and
+  persistent writes are task-context operations.
+- Transport callbacks must be bounded, deterministic, and must not recursively
+  call public methods on the same driver instance.
+- Tests, reports, README, release notes, and hardware validation matrices must
+  not invent results. If hardware, ESP-IDF, fault injection, or long-run field
+  validation was not run, say so directly.
+- Examples must be labeled honestly as diagnostic, bring-up, or production
+  templates. Production-oriented examples must show ownership, serialization,
+  timeout policy, recovery cadence, level-shifting assumptions, pull-up
+  assumptions, and bounded scheduling clearly.
 
 ---
 
