@@ -186,9 +186,35 @@ static uint8_t calcPecWrite(uint8_t controlByte, uint8_t addressByte, uint8_t da
   return static_cast<uint8_t>((controlByte + addressByte + dataByte) & 0xFF);
 }
 
-static void sleepMs(const Config& cfg, uint32_t delayMs) {
-  for (uint32_t i = 0; i < delayMs; ++i) {
-    cfg.delayUs(1000, cfg.busUser);
+static void delayLongMs(const Config& cfg, uint32_t delayMs) {
+  uint32_t remaining = delayMs;
+  while (remaining > 0) {
+    const uint32_t slice = (remaining < cfg.longDelaySliceMs)
+                               ? remaining
+                               : static_cast<uint32_t>(cfg.longDelaySliceMs);
+    if (cfg.delayMs != nullptr) {
+      cfg.delayMs(slice, cfg.busUser);
+    } else {
+      cfg.delayUs(slice * 1000U, cfg.busUser);
+    }
+    if (cfg.yield != nullptr) {
+      cfg.yield(cfg.busUser);
+    }
+    remaining -= slice;
+  }
+}
+
+static bool isPresenceOrTransportFailure(const Status& st) {
+  switch (st.code) {
+    case Err::NACK:
+    case Err::TIMEOUT:
+    case Err::BUS_STUCK:
+    case Err::E2_ERROR:
+    case Err::PEC_MISMATCH:
+    case Err::DEVICE_NOT_FOUND:
+      return true;
+    default:
+      return false;
   }
 }
 
@@ -202,117 +228,39 @@ Status EE871::begin(const Config& config) {
 
   _resetStoppedState();
 
-  if (config.setScl == nullptr || config.setSda == nullptr ||
-      config.readScl == nullptr || config.readSda == nullptr ||
-      config.delayUs == nullptr) {
-    return Status::Error(Err::INVALID_CONFIG, "Missing E2 callbacks");
-  }
-  if (config.deviceAddress > cmd::DEVICE_ADDRESS_MAX) {
-    return Status::Error(Err::INVALID_CONFIG, "Invalid device address");
-  }
-  if (config.clockLowUs < 100 || config.clockHighUs < 100) {
-    return Status::Error(Err::INVALID_CONFIG, "Clock timing below spec");
-  }
-  if (config.startHoldUs < 4 || config.stopHoldUs < 4) {
-    return Status::Error(Err::INVALID_CONFIG, "Start/stop hold below spec");
-  }
-  if (config.bitTimeoutUs == 0 || config.byteTimeoutUs == 0) {
-    return Status::Error(Err::INVALID_CONFIG, "Timeouts must be non-zero");
-  }
-  if (config.byteTimeoutUs < config.bitTimeoutUs) {
-    return Status::Error(Err::INVALID_CONFIG, "byteTimeoutUs must be >= bitTimeoutUs");
-  }
-  if (config.writeDelayMs > cmd::WRITE_DELAY_MAX_MS) {
-    return Status::Error(Err::INVALID_CONFIG, "writeDelayMs exceeds safe limit");
-  }
-  if (config.intervalWriteDelayMs > cmd::INTERVAL_WRITE_DELAY_MAX_MS) {
-    return Status::Error(Err::INVALID_CONFIG, "intervalWriteDelayMs exceeds safe limit");
-  }
-
-  Config normalized = config;
-  if (normalized.offlineThreshold == 0) {
-    normalized.offlineThreshold = 1;
+  Config normalized;
+  Status st = _validateConfig(config, normalized);
+  if (!st.ok()) {
+    return st;
   }
   _config = normalized;
 
   // Check bus is idle before probing
   if (!readScl(_config) || !readSda(_config)) {
-    // Attempt bus reset - clock out pulses with SDA high
-    setSda(_config, true);
-    for (uint8_t i = 0; i < cmd::BUS_RESET_CLOCKS; ++i) {
-      setScl(_config, false);
-      delayUs(_config, _config.clockLowUs, nullptr);
-      setScl(_config, true);
-      // Wait for SCL to actually rise (handle clock stretching)
-      uint32_t waited = 0;
-      while (!readScl(_config) && waited < _config.bitTimeoutUs) {
-        delayUs(_config, kPollStepUs, nullptr);
-        waited += kPollStepUs;
-      }
-      delayUs(_config, _config.clockHighUs, nullptr);
-    }
-    // Generate STOP condition to leave bus in known state
-    setScl(_config, false);
-    delayUs(_config, _config.clockLowUs, nullptr);
-    setSda(_config, false);
-    delayUs(_config, kDataSetupUs, nullptr);
-    setScl(_config, true);
-    delayUs(_config, _config.stopHoldUs, nullptr);
-    setSda(_config, true);
-    delayUs(_config, _config.stopHoldUs, nullptr);
-    // Check again
-    if (!readScl(_config) || !readSda(_config)) {
-      Status err = Status::Error(Err::BUS_STUCK, "Bus stuck after reset");
+    st = _busResetRaw();
+    if (!st.ok()) {
       _resetStoppedState();
-      return err;
+      return st;
     }
   }
 
-  uint8_t low = 0;
-  uint8_t high = 0;
-  const uint8_t controlLow = cmd::makeControlRead(cmd::MAIN_TYPE_LO, _config.deviceAddress);
-  const uint8_t controlHigh = cmd::makeControlRead(cmd::MAIN_TYPE_HI, _config.deviceAddress);
-
-  Status st = _readControlByteRaw(controlLow, low);
+  IdentitySnapshot identity;
+  st = _readIdentityRaw(identity);
   if (!st.ok()) {
+    if (_config.beginPolicy == BeginPolicy::AllowAbsent &&
+        isPresenceOrTransportFailure(st)) {
+      _initialized = true;
+      _driverState = DriverState::OFFLINE;
+      _consecutiveFailures = _config.offlineThreshold;
+      _beginProbeStatus = st;
+      return Status::Ok();
+    }
     _resetStoppedState();
     return st;
   }
-  st = _readControlByteRaw(controlHigh, high);
-  if (!st.ok()) {
-    _resetStoppedState();
-    return st;
-  }
 
-  const uint16_t group = static_cast<uint16_t>(low) | (static_cast<uint16_t>(high) << 8);
-  if (group != cmd::SENSOR_GROUP_ID) {
-    Status err = Status::Error(Err::DEVICE_NOT_FOUND, "Unexpected group id", group);
-    _resetStoppedState();
-    return err;
-  }
-
-  // Cache feature flags for guards
-  // Use raw reads since we're not fully initialized yet
-  _operatingFunctions = 0;
-  _operatingModeSupport = 0;
-  _specialFeatures = 0;
-
-  // Set pointer to 0x07
-  const uint8_t ptrControl = cmd::makeControlWrite(cmd::MAIN_CUSTOM_PTR, _config.deviceAddress);
-  st = _writeCommandRaw(ptrControl, 0x00, cmd::CUSTOM_OPERATING_FUNCTIONS);
-  if (st.ok()) {
-    const uint8_t readControl = cmd::makeControlRead(cmd::MAIN_CUSTOM_PTR, _config.deviceAddress);
-    // Read 0x07, 0x08, 0x09 in sequence (auto-increment)
-    st = _readControlByteRaw(readControl, _operatingFunctions);
-    if (st.ok()) {
-      st = _readControlByteRaw(readControl, _operatingModeSupport);
-    }
-    if (st.ok()) {
-      st = _readControlByteRaw(readControl, _specialFeatures);
-    }
-  }
-  // If feature read fails, continue with defaults (all features disabled)
-  // This is non-fatal - the device still works, just with guards active
+  (void)_readFeatureFlagsRaw();
+  _beginProbeStatus = Status::Ok();
 
   _initialized = true;
   _driverState = DriverState::READY;
@@ -343,6 +291,11 @@ Status EE871::getSettings(SettingsSnapshot& out) const {
   out.totalSuccess = _totalSuccess;
   out.persistentConfigDirty = _persistentConfigDirty;
   out.persistentConfigDirtyError = _persistentConfigDirtyError;
+  out.beginPolicy = _config.beginPolicy;
+  out.beginProbeStatus = _beginProbeStatus;
+  out.hasDelayMs = _config.delayMs != nullptr;
+  out.hasYield = _config.yield != nullptr;
+  out.longDelaySliceMs = _config.longDelaySliceMs;
   return Status::Ok();
 }
 
@@ -356,7 +309,9 @@ void EE871::_resetStoppedState() {
   _config = Config{};
   _initialized = false;
   _driverState = DriverState::UNINIT;
+  _allowOfflineTransfer = false;
   _nowMs = 0;
+  _beginProbeStatus = Status::Ok();
   _operatingFunctions = 0;
   _operatingModeSupport = 0;
   _specialFeatures = 0;
@@ -380,30 +335,205 @@ void EE871::_clearPersistentConfigDirty() {
   _persistentConfigDirtyError = Status::Ok();
 }
 
+Status EE871::_validateConfig(const Config& input, Config& normalized) const {
+  if (input.setScl == nullptr || input.setSda == nullptr ||
+      input.readScl == nullptr || input.readSda == nullptr ||
+      input.delayUs == nullptr) {
+    return Status::Error(Err::INVALID_CONFIG, "Missing E2 callbacks");
+  }
+  if (input.deviceAddress > cmd::DEVICE_ADDRESS_MAX) {
+    return Status::Error(Err::INVALID_CONFIG, "Invalid device address");
+  }
+  if (static_cast<uint8_t>(input.beginPolicy) >
+      static_cast<uint8_t>(BeginPolicy::AllowAbsent)) {
+    return Status::Error(Err::INVALID_CONFIG, "Invalid begin policy");
+  }
+  if (input.clockLowUs < 100 || input.clockHighUs < 100) {
+    return Status::Error(Err::INVALID_CONFIG, "Clock timing below spec");
+  }
+  if (input.startHoldUs < 4 || input.stopHoldUs < 4) {
+    return Status::Error(Err::INVALID_CONFIG, "Start/stop hold below spec");
+  }
+  if (input.bitTimeoutUs == 0 || input.byteTimeoutUs == 0) {
+    return Status::Error(Err::INVALID_CONFIG, "Timeouts must be non-zero");
+  }
+  if (input.byteTimeoutUs < input.bitTimeoutUs) {
+    return Status::Error(Err::INVALID_CONFIG, "byteTimeoutUs must be >= bitTimeoutUs");
+  }
+  if (input.writeDelayMs > cmd::WRITE_DELAY_MAX_MS) {
+    return Status::Error(Err::INVALID_CONFIG, "writeDelayMs exceeds safe limit");
+  }
+  if (input.intervalWriteDelayMs > cmd::INTERVAL_WRITE_DELAY_MAX_MS) {
+    return Status::Error(Err::INVALID_CONFIG, "intervalWriteDelayMs exceeds safe limit");
+  }
+  if (input.longDelaySliceMs > 50) {
+    return Status::Error(Err::INVALID_CONFIG, "longDelaySliceMs exceeds safe limit");
+  }
+
+  normalized = input;
+  if (normalized.offlineThreshold == 0) {
+    normalized.offlineThreshold = 1;
+  }
+  if (normalized.longDelaySliceMs == 0) {
+    normalized.longDelaySliceMs = 1;
+  }
+  return Status::Ok();
+}
+
+Status EE871::_busResetRaw() {
+  // Clock out 9+ pulses with SDA high to reset slave state machine.
+  setSda(_config, true);
+  for (uint8_t i = 0; i < cmd::BUS_RESET_CLOCKS; ++i) {
+    setScl(_config, false);
+    delayUs(_config, _config.clockLowUs, nullptr);
+    setScl(_config, true);
+
+    uint32_t waited = 0;
+    while (!readScl(_config) && waited < _config.bitTimeoutUs) {
+      delayUs(_config, kPollStepUs, nullptr);
+      waited += kPollStepUs;
+    }
+    if (waited >= _config.bitTimeoutUs) {
+      return Status::Error(Err::BUS_STUCK, "SCL stuck during reset");
+    }
+    delayUs(_config, _config.clockHighUs, nullptr);
+  }
+
+  setScl(_config, false);
+  delayUs(_config, _config.clockLowUs, nullptr);
+  setSda(_config, false);
+  delayUs(_config, kDataSetupUs, nullptr);
+  setScl(_config, true);
+  delayUs(_config, _config.stopHoldUs, nullptr);
+  setSda(_config, true);
+  delayUs(_config, _config.stopHoldUs, nullptr);
+
+  if (!readScl(_config) || !readSda(_config)) {
+    return Status::Error(Err::BUS_STUCK, "Bus stuck after reset");
+  }
+  return Status::Ok();
+}
+
+Status EE871::_readIdentityRaw(IdentitySnapshot& out) {
+  uint8_t low = 0;
+  uint8_t high = 0;
+  Status st = _readControlByteRaw(cmd::makeControlRead(cmd::MAIN_TYPE_LO, _config.deviceAddress),
+                                  low);
+  if (!st.ok()) {
+    return st;
+  }
+  st = _readControlByteRaw(cmd::makeControlRead(cmd::MAIN_TYPE_HI, _config.deviceAddress),
+                           high);
+  if (!st.ok()) {
+    return st;
+  }
+  out.group = static_cast<uint16_t>(low) | (static_cast<uint16_t>(high) << 8);
+  if (out.group != cmd::SENSOR_GROUP_ID) {
+    return Status::Error(Err::NOT_SUPPORTED, "Unexpected group id", out.group);
+  }
+
+  st = _readControlByteRaw(cmd::makeControlRead(cmd::MAIN_TYPE_SUB, _config.deviceAddress),
+                           out.subgroup);
+  if (!st.ok()) {
+    return st;
+  }
+  if (out.subgroup != cmd::SENSOR_SUBGROUP_ID) {
+    return Status::Error(Err::NOT_SUPPORTED, "Unexpected subgroup id", out.subgroup);
+  }
+
+  st = _readControlByteRaw(cmd::makeControlRead(cmd::MAIN_AVAIL_MEAS, _config.deviceAddress),
+                           out.availableMeasurements);
+  if (!st.ok()) {
+    return st;
+  }
+  if ((out.availableMeasurements & cmd::AVAILABLE_MEAS_MASK) == 0) {
+    return Status::Error(Err::NOT_SUPPORTED, "CO2 measurement not advertised",
+                         out.availableMeasurements);
+  }
+  return Status::Ok();
+}
+
+Status EE871::_readIdentityTracked(IdentitySnapshot& out) {
+  uint8_t low = 0;
+  uint8_t high = 0;
+  Status st = _readControlByteTracked(
+      cmd::makeControlRead(cmd::MAIN_TYPE_LO, _config.deviceAddress), low);
+  if (!st.ok()) {
+    return st;
+  }
+  st = _readControlByteTracked(
+      cmd::makeControlRead(cmd::MAIN_TYPE_HI, _config.deviceAddress), high);
+  if (!st.ok()) {
+    return st;
+  }
+  out.group = static_cast<uint16_t>(low) | (static_cast<uint16_t>(high) << 8);
+  if (out.group != cmd::SENSOR_GROUP_ID) {
+    return Status::Error(Err::NOT_SUPPORTED, "Unexpected group id", out.group);
+  }
+
+  st = _readControlByteTracked(
+      cmd::makeControlRead(cmd::MAIN_TYPE_SUB, _config.deviceAddress), out.subgroup);
+  if (!st.ok()) {
+    return st;
+  }
+  if (out.subgroup != cmd::SENSOR_SUBGROUP_ID) {
+    return Status::Error(Err::NOT_SUPPORTED, "Unexpected subgroup id", out.subgroup);
+  }
+
+  st = _readControlByteTracked(
+      cmd::makeControlRead(cmd::MAIN_AVAIL_MEAS, _config.deviceAddress),
+      out.availableMeasurements);
+  if (!st.ok()) {
+    return st;
+  }
+  if ((out.availableMeasurements & cmd::AVAILABLE_MEAS_MASK) == 0) {
+    return Status::Error(Err::NOT_SUPPORTED, "CO2 measurement not advertised",
+                         out.availableMeasurements);
+  }
+  return Status::Ok();
+}
+
+Status EE871::_readFeatureFlagsRaw() {
+  _operatingFunctions = 0;
+  _operatingModeSupport = 0;
+  _specialFeatures = 0;
+
+  const uint8_t ptrControl = cmd::makeControlWrite(cmd::MAIN_CUSTOM_PTR, _config.deviceAddress);
+  Status st = _writeCommandRaw(ptrControl, 0x00, cmd::CUSTOM_OPERATING_FUNCTIONS);
+  if (!st.ok()) {
+    return st;
+  }
+
+  uint8_t operatingFunctions = 0;
+  uint8_t operatingModeSupport = 0;
+  uint8_t specialFeatures = 0;
+  const uint8_t readControl = cmd::makeControlRead(cmd::MAIN_CUSTOM_PTR, _config.deviceAddress);
+  st = _readControlByteRaw(readControl, operatingFunctions);
+  if (!st.ok()) {
+    return st;
+  }
+  st = _readControlByteRaw(readControl, operatingModeSupport);
+  if (!st.ok()) {
+    return st;
+  }
+  st = _readControlByteRaw(readControl, specialFeatures);
+  if (!st.ok()) {
+    return st;
+  }
+
+  _operatingFunctions = operatingFunctions;
+  _operatingModeSupport = operatingModeSupport;
+  _specialFeatures = specialFeatures;
+  return Status::Ok();
+}
+
 Status EE871::probe() {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
   }
 
-  uint8_t low = 0;
-  uint8_t high = 0;
-  const uint8_t controlLow = cmd::makeControlRead(cmd::MAIN_TYPE_LO, _config.deviceAddress);
-  const uint8_t controlHigh = cmd::makeControlRead(cmd::MAIN_TYPE_HI, _config.deviceAddress);
-
-  Status st = _readControlByteRaw(controlLow, low);
-  if (!st.ok()) {
-    return st;
-  }
-  st = _readControlByteRaw(controlHigh, high);
-  if (!st.ok()) {
-    return st;
-  }
-
-  const uint16_t group = static_cast<uint16_t>(low) | (static_cast<uint16_t>(high) << 8);
-  if (group != cmd::SENSOR_GROUP_ID) {
-    return Status::Error(Err::DEVICE_NOT_FOUND, "Unexpected group id", group);
-  }
-  return Status::Ok();
+  IdentitySnapshot identity;
+  return _readIdentityRaw(identity);
 }
 
 Status EE871::recover() {
@@ -411,17 +541,26 @@ Status EE871::recover() {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
   }
 
-  // Attempt bus reset first to clear any stuck state (no health tracking)
-  // Ignore result - still try to probe even if bus reset reports stuck
-  busReset();
+  const bool startedOffline = _driverState == DriverState::OFFLINE;
+  (void)_busResetRaw();
 
-  // Probe device (tracked - updates health state)
-  uint16_t group = 0;
-  Status st = readGroup(group);
-  if (st.ok()) {
-    return Status::Ok();
+  IdentitySnapshot identity;
+  _allowOfflineTransfer = true;
+  Status st = _readIdentityTracked(identity);
+  _allowOfflineTransfer = false;
+  if (!st.ok()) {
+    if (startedOffline) {
+      _driverState = DriverState::OFFLINE;
+      if (_consecutiveFailures < _config.offlineThreshold) {
+        _consecutiveFailures = _config.offlineThreshold;
+      }
+    }
+    return st;
   }
-  return st;
+
+  (void)_readFeatureFlagsRaw();
+  _beginProbeStatus = Status::Ok();
+  return Status::Ok();
 }
 
 Status EE871::resyncPersistentConfig() {
@@ -586,7 +725,7 @@ Status EE871::_customWriteDirect(uint8_t address, uint8_t value, bool* writeAcce
     return st;
   }
 
-  sleepMs(_config, _config.writeDelayMs);
+  delayLongMs(_config, _config.writeDelayMs);
 
   uint8_t verify = 0;
   st = customRead(address, verify);
@@ -632,7 +771,7 @@ Status EE871::writeMeasurementInterval(uint16_t intervalDeciSeconds) {
     return st;
   }
 
-  sleepMs(_config, _config.intervalWriteDelayMs);
+  delayLongMs(_config, _config.intervalWriteDelayMs);
 
   uint8_t verifyLow = 0;
   uint8_t verifyHigh = 0;
@@ -662,7 +801,7 @@ Status EE871::readGroup(uint16_t& group) {
     return st;
   }
   if (group != cmd::SENSOR_GROUP_ID) {
-    return Status::Error(Err::DEVICE_NOT_FOUND, "Unexpected group id", group);
+    return Status::Error(Err::NOT_SUPPORTED, "Unexpected group id", group);
   }
   return Status::Ok();
 }
@@ -673,7 +812,7 @@ Status EE871::readSubgroup(uint8_t& subgroup) {
     return st;
   }
   if (subgroup != cmd::SENSOR_SUBGROUP_ID) {
-    return Status::Error(Err::DEVICE_NOT_FOUND, "Unexpected subgroup id", subgroup);
+    return Status::Error(Err::NOT_SUPPORTED, "Unexpected subgroup id", subgroup);
   }
   return Status::Ok();
 }
@@ -702,6 +841,59 @@ Status EE871::readCo2Fast(uint16_t& ppm) {
 
 Status EE871::readCo2Average(uint16_t& ppm) {
   return readU16(cmd::MAIN_MV4_LO, cmd::MAIN_MV4_HI, ppm);
+}
+
+Status EE871::readCo2FastSample(Co2ReadResult& out) {
+  return _readCo2Sample(Co2ValueKind::Fast, out);
+}
+
+Status EE871::readCo2AverageSample(Co2ReadResult& out) {
+  return _readCo2Sample(Co2ValueKind::Average, out);
+}
+
+Status EE871::_readCo2Sample(Co2ValueKind kind, Co2ReadResult& out) {
+  out = Co2ReadResult{};
+  out.kind = kind;
+
+  uint16_t ppm = 0;
+  Status st = (kind == Co2ValueKind::Fast) ? readCo2Fast(ppm) : readCo2Average(ppm);
+  out.ppm = ppm;
+  out.valueReadStatus = st;
+  if (!st.ok()) {
+    return st;
+  }
+
+  uint8_t statusByte = 0;
+  st = readStatus(statusByte);
+  out.statusReadStatus = st;
+  if (!st.ok()) {
+    return st;
+  }
+  out.statusByte = statusByte;
+  out.statusValid = true;
+
+  if (hasCo2Error(statusByte)) {
+    out.co2Error = true;
+    if (hasErrorCode()) {
+      uint8_t errorCode = 0;
+      st = readErrorCode(errorCode);
+      out.errorCodeReadStatus = st;
+      if (!st.ok()) {
+        return st;
+      }
+      out.errorCode = errorCode;
+      out.errorCodeValid = true;
+      return Status::Error(Err::CO2_SENSOR_ERROR, "CO2 sensor status error", errorCode);
+    }
+    return Status::Error(Err::CO2_SENSOR_ERROR, "CO2 sensor status error", statusByte);
+  }
+
+  if (ppm > cmd::CO2_PPM_MAX) {
+    return Status::Error(Err::OUT_OF_RANGE, "CO2 ppm out of range", ppm);
+  }
+
+  out.ppmValid = true;
+  return Status::Ok();
 }
 
 // ============================================================================
@@ -1011,40 +1203,7 @@ Status EE871::busReset() {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
   }
 
-  // Clock out 9+ pulses with SDA high to reset slave state machine
-  setSda(_config, true);
-  for (uint8_t i = 0; i < cmd::BUS_RESET_CLOCKS; ++i) {
-    setScl(_config, false);
-    delayUs(_config, _config.clockLowUs, nullptr);
-    setScl(_config, true);
-    // Wait for clock to rise (slave might stretch)
-    uint32_t waited = 0;
-    while (!readScl(_config) && waited < _config.bitTimeoutUs) {
-      delayUs(_config, kPollStepUs, nullptr);
-      waited += kPollStepUs;
-    }
-    if (waited >= _config.bitTimeoutUs) {
-      return Status::Error(Err::BUS_STUCK, "SCL stuck during reset");
-    }
-    delayUs(_config, _config.clockHighUs, nullptr);
-  }
-
-  // Generate STOP condition
-  setScl(_config, false);
-  delayUs(_config, _config.clockLowUs, nullptr);
-  setSda(_config, false);
-  delayUs(_config, kDataSetupUs, nullptr);
-  setScl(_config, true);
-  delayUs(_config, _config.stopHoldUs, nullptr);
-  setSda(_config, true);
-  delayUs(_config, _config.stopHoldUs, nullptr);
-
-  // Verify bus is now idle
-  if (!readScl(_config) || !readSda(_config)) {
-    return Status::Error(Err::BUS_STUCK, "Bus stuck after reset");
-  }
-
-  return Status::Ok();
+  return _busResetRaw();
 }
 
 Status EE871::checkBusIdle() {
@@ -1130,6 +1289,9 @@ Status EE871::_readControlByteRaw(uint8_t controlByte, uint8_t& data) {
 }
 
 Status EE871::_readControlByteTracked(uint8_t controlByte, uint8_t& data) {
+  if (_initialized && _driverState == DriverState::OFFLINE && !_allowOfflineTransfer) {
+    return Status::Error(Err::BUSY, "Driver is offline; call recover()");
+  }
   Status st = _readControlByteRaw(controlByte, data);
   return _updateHealth(st);
 }
@@ -1224,6 +1386,9 @@ Status EE871::_writeCommandRaw(uint8_t controlByte, uint8_t addressByte, uint8_t
 
 Status EE871::_writeCommandTracked(uint8_t controlByte, uint8_t addressByte, uint8_t dataByte,
                                    bool* writeAccepted) {
+  if (_initialized && _driverState == DriverState::OFFLINE && !_allowOfflineTransfer) {
+    return Status::Error(Err::BUSY, "Driver is offline; call recover()");
+  }
   Status st = _writeCommandRaw(controlByte, addressByte, dataByte, writeAccepted);
   return _updateHealth(st);
 }

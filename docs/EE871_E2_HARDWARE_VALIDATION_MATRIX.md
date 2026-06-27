@@ -1,8 +1,8 @@
 # EE871-E2 Hardware Validation Matrix
 
 Created: 2026-06-01
-Last updated: 2026-06-02
-Branch: `hardening/ee871-e2-industry-readiness`
+Last updated: 2026-06-27
+Branch: `hardening/ee871-production-api-20260627`
 
 This matrix started as a hardware validation plan and now also records completed
 bench evidence where available. Default status remains `NOT RUN` until a test is
@@ -26,6 +26,9 @@ Current evidence summary:
 - ESP32-S2 hardware HIL: not recorded.
 - Pure ESP-IDF hardware HIL: not recorded.
 - Power-cycle persistence and stuck-line fault/jig validation: not recorded.
+- New 1.1.0 behavior HIL is not recorded yet: absent startup/recovery, checked
+  average/fast samples, identity mismatch rejection, and cooperative
+  long-delay callback behavior.
 
 Allowed statuses:
 
@@ -67,6 +70,8 @@ probe
 drv
 status
 read
+sampleavg
+samplefast
 co2fast
 co2avg
 features
@@ -89,8 +94,11 @@ Notes:
   read-only: tracked reads update driver health, and `recover` may issue bus
   recovery clocks before probing.
 - `probe` is diagnostic-only and should not change health counters.
-- `status` can trigger a new EE871 measurement when the previous sample is old.
-- `read` reads the CO2 averaged value; `co2fast` reads MV3; `co2avg` reads MV4.
+- `status`, `sampleavg`, and `samplefast` read the status byte and can trigger
+  a new EE871 measurement when the previous sample is old.
+- `read` and `co2avg` read the raw MV4 averaged value; `co2fast` reads raw MV3.
+- `sampleavg` reads MV4 first and status second; `samplefast` reads MV3 first
+  and status second.
 - `dirty` is state-only and should report `persistentConfigDirty: no` on a
   clean startup and after normal safe commands.
 - `resync` calls `resyncPersistentConfig()`. It performs verified persistent
@@ -275,9 +283,11 @@ Stuck-line fault/jig tests were not run.
 | --- | --- | --- | --- | --- | --- | --- |
 | F-01 | Power-up `begin()` with sensor present | S2, S3 | Power cycle, open monitor, inspect boot output, `drv`, `dirty` | Device initializes or reports a precise non-OK `Status`; driver state is READY on success and persistent dirty state is clean. | PASS | Safe HIL boot/initial output plus `drv`/`dirty`: READY, online yes, dirty no. |
 | F-02 | Probe no-health-side-effects | S2, S3 | `drv`, `probe`, `drv` | Successful or failed `probe` does not change health counters/state. | PASS | Safe and extended HIL `probe`: Status OK; health stayed READY with zero failures. |
-| F-03 | Status read | S2, S3 | `status`, `drv` | Status byte read completes or returns bounded error; tracked success/failure updates health as documented. | NOT RUN | `status` output and health counters. |
-| F-04 | CO2 averaged read | S2, S3 | `read`, `co2avg` | MV4 averaged value is reported, or a precise bounded error is returned. | PASS | Safe default `read`: Status OK, CO2 avg `567 ppm`. |
-| F-05 | CO2 fast read | S2, S3 | `co2fast` | MV3 fast-response value is reported, or a precise bounded error is returned. | NOT RUN | CO2 ppm value and status. |
+| F-03 | Status read | S2, S3 | `status`, `drv` | Status byte read completes or returns bounded error; tracked success/failure updates health as documented; operator notes measurement-trigger side effect if relevant. | NOT RUN | `status` output and health counters. |
+| F-04 | Raw CO2 averaged read | S2, S3 | `read`, `co2avg` | MV4 averaged value is reported, or a precise bounded error is returned. | PASS | Safe default `read`: Status OK, CO2 avg `567 ppm`. |
+| F-05 | Raw CO2 fast read | S2, S3 | `co2fast` | MV3 fast-response value is reported, or a precise bounded error is returned. | NOT RUN | CO2 ppm value and status. |
+| F-05A | Checked CO2 averaged sample | S2, S3 | `sampleavg`, `drv` | MV4 is read before status; output reports ppm validity, status byte, CO2 status error, and optional error code. Sensor status/range errors do not count as E2 bus failures when bus I/O succeeds. | NOT RUN | `sampleavg` output, health counters before/after, timestamp and measurement interval. |
+| F-05B | Checked CO2 fast sample | S2, S3 | `samplefast`, `drv` | MV3 is read before status; output reports ppm validity, status byte, CO2 status error, and optional error code. Sensor status/range errors do not count as E2 bus failures when bus I/O succeeds. | NOT RUN | `samplefast` output, health counters before/after, timestamp and measurement interval. |
 | F-06 | PEC success on normal reads | S2, S3 | `id`, `status`, `read`, `features` | Normal reads do not report `PEC_MISMATCH`. | NOT RUN | Command output. |
 | F-07 | Feature/cache sanity | S2, S3 | `features`, `caps`, `cfg` | Capability output is internally consistent and guards unsupported writes. | NOT RUN | Feature bytes and booleans. |
 | F-08 | Warm-up behavior | S2, S3 | Power cycle, run `status`, `read`, `co2avg` every 30 s during first 10 min | Operator/application validation treats readings as warm-up data until EE871 warm-up has elapsed. | NOT RUN | Timestamped ppm trend. |
@@ -305,6 +315,8 @@ Run these only on a bench sensor after recording original values.
 | ID | Scenario | Board(s) | CLI/API sequence | Expected behavior | Status | Evidence to capture |
 | --- | --- | --- | --- | --- | --- | --- |
 | R-01 | Wrong wiring or no sensor | S2, S3 | Disconnect sensor, boot, `probe`, `status`, `drv` | Initialization or reads fail with bounded non-OK status; no hang. | NOT RUN | Boot log, command output, health counters. |
+| R-01A | Allow-absent startup | S2, S3 | Boot firmware configured with `BeginPolicy::AllowAbsent` while sensor is absent, then run `drv`, reconnect, `recover`, `drv` | Startup reports initialized/OFFLINE without E2 traffic from normal reads; `recover` validates identity, reloads features, and returns READY after reconnect. | NOT RUN | Boot log, `drv`, read attempt while offline, reconnect timing, `recover`, final `drv`. |
+| R-01B | Identity mismatch rejection | S2, S3 | Use an approved mismatched/fault-injected E2 setup, then `probe`/startup/recover | Wrong group, wrong subgroup, or missing CO2 advertised bit returns `NOT_SUPPORTED` without accepting the device as READY. | NOT RUN | Exact injected identity bytes and status output. |
 | R-02 | Unplug/replug recovery | S2, S3 | Start connected, `read`, unplug, repeated `read`, replug, `recover`, `drv` | Tracked failures degrade/offline as configured; successful `recover` returns READY. | PASS | 2026-06-02 operator-confirmed manual physical unplug/replug recovery PASS on the ESP32-S3 bench setup. Evidence type: operator-confirmed manual test. No automated HIL transcript artifact exists; automated HIL evidence remains separate. |
 | R-03 | SDA stuck low | S2, S3 | Use fault jig to pull SDA low, `buscheck`, `libreset`, `drv` | `BUS_STUCK` or precise bounded error; no unbounded wait. | NOT RUN | Jig setup and command output. |
 | R-04 | SCL stuck low / clock stretch timeout | S2, S3 | Use fault jig to pull SCL low, `status`, `buscheck`, `libreset` | Timeout or `BUS_STUCK` within configured deadline; no hang. | NOT RUN | Timing notes and output. |

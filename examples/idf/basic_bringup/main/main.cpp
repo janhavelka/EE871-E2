@@ -349,6 +349,7 @@ const char* errToStr(EE871::Err err) {
     case Err::ALREADY_INITIALIZED: return "ALREADY_INITIALIZED";
     case Err::OUT_OF_RANGE: return "OUT_OF_RANGE";
     case Err::NOT_SUPPORTED: return "NOT_SUPPORTED";
+    case Err::CO2_SENSOR_ERROR: return "CO2_SENSOR_ERROR";
     default: return "UNKNOWN";
   }
 }
@@ -433,6 +434,24 @@ void printStatus(const EE871::Status& st) {
               static_cast<long>(st.detail));
   if (st.msg != nullptr && st.msg[0] != '\0') {
     std::printf("  Message: %s%s%s\n", LOG_COLOR_YELLOW, st.msg, LOG_COLOR_RESET);
+  }
+}
+
+void printCo2Sample(const EE871::Co2ReadResult& sample) {
+  std::printf("  Kind: %s\n",
+              sample.kind == EE871::Co2ValueKind::Fast ? "fast" : "average");
+  std::printf("  PPM valid: %s\n", sample.ppmValid ? "yes" : "no");
+  std::printf("  PPM: %u\n", static_cast<unsigned>(sample.ppm));
+  std::printf("  Status valid: %s\n", sample.statusValid ? "yes" : "no");
+  if (sample.statusValid) {
+    std::printf("  Status byte: 0x%02X\n", static_cast<unsigned>(sample.statusByte));
+    diag::printStatusByte(sample.statusByte);
+  }
+  std::printf("  CO2 error: %s\n", sample.co2Error ? "yes" : "no");
+  if (sample.errorCodeValid) {
+    std::printf("  Error code: %u (%s)\n",
+                static_cast<unsigned>(sample.errorCode),
+                EE871::cmd::co2ErrorCodeName(sample.errorCode));
   }
 }
 
@@ -585,7 +604,7 @@ void printHelp() {
   printHelpItem("drv", "Show driver state and health");
   printHelpItem("dirty", "Show persistent dirty-state diagnostics");
   printHelpItem("resync", "Verify persistent config; clear dirty on success");
-  printHelpItem("read", "Read CO2 average");
+  printHelpItem("read", "Read raw CO2 average (MV4)");
   printHelpItem("cfg / settings", "Show driver state and feature flags");
   printHelpItem("verbose [0|1]", "Toggle bus trace output (no args = show)");
   printHelpItem("stress [N]", "Repeated CO2 average reads");
@@ -594,9 +613,11 @@ void printHelp() {
 
   printHelpSection("Device Commands");
   printHelpItem("id", "Read group/subgroup/available bits");
-  printHelpItem("status", "Read status byte (starts measurement)");
-  printHelpItem("co2fast", "Read MV3 (fast response)");
-  printHelpItem("co2avg", "Read MV4 (averaged)");
+  printHelpItem("status", "Read status byte (can start measurement)");
+  printHelpItem("co2fast", "Read raw MV3 (fast response)");
+  printHelpItem("co2avg", "Read raw MV4 (averaged)");
+  printHelpItem("samplefast", "Read checked MV3 then status (can start measurement)");
+  printHelpItem("sampleavg", "Read checked MV4 then status (can start measurement)");
   printHelpItem("error", "Read error code (if status indicates error)");
   printHelpItem("reg read <addr>", "Read custom register (0x00..0xFF)");
   printHelpItem("reg write <addr> <value>", "Write persistent custom register (bench only)");
@@ -1902,6 +1923,16 @@ void processCommand(const char* input) {
     if (st.ok()) {
       std::printf("  CO2 avg: %u ppm\n", static_cast<unsigned>(ppm));
     }
+  } else if (std::strcmp(trimmed, "samplefast") == 0) {
+    EE871::Co2ReadResult sample;
+    auto st = device.readCo2FastSample(sample);
+    printStatus(st);
+    printCo2Sample(sample);
+  } else if (std::strcmp(trimmed, "sampleavg") == 0) {
+    EE871::Co2ReadResult sample;
+    auto st = device.readCo2AverageSample(sample);
+    printStatus(st);
+    printCo2Sample(sample);
   } else if (std::strcmp(trimmed, "error") == 0) {
     uint8_t code = 0;
     auto st = device.readErrorCode(code);

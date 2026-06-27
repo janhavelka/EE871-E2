@@ -27,6 +27,8 @@ MANDATORY_COMMANDS = [
     "dirty",
     "resync",
     "read",
+    "sampleavg",
+    "samplefast",
     "verbose",
     "stress",
 ]
@@ -41,6 +43,13 @@ REQUIRED_FRAGMENTS = [
     "Write persistent interval",
     "Write persistent CO2 offset",
     "Write persistent CO2 gain",
+    "CO2_SENSOR_ERROR",
+    "readCo2AverageSample",
+    "readCo2FastSample",
+    "Read raw MV3",
+    "Read raw MV4",
+    "Read checked MV3 then status",
+    "Read checked MV4 then status",
 ]
 
 REQUIRED_PATTERNS = {
@@ -55,6 +64,14 @@ REQUIRED_PATTERNS = {
     "status dirty summary": r"hasCo2Error\(\):[\s\S]*?printPersistentDirtySummaryIfDirty\s*\(",
     "resync before after output": r'trimmed\s*==\s*"resync"[\s\S]*?Before:[\s\S]*?resyncPersistentConfig\s*\(\s*\)[\s\S]*?After:',
     "dirty error code detail output": r"persistentConfigDirtyError:[\s\S]*?code=%u,\s*detail=%ld",
+    "sampleavg help entry": r'printHelpItem\(\s*"sampleavg"\s*,',
+    "samplefast help entry": r'printHelpItem\(\s*"samplefast"\s*,',
+    "sampleavg command dispatch": r'trimmed\s*==\s*"sampleavg"',
+    "samplefast command dispatch": r'trimmed\s*==\s*"samplefast"',
+    "sampleavg checked API": r"readCo2AverageSample\s*\(\s*sample\s*\)",
+    "samplefast checked API": r"readCo2FastSample\s*\(\s*sample\s*\)",
+    "co2avg raw API": r"readCo2Average\s*\(\s*ppm\s*\)",
+    "co2fast raw API": r"readCo2Fast\s*\(\s*ppm\s*\)",
 }
 
 

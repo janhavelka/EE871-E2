@@ -42,6 +42,13 @@ IDF_REQUIRED_FRAGMENTS = [
     "Write persistent interval",
     "Write persistent CO2 offset",
     "Write persistent CO2 gain",
+    "CO2_SENSOR_ERROR",
+    "readCo2AverageSample",
+    "readCo2FastSample",
+    "Read raw MV3",
+    "Read raw MV4",
+    "Read checked MV3 then status",
+    "Read checked MV4 then status",
     "recover",
     "busReset",
     "checkBusIdle",
@@ -57,6 +64,12 @@ IDF_REQUIRED_PATTERNS = {
     "status dirty summary": r"hasCo2Error\(\):[\s\S]*?printPersistentDirtySummaryIfDirty\s*\(",
     "resync before after output": r'std::strcmp\(\s*trimmed\s*,\s*"resync"\s*\)\s*==\s*0[\s\S]*?Before:[\s\S]*?resyncPersistentConfig\s*\(\s*\)[\s\S]*?After:',
     "dirty error code detail output": r"persistentConfigDirtyError:[\s\S]*?code=%u,\s*detail=%ld",
+    "sampleavg command dispatch": r'std::strcmp\(\s*trimmed\s*,\s*"sampleavg"\s*\)\s*==\s*0',
+    "samplefast command dispatch": r'std::strcmp\(\s*trimmed\s*,\s*"samplefast"\s*\)\s*==\s*0',
+    "sampleavg checked API": r"readCo2AverageSample\s*\(\s*sample\s*\)",
+    "samplefast checked API": r"readCo2FastSample\s*\(\s*sample\s*\)",
+    "co2avg raw API": r"readCo2Average\s*\(\s*ppm\s*\)",
+    "co2fast raw API": r"readCo2Fast\s*\(\s*ppm\s*\)",
 }
 
 STALE_IDF_WORDING = [

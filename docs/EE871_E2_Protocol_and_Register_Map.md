@@ -204,6 +204,11 @@ Read any 16-bit measured value as:
 2) read HIGH byte (control byte for high)  
 This "captures" the paired bytes consistently in the slave.
 
+For a checked CO2 sample, read the required measured value first and then read
+the status byte. This lets the status byte describe the validity of the last
+measured value while also preserving the documented status-read trigger
+behavior for the next measurement.
+
 ---
 
 ## 7) Custom memory map (register map)
@@ -329,6 +334,9 @@ Triggered measurement behavior:
 ### 8.2 Selecting output value (MV3 vs MV4)
 - MV4 (averaged, last 11 measurements) is standard, low-noise, suitable for control loops.
 - MV3 is "fast response" but noisier (typ. +/-30 ppm noise mentioned) and reflects disturbances immediately.
+- Library raw reads expose MV3/MV4 directly. Checked sample helpers read MV3 or
+  MV4 first, then status, and report status-bit errors separately from E2 bus
+  communication failures.
 
 ---
 

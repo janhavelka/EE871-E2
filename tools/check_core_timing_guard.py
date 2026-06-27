@@ -22,8 +22,18 @@ BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
 LINE_COMMENT_RE = re.compile(r"//[^\n]*")
 STRING_RE = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'')
 
-ALLOWED_CALL_COUNTS: Dict[str, Dict[str, int]] = {}
+ALLOWED_CALL_COUNTS: Dict[str, Dict[str, int]] = {
+    "src/EE871.cpp": {"yield": 1},
+}
 ALLOWED_INCLUDE_COUNTS: Dict[str, int] = {}
+REQUIRED_PLACEMENT_PATTERNS = {
+    "src/EE871.cpp": {
+        "yield": re.compile(
+            r"static\s+void\s+delayLongMs\s*\([^)]*\)\s*\{[\s\S]*?\bcfg\.yield\s*\(",
+            re.MULTILINE,
+        ),
+    },
+}
 
 
 def strip_non_code(text: str) -> str:
@@ -90,6 +100,14 @@ def main() -> int:
         unexpected_calls = set(observed.keys()) - set(expected.keys())
         if unexpected_calls:
             errors.append(f"unexpected timing call types in {rel}: {sorted(unexpected_calls)}")
+
+    for rel, placements in REQUIRED_PLACEMENT_PATTERNS.items():
+        raw_path = ROOT / rel
+        code = strip_non_code(raw_path.read_text(encoding="utf-8", errors="replace"))
+        for call_name, pattern in placements.items():
+            expected_count = ALLOWED_CALL_COUNTS.get(rel, {}).get(call_name, 0)
+            if expected_count > 0 and pattern.search(code) is None:
+                errors.append(f"allowed {call_name} call is not in the expected helper in {rel}")
 
     for rel, count in observed_includes.items():
         exp = ALLOWED_INCLUDE_COUNTS.get(rel, 0)

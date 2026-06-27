@@ -841,3 +841,95 @@ Field/industry-grade wording:
   ESP32-S3/EE871 bench setup."
 - Do not claim "fully field-proven" or equivalent coverage across all physical
   fault cases.
+
+## Production API Hardening - 2026-06-27
+
+Scope:
+- Implemented optional absent-device startup, latched OFFLINE behavior,
+  stronger identity validation, checked average/fast CO2 sample helpers,
+  cooperative long-delay callbacks, cache-only settings additions, examples,
+  tests, docs, and release metadata.
+- No scheduler, async engine, RTOS task, board pin setup, hardware I2C owner, or
+  field-use policy was added.
+
+Baseline:
+- Branch created: `hardening/ee871-production-api-20260627`.
+- Baseline commit: `f7df979 feat: enhance guidelines for simplicity, safety,
+  and field robustness in EE871 E2 library`.
+- Baseline `library.json` version: `1.0.0`.
+- Baseline native tests in temporary detached worktree: PASS, 31/31 tests,
+  00:00:03.431.
+- Baseline `python -m platformio run -e ex_bringup_s3`: SUCCESS, 00:00:10.012.
+- Baseline `python -m platformio run -e ex_bringup_s2`: SUCCESS, 00:00:11.798.
+
+Files changed:
+- Public API/core: `include/EE871/Config.h`, `include/EE871/EE871.h`,
+  `include/EE871/Status.h`, `include/EE871/CommandTable.h`, `src/EE871.cpp`.
+- Version metadata: `library.json`, `include/EE871/Version.h`,
+  `idf_component.yml`, `Doxyfile`.
+- Tests/fakes: `test/test_basic.cpp`, `test/support/FakeE2Transport.h`.
+- Examples/contracts: `examples/01_basic_bringup_cli/main.cpp`,
+  `examples/idf/basic_bringup/main/main.cpp`,
+  `examples/idf/basic_bringup/README.md`,
+  `tools/check_core_timing_guard.py`, `tools/check_cli_contract.py`,
+  `tools/check_idf_example_contract.py`.
+- Docs: `README.md`, `CHANGELOG.md`, `docs/README.md`,
+  `docs/EE871_E2_RELEASE_NOTES_1.1.0.md`,
+  `docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md`,
+  `docs/EE871_E2_Protocol_and_Register_Map.md`, this report.
+
+Versioning:
+- Bumped `library.json` from `1.0.0` to `1.1.0` with
+  `python scripts/generate_version.py bump minor`.
+- Regenerated `include/EE871/Version.h`.
+- Synchronized `idf_component.yml` and `Doxyfile` to `1.1.0`.
+
+Implementation summary:
+- `BeginPolicy::AllowAbsent` starts initialized/OFFLINE only for accepted
+  presence/transport failures during startup identity probing.
+- Normal tracked bus operations return `BUSY` before touching E2 lines while
+  OFFLINE; `probe()`, `recover()`, `busReset()`, and `checkBusIdle()` remain
+  usable as designed.
+- `begin()`, `probe()`, and `recover()` validate group, subgroup, and CO2
+  available-measurement support.
+- `readCo2AverageSample()` and `readCo2FastSample()` read MV4/MV3 first, then
+  status, and report ppm/status/error-code validity through `Co2ReadResult`.
+- `Err::CO2_SENSOR_ERROR` was appended without renumbering existing errors.
+- Sensor status errors and checked-sample range errors do not increment E2
+  health failures when bus I/O succeeded.
+- Long write delays can use sliced `delayMs`/`yield` callbacks; bit-level E2
+  timing paths remain `delayUs` only.
+- `getSettings()` remains cache-only and now reports begin policy, accepted
+  startup probe status, and long-delay callback configuration.
+
+Final validation commands:
+- `python tools/check_core_timing_guard.py`: PASS.
+- `python tools/check_cli_contract.py`: PASS.
+- `python tools/check_idf_example_contract.py`: PASS.
+- `python scripts/generate_version.py check`: PASS, `Version.h` up to date.
+- `python -m platformio test -e native`: PASS, 49/49 tests,
+  00:00:01.287.
+- `python -m platformio run -e ex_bringup_s3`: SUCCESS, 00:00:13.514.
+- `python -m platformio run -e ex_bringup_s2`: SUCCESS, 00:00:13.866.
+- `git diff --check`: PASS; Git emitted only line-ending conversion warnings.
+- `python -m py_compile tools/check_core_timing_guard.py
+  tools/check_cli_contract.py tools/check_idf_example_contract.py`: PASS.
+
+Unavailable local verification:
+- `idf.py --version`: unavailable in this PowerShell session,
+  `CommandNotFoundException`.
+- Pure ESP-IDF local builds were not run because `idf.py` is unavailable.
+
+Hardware status:
+- No 1.1.0 hardware HIL was run in this pass.
+- The hardware matrix was updated to mark new absent-startup,
+  identity-validation, checked-sample, and cooperative-delay hardware coverage
+  as pending.
+
+Downstream integration decisions left to consuming firmware:
+- Selected pins and GPIO ownership.
+- Owner task policy and external serialization.
+- Warmup, read cadence, and recovery cadence.
+- Whether and when to use raw MV3/MV4 reads versus checked sample helpers.
+- Storage/schema/UI exposure for `Co2ReadResult` fields.
+- Hardware HIL timing thresholds and physical fault-test plan.

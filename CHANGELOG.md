@@ -9,6 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 No changes yet.
 
+## [1.1.0] - 2026-06-27
+
+### Added
+- `BeginPolicy::AllowAbsent` for initialized/OFFLINE startup when the probe is
+  absent or unreachable, with cached `beginProbeStatus` diagnostics and
+  recovery back to READY after identity validation.
+- Full startup/recovery/probe identity validation for group, subgroup, and CO2
+  available-measurement support.
+- Checked CO2 sample helpers:
+  `readCo2AverageSample(Co2ReadResult&)` and
+  `readCo2FastSample(Co2ReadResult&)`.
+- Append-only `Err::CO2_SENSOR_ERROR` for EE871 status-byte CO2 errors.
+- `CO2_PPM_MIN` and `CO2_PPM_MAX` constants for checked-sample validation.
+- Optional `delayMs`, `yield`, and `longDelaySliceMs` callbacks for
+  millisecond persistent-write delay paths.
+- `sampleavg` and `samplefast` commands in Arduino and ESP-IDF examples.
+
+### Changed
+- Normal tracked bus APIs now latch OFFLINE and return `BUSY` before touching
+  E2 lines until `recover()` succeeds.
+- `SettingsSnapshot` exposes begin policy, startup probe status, delay callback
+  presence, and normalized long-delay slice without bus traffic.
+- Example help now separates raw MV3/MV4 reads from checked value-then-status
+  reads and documents status-read measurement side effects.
+- Native fake transport gained focused helpers for absent devices, identity
+  mismatches, feature flags, read ordering, and cooperative-delay assertions.
+
+### Fixed
+- `recover()` from OFFLINE reasserts OFFLINE and the configured failure floor
+  when recovery fails.
+- Feature flags are cleared before reload and stay zero if the feature-read
+  sequence fails.
+
+### Validation
+- Native tests: 49 passing in local validation.
+- Arduino and ESP-IDF command-contract checks: passing in local validation.
+- Hardware HIL for the new 1.1.0 behavior is pending; no new hardware PASS is
+  claimed for absent startup, checked samples, identity mismatch, or
+  cooperative long-delay callbacks.
+
 ## [1.0.0] - 2026-06-02
 
 ### Added
@@ -143,7 +183,8 @@ No changes yet.
 - Initial release with template structure
 - ESP32-S2 and ESP32-S3 support
 
-[Unreleased]: https://github.com/janhavelka/EE871-E2/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/janhavelka/EE871-E2/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/janhavelka/EE871-E2/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/janhavelka/EE871-E2/compare/v0.3.0...v1.0.0
 [0.3.0]: https://github.com/janhavelka/EE871-E2/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/janhavelka/EE871-E2/compare/v0.2.0...v0.2.1

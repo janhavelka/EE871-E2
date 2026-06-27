@@ -149,6 +149,8 @@ static constexpr uint16_t CUSTOM_MEMORY_SIZE = 256;     ///< EE871 custom-memory
 
 static constexpr uint16_t INTERVAL_MIN_DECISEC = 150;   ///< Minimum global interval, 15.0 s.
 static constexpr uint16_t INTERVAL_MAX_DECISEC = 36000; ///< Maximum global interval, 3600.0 s.
+static constexpr uint16_t CO2_PPM_MIN = 0;              ///< Minimum documented CO2 value in ppm.
+static constexpr uint16_t CO2_PPM_MAX = 50000;          ///< Maximum documented CO2 value in ppm.
 static constexpr uint8_t BUS_ADDRESS_MIN = 0;           ///< Minimum persistent bus address.
 static constexpr uint8_t BUS_ADDRESS_MAX = 7;           ///< Maximum persistent bus address.
 

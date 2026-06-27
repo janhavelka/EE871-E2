@@ -20,6 +20,27 @@ enum class DriverState : uint8_t {
   OFFLINE    ///< consecutiveFailures >= offlineThreshold
 };
 
+/// @brief CO2 value selection for checked sample helpers.
+enum class Co2ValueKind : uint8_t {
+  Fast = 0,   ///< MV3 fast-response CO2 value.
+  Average = 1 ///< MV4 averaged CO2 value.
+};
+
+/// @brief Checked CO2 read result.
+struct Co2ReadResult {
+  Co2ValueKind kind{Co2ValueKind::Average}; ///< Selected value kind.
+  uint16_t ppm{0};                           ///< Raw CO2 ppm value read from MV3/MV4.
+  bool ppmValid{false};                      ///< True only after value, status, and range checks pass.
+  uint8_t statusByte{0};                     ///< Status byte read after the value.
+  bool statusValid{false};                   ///< True when statusByte is valid.
+  bool co2Error{false};                      ///< True when status bit3 reports CO2 error.
+  uint8_t errorCode{0};                      ///< Optional CO2 error code from custom memory 0xC1.
+  bool errorCodeValid{false};                ///< True when errorCode is valid.
+  Status valueReadStatus{Status::Ok()};      ///< Status from the MV3/MV4 value read.
+  Status statusReadStatus{Status::Ok()};     ///< Status from the status-byte read.
+  Status errorCodeReadStatus{Status::Ok()};  ///< Status from optional error-code read.
+};
+
 /// @brief Snapshot of current configuration, cached feature flags, and driver health.
 ///
 /// Snapshot access does not touch the E2 bus. The persistent dirty fields mirror
@@ -41,6 +62,11 @@ struct SettingsSnapshot {
   uint32_t totalSuccess = 0;      ///< Total tracked successes.
   bool persistentConfigDirty = false; ///< True when persistent config may be partially applied.
   Status persistentConfigDirtyError = Status::Ok(); ///< First error that marked persistent config dirty.
+  BeginPolicy beginPolicy{BeginPolicy::RequirePresent}; ///< Active begin() presence policy.
+  Status beginProbeStatus = Status::Ok(); ///< Startup identity/presence status accepted by begin().
+  bool hasDelayMs = false;        ///< True when Config::delayMs is supplied.
+  bool hasYield = false;          ///< True when Config::yield is supplied.
+  uint8_t longDelaySliceMs = 1;   ///< Active normalized long-delay slice.
 };
 
 /// @brief Transport-agnostic EE871 CO2 sensor driver for the E2 bus.
@@ -507,7 +533,10 @@ public:
   // Status / Measurements
   // =========================================================================
 
-  /// Read status byte; this can trigger a new measurement on EE871.
+  /// Read status byte.
+  ///
+  /// On EE871 this can start or trigger a measurement and can reset the sensor
+  /// interval counter under the documented timing conditions.
   /// @param[out] status Status byte.
   /// @return Status::Ok() when the status byte and PEC verify.
   Status readStatus(uint8_t& status);
@@ -533,6 +562,22 @@ public:
   /// @param[out] ppm CO2 concentration in ppm.
   /// @return Status::Ok() when MV4 low/high reads succeed.
   Status readCo2Average(uint16_t& ppm);
+
+  /// Read checked CO2 fast sample from MV3, then status.
+  ///
+  /// This reads MV3 first and reads status second. The status read can start or
+  /// trigger the next EE871 measurement and can reset the interval counter.
+  /// @param[out] out Checked sample result.
+  /// @return Status::Ok() when value/status/range checks pass.
+  Status readCo2FastSample(Co2ReadResult& out);
+
+  /// Read checked CO2 averaged sample from MV4, then status.
+  ///
+  /// This reads MV4 first and reads status second. The status read can start or
+  /// trigger the next EE871 measurement and can reset the interval counter.
+  /// @param[out] out Checked sample result.
+  /// @return Status::Ok() when value/status/range checks pass.
+  Status readCo2AverageSample(Co2ReadResult& out);
 
   // =========================================================================
   // Bus Safety
@@ -567,6 +612,19 @@ private:
                               bool* writeAccepted = nullptr);
   Status _customWriteDirect(uint8_t address, uint8_t value, bool* writeAccepted = nullptr);
 
+  struct IdentitySnapshot {
+    uint16_t group = 0;
+    uint8_t subgroup = 0;
+    uint8_t availableMeasurements = 0;
+  };
+
+  Status _validateConfig(const Config& input, Config& normalized) const;
+  Status _busResetRaw();
+  Status _readIdentityRaw(IdentitySnapshot& out);
+  Status _readIdentityTracked(IdentitySnapshot& out);
+  Status _readFeatureFlagsRaw();
+  Status _readCo2Sample(Co2ValueKind kind, Co2ReadResult& out);
+
   // =========================================================================
   // Health Management
   // =========================================================================
@@ -586,7 +644,9 @@ private:
   Config _config;
   bool _initialized = false;
   DriverState _driverState = DriverState::UNINIT;
+  bool _allowOfflineTransfer = false;
   uint32_t _nowMs = 0;
+  Status _beginProbeStatus = Status::Ok();
 
   // Feature flags (cached during begin())
   uint8_t _operatingFunctions = 0;   ///< Cached 0x07

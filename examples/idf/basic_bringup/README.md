@@ -10,10 +10,15 @@ hardware I2C. If multiple tasks can touch the same `EE871` instance or shared
 E2 lines, serialize access outside the driver.
 
 The CLI provides the same user-visible command set as the Arduino bring-up CLI:
-help, version, scan, probe, recover, driver health, CO2 reads,
+help, version, scan, probe, recover, driver health, raw CO2 reads,
+checked CO2 sample reads,
 feature/capability inspection, configuration/calibration helpers, register/raw
 access, diagnostics, bus reset, trace, self-test, stress, and mixed stress
 workflows.
+
+`co2fast` and `co2avg` read raw MV3/MV4 values. `samplefast` and `sampleavg`
+use the checked value-then-status helpers and can trigger a new measurement
+because they read the EE871 status byte.
 
 - Default SCL: GPIO6
 - Default SDA: GPIO7

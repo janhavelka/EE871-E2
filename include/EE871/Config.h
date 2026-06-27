@@ -35,6 +35,21 @@ using E2ReadLineFn = bool (*)(void* user);
 /// @param user User context pointer passed through from Config.
 using E2DelayUsFn = void (*)(uint32_t us, void* user);
 
+/// @brief E2 millisecond delay callback signature for long write-delay waits.
+/// @param ms Milliseconds to delay.
+/// @param user User context pointer passed through from Config.
+using E2DelayMsFn = void (*)(uint32_t ms, void* user);
+
+/// @brief Cooperative yield callback signature for long write-delay waits.
+/// @param user User context pointer passed through from Config.
+using E2YieldFn = void (*)(void* user);
+
+/// @brief begin() presence policy.
+enum class BeginPolicy : uint8_t {
+  RequirePresent = 0, ///< begin() fails when identity/presence validation fails.
+  AllowAbsent = 1    ///< begin() may configure the driver OFFLINE when the device is absent.
+};
+
 /// @brief Configuration for EE871 driver.
 ///
 /// The transport callbacks implement GPIO-style open-drain E2 line control.
@@ -53,10 +68,13 @@ struct Config {
   E2ReadLineFn readScl = nullptr; ///< Read clock line
   E2ReadLineFn readSda = nullptr; ///< Read data line
   E2DelayUsFn delayUs = nullptr;  ///< Delay for bit timing
+  E2DelayMsFn delayMs = nullptr;  ///< Optional delay for long millisecond waits
+  E2YieldFn yield = nullptr;      ///< Optional yield after long-delay slices
   void* busUser = nullptr;        ///< User context for callbacks
 
   // === Device Settings ===
   uint8_t deviceAddress = 0;      ///< E2 protocol device address (0-7), not a hardware I2C address.
+  BeginPolicy beginPolicy = BeginPolicy::RequirePresent; ///< Presence policy for begin().
 
   // === Timing (E2 spec) ===
   uint16_t clockLowUs = 100;      ///< Minimum CLK low time, must be >= 100 us.
@@ -69,6 +87,7 @@ struct Config {
 
   uint32_t writeDelayMs = 150;    ///< Flash write delay for 0x10/0x50, max 5000 ms.
   uint32_t intervalWriteDelayMs = 300; ///< Flash delay for 0xC6/0xC7 pair, max 5000 ms.
+  uint8_t longDelaySliceMs = 1;   ///< Maximum slice for long write-delay waits, 1..50 ms.
 
   // === Health Tracking ===
   uint8_t offlineThreshold = 5;   ///< Consecutive failures before OFFLINE; zero normalizes to 1 in begin().
