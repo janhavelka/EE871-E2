@@ -38,10 +38,11 @@ Implement only these library changes:
 1. optional absent-device startup,
 2. stronger identity validation,
 3. two checked CO2 sample helpers, one averaged and one fast,
-4. cooperative long-delay callbacks for millisecond write-delay paths,
-5. small cache-only settings additions,
-6. focused private helper extraction where it directly supports this work,
-7. tests, docs, version metadata, and final report updates.
+4. separate checked-read example commands for averaged and fast reads,
+5. cooperative long-delay callbacks for millisecond write-delay paths,
+6. small cache-only settings additions,
+7. focused private helper extraction where it directly supports this work,
+8. tests, docs, version metadata, and final report updates.
 
 Do not add a scheduler, async engine, RTOS task, application queue, sample
 cache, dynamic allocation, Arduino dependency, ESP-IDF dependency, hardware I2C
@@ -608,18 +609,29 @@ Required native tests:
     - `hasCo2Error()` behavior remains covered
     - docs/help state that `status` can start or trigger a measurement
 
-19. Long delay callbacks:
+19. Separate checked-read commands:
+    - Arduino example exposes `sampleavg`
+    - Arduino example exposes `samplefast`
+    - ESP-IDF example exposes `sampleavg`
+    - ESP-IDF example exposes `samplefast`
+    - `sampleavg` calls `readCo2AverageSample(Co2ReadResult&)`
+    - `samplefast` calls `readCo2FastSample(Co2ReadResult&)`
+    - existing `co2avg` and `co2fast` continue to call the raw value APIs
+    - help text documents raw versus checked reads clearly
+    - command-contract tests cover command presence and help output
+
+20. Long delay callbacks:
     - configure `delayMs`, `yield`, and `longDelaySliceMs`
     - run a fake persistent-write path
     - assert millisecond delay callbacks are used in slices
     - assert yield callbacks are used after slices
     - assert normal bit-level reads do not call `yield`
 
-20. Snapshot cache-only behavior:
+21. Snapshot cache-only behavior:
     - `getSettings()` reports new fields
     - fake bus transaction count does not change while reading settings
 
-21. Public header compatibility:
+22. Public header compatibility:
     - new enums and structs compile from public headers
     - existing code using `readCo2Average(uint16_t&)`,
       `readCo2Fast(uint16_t&)`, `readStatus(uint8_t&)`, and
@@ -635,7 +647,9 @@ Update:
 - `docs/EE871_E2_HARDENING_FINAL_REPORT.md`
 - `docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md` only to mark new HIL coverage
   as pending unless hardware was actually run
-- Arduino and ESP-IDF example help/docs where they describe CO2 reads
+- Arduino and ESP-IDF example command implementations, help text, and docs for
+  raw and checked CO2 reads
+- command-contract tests that validate `sampleavg` and `samplefast`
 
 Versioning requirements:
 
@@ -650,12 +664,15 @@ Versioning requirements:
 Example CLI requirements:
 
 - Keep existing `status`, `co2avg`, and `co2fast` commands source-compatible.
-- If adding new commands, add exactly these read-only commands:
+- Add exactly these read-only checked-sample commands:
   - `sampleavg`
   - `samplefast`
 - `sampleavg` and `samplefast` must use the new checked sample helpers.
+- `co2avg` and `co2fast` must remain raw MV4/MV3 value reads.
 - Keep help text clear that `status`, `sampleavg`, and `samplefast` can trigger
   a new measurement because they read status.
+- Keep help text clear that `co2avg` and `co2fast` do not perform the checked
+  status sequence.
 - Do not add new field-write commands.
 
 Docs must clearly separate:
