@@ -1,107 +1,63 @@
-# Prompt: EE871-E2 TunnelMonitor Production Fit Hardening
+# Prompt: EE871-E2 Production API Hardening
 
 Date: 2026-06-27
 
 ## Role
 
 You are an AI coding agent working in the `EE871-E2` library repository.
-Your job is to make the EE871-E2 library a clean, simple, production-friendly
-fit for later use inside TunnelMonitor as a dedicated E2/EE871 owner task.
+Edit this repository only.
 
-Do not edit the TunnelMonitor firmware repository in this prompt. This prompt
-is for the EE871-E2 library only.
+Implement the changes below exactly. Keep the design simple, synchronous,
+bounded, framework-neutral, and production-friendly for an application that owns
+the EE871 instance from one task/context.
 
-## Repositories And Context
+## Read First
 
-Primary repository to edit:
+Read these files before editing:
 
-```text
-C:\Users\HonzovoSpectre\Documents\Projects\EE871-E2
+- `AGENTS.md`
+- `include/EE871/EE871.h`
+- `include/EE871/Config.h`
+- `include/EE871/Status.h`
+- `include/EE871/CommandTable.h`
+- `src/EE871.cpp`
+- `test/test_basic.cpp`
+- `test/support/FakeE2Transport.h`
+- `docs/EE871_E2_Protocol_and_Register_Map.md`
+- `docs/pdf-extracted-md/E2_interface_utilising_AN0105.md`
+- `docs/pdf-extracted-md/EE871_E2_CO2_interface_AN1611-1.md`
+- `docs/pdf-extracted-md/E2_interface_specification_v4_1.md`
+
+Before implementation, record the current branch, current commit, current
+`library.json` version, and baseline test/build result in the final report.
+
+## Scope
+
+Implement only these library changes:
+
+1. optional absent-device startup,
+2. stronger identity validation,
+3. two checked CO2 sample helpers, one averaged and one fast,
+4. cooperative long-delay callbacks for millisecond write-delay paths,
+5. small cache-only settings additions,
+6. focused private helper extraction where it directly supports this work,
+7. tests, docs, version metadata, and final report updates.
+
+Do not add a scheduler, async engine, RTOS task, application queue, sample
+cache, dynamic allocation, Arduino dependency, ESP-IDF dependency, hardware I2C
+owner, or board-specific pin setup.
+
+Do not add new driver states. Keep the existing four-state model:
+
+```cpp
+UNINIT, READY, DEGRADED, OFFLINE
 ```
 
-Compatibility target repository to audit but not edit:
+## Implementation Requirements
 
-```text
-C:\Users\HonzovoSpectre\Documents\Projects\TunnelMonitor-node
-```
+### 1. Add Absent-Device Startup
 
-Relevant sibling library patterns to compare against:
-
-```text
-C:\Users\HonzovoSpectre\Documents\Projects\RV3032-C7
-C:\Users\HonzovoSpectre\Documents\Projects\MB85RC
-C:\Users\HonzovoSpectre\Documents\Projects\BME280
-C:\Users\HonzovoSpectre\Documents\Projects\SHT3x-main
-C:\Users\HonzovoSpectre\Documents\Projects\INA228
-C:\Users\HonzovoSpectre\Documents\Projects\SSD1315
-```
-
-Current EE871-E2 baseline found during planning:
-
-- library version: `1.0.0`
-- branch: `main`
-- commit observed during planning: `a395df2`
-- native tests observed passing: `31/31`
-- core driver already uses injected E2 GPIO callbacks, not Arduino `Wire`,
-  ESP-IDF hardware I2C, or owned bus objects.
-
-## High-Level Goal
-
-Make EE871-E2 a better fit for a TunnelMonitor production owner task by adding:
-
-1. absent-device startup support,
-2. two production CO2 read helpers, one for averaged CO2 and one for fast CO2,
-3. cooperative long-delay support for write-delay paths,
-4. small diagnostic/state additions needed for robust owner integration,
-5. focused docs and tests.
-
-Prefer simple, safe, robust changes. Reuse the existing code, private helpers,
-fake transport, status model, and docs structure. Do not introduce a framework,
-generic scheduler, dynamic allocation, or firmware-specific abstractions.
-
-## Non-Goals
-
-Do not implement TunnelMonitor firmware integration in this prompt:
-
-- no `Ee871Task` in TunnelMonitor,
-- no `BoardPins` changes,
-- no PlatformIO dependency changes in TunnelMonitor,
-- no sample schema, CSV, replay, cloud, web, CLI, or settings changes in
-  TunnelMonitor,
-- no hardware HIL execution unless explicitly requested by the operator.
-
-Do not add library-level field-mode write lockout in this prompt. The current
-decision is that TunnelMonitor will control which library APIs it calls. Keep
-the existing persistent-write APIs, but document them clearly as maintenance
-operations and keep dirty/resync diagnostics intact.
-
-Do not convert every timestamp to 64-bit. Treat EE871 like the sibling I2C
-libraries: use 32-bit millisecond timing where the timestamp is only for short
-driver-local intervals or diagnostics. TunnelMonitor can translate its 64-bit
-owner deadlines outside the library.
-
-Do not create an async/nonblocking protocol engine. The target is still a
-managed synchronous library that can run inside a dedicated owner task.
-
-## Current Gaps To Close
-
-### Gap 1: `begin()` Cannot Support Optional/Absent Startup
-
-Current behavior:
-
-- `begin()` validates callbacks, probes the device, caches feature flags, and
-  fails if the device is absent.
-- `probe()` and `recover()` require successful `begin()`.
-
-TunnelMonitor fit issue:
-
-- A production owner task must be able to start with the probe absent, keep the
-  callbacks configured, report the device as absent/offline, and later recover
-  without rebooting the owner.
-
-Required design:
-
-Add an explicit begin policy:
+Add this enum in the public API:
 
 ```cpp
 enum class BeginPolicy : uint8_t {
@@ -110,75 +66,133 @@ enum class BeginPolicy : uint8_t {
 };
 ```
 
-Add to `EE871::Config`:
+Add this field to `EE871::Config`:
 
 ```cpp
 BeginPolicy beginPolicy = BeginPolicy::RequirePresent;
 ```
 
-Behavior:
+Implement behavior:
 
-- `RequirePresent` preserves current behavior exactly: absent or identity
-  failure returns the failure status and leaves the driver uninitialized.
-- `AllowAbsent` validates and stores callbacks/config even if the identity probe
-  fails.
-- In `AllowAbsent`, when the device is absent:
+- `RequirePresent` preserves current `begin()` behavior: if config validation,
+  bus idle/reset, identity validation, or required startup probing fails,
+  `begin()` returns the error and leaves the driver uninitialized.
+- `AllowAbsent` still rejects invalid config and bus-stuck-after-reset errors.
+- `AllowAbsent` accepts only presence/transport failures from identity
+  validation. Do not accept incompatible identity or unsupported CO2 capability.
+- For an accepted absent startup:
   - `begin()` returns `Status::Ok()`;
   - `isInitialized()` returns true;
   - `state()` returns `DriverState::OFFLINE`;
   - feature flags are zero;
-  - the root absent/probe status is retained in a new cache-only diagnostic
-    field;
-  - normal tracked bus operations return the existing offline `BUSY` status
-    until `recover()` succeeds;
-  - `probe()` remains diagnostic/raw and may be called after absent startup;
-  - `recover()` must be able to transition the driver from this configured
-    offline state to `READY`.
+  - `consecutiveFailures()` is set to normalized `offlineThreshold`;
+  - `totalFailures()` is not incremented by accepted absent startup;
+  - the original presence/transport failure is stored for diagnostics;
+  - normal tracked bus APIs return `Err::BUSY` without touching E2 lines until
+    `recover()` succeeds.
+- `probe()` remains diagnostic/raw and does not update health counters.
+- `recover()` remains callable from `OFFLINE`.
+- After an accepted absent startup, a successful `recover()` must:
+  - validate identity;
+  - reload feature flags using the same feature-read sequence as successful
+    `begin()`;
+  - transition the driver to `READY`;
+  - clear consecutive failures.
 
-Add a cached diagnostic:
+Add cache-only startup diagnostic state:
 
 ```cpp
 Status beginProbeStatus = Status::Ok();
 ```
 
-to `SettingsSnapshot`, backed by a private member:
+in `SettingsSnapshot`, backed by:
 
 ```cpp
 Status _beginProbeStatus = Status::Ok();
 ```
 
-Meaning:
+Required meaning:
 
-- `Status::Ok()` when the last `begin()` identity/presence path succeeded.
-- The raw identity/probe failure when `AllowAbsent` accepted startup despite
-  the absent probe.
-- Reset by `end()` and reset-runtime state.
+- `Status::Ok()` after a successful identity/presence startup path.
+- The accepted presence/transport failure after `AllowAbsent` startup.
+- Reset to `Status::Ok()` by `end()` and stopped-state reset.
+- Do not use `beginProbeStatus` as a total-failure counter input.
 
-Do not use `beginProbeStatus` for health counters. It is a cache-only startup
-diagnostic.
+### 2. Latch OFFLINE For Normal Operations
 
-Important recovery requirement:
+Implement an OFFLINE pre-bus guard for normal tracked E2 operations:
 
-- `recover()` must not only read the group ID. If the driver started absent and
-  feature flags are zero, a successful `recover()` must reload feature flags
-  using the same feature-read sequence currently used by `begin()`.
+- If `_initialized == true` and `_driverState == DriverState::OFFLINE`, normal
+  tracked bus APIs must return:
 
-### Gap 2: Missing Production CO2 Read Helpers
+  ```cpp
+  Status::Error(Err::BUSY, "Driver is offline; call recover()")
+  ```
 
-Current behavior:
+- The guard must return before touching E2 lines.
+- The guard applies regardless of how `OFFLINE` was reached.
+- The guard must not block `probe()`, `recover()`, `busReset()`, or
+  `checkBusIdle()`.
+- `recover()` may use a scoped private bypass for the tracked identity
+  validation it performs.
+- If `recover()` starts from `OFFLINE` and fails, reassert `OFFLINE` and ensure
+  `consecutiveFailures >= offlineThreshold`.
 
-- `readStatus(uint8_t&)` reads status and can trigger a measurement.
-- `readCo2Fast(uint16_t&)` reads MV3 fast response.
-- `readCo2Average(uint16_t&)` reads MV4 averaged response.
-- The application must manually sequence status, optional error code, and value
-  reads.
+Do not add a new `DEVICE_ABSENT` error. Use existing status codes and the
+cached startup diagnostic.
 
-TunnelMonitor fit issue:
+### 3. Strengthen Identity Validation
 
-- The owner task should call one simple API for the normal production read.
-- The user decision is to add two explicit APIs, one averaged and one fast.
+Before declaring the driver `READY`, validate all required EE871 identity
+fields:
 
-Add this enum to `EE871.h`:
+- group ID equals `cmd::SENSOR_GROUP_ID`,
+- subgroup ID equals `cmd::SENSOR_SUBGROUP_ID`,
+- available measurements include `cmd::AVAILABLE_MEAS_MASK`.
+
+Apply this validation in:
+
+- `begin()`,
+- `probe()`,
+- `recover()`.
+
+Use these status mappings:
+
+- group mismatch:
+
+  ```cpp
+  Status::Error(Err::NOT_SUPPORTED, "Unexpected group id", group)
+  ```
+
+- subgroup mismatch:
+
+  ```cpp
+  Status::Error(Err::NOT_SUPPORTED, "Unexpected subgroup id", subgroup)
+  ```
+
+- missing CO2 available-measurement bit:
+
+  ```cpp
+  Status::Error(Err::NOT_SUPPORTED, "CO2 measurement not advertised", bits)
+  ```
+
+Presence/transport errors remain the underlying transport status.
+
+Add a private identity result if useful:
+
+```cpp
+struct IdentitySnapshot {
+  uint16_t group = 0;
+  uint8_t subgroup = 0;
+  uint8_t availableMeasurements = 0;
+};
+```
+
+Keep it private to the implementation unless tests require a public type.
+
+### 4. Add Checked CO2 Sample Helpers
+
+Add this enum to the public API:
 
 ```cpp
 enum class Co2ValueKind : uint8_t {
@@ -187,7 +201,7 @@ enum class Co2ValueKind : uint8_t {
 };
 ```
 
-Add this result struct to `EE871.h`:
+Add this result struct:
 
 ```cpp
 struct Co2ReadResult {
@@ -199,8 +213,8 @@ struct Co2ReadResult {
   bool co2Error{false};
   uint8_t errorCode{0};
   bool errorCodeValid{false};
-  Status statusReadStatus{Status::Ok()};
   Status valueReadStatus{Status::Ok()};
+  Status statusReadStatus{Status::Ok()};
   Status errorCodeReadStatus{Status::Ok()};
 };
 ```
@@ -212,75 +226,78 @@ Status readCo2AverageSample(Co2ReadResult& out);
 Status readCo2FastSample(Co2ReadResult& out);
 ```
 
-Keep existing APIs unchanged:
+Keep these existing APIs unchanged and source-compatible:
 
 ```cpp
 Status readCo2Average(uint16_t& ppm);
 Status readCo2Fast(uint16_t& ppm);
+Status readStatus(uint8_t& status);
+Status readErrorCode(uint8_t& code);
 ```
 
-Add a private helper to avoid duplicate code:
+Add this private helper:
 
 ```cpp
 Status _readCo2Sample(Co2ValueKind kind, Co2ReadResult& out);
 ```
 
-Required sequencing for `_readCo2Sample()`:
+Required `_readCo2Sample()` behavior:
 
-1. Clear `out` to a known default and set `out.kind`.
-2. Call `readStatus(statusByte)` first.
-   - Document that reading status can trigger a new measurement in the slave.
-   - This is intentional because the status byte describes the last CO2
-     measurement.
-3. If the status read fails:
-   - set `statusReadStatus`;
-   - return that status;
-   - do not read the value.
-4. If status bit 3 indicates a CO2 error:
-   - set `statusValid=true`, `co2Error=true`;
-   - if `hasErrorCode()` is true, read `readErrorCode(errorCode)`;
-   - return a sensor-error status, not `Status::Ok()`;
-   - do not mark `ppmValid=true`.
-5. If status is OK, read the selected value:
-   - `Fast` uses `readCo2Fast(ppm)`;
-   - `Average` uses `readCo2Average(ppm)`.
-6. Validate the value against the documented EE871 E2 range.
-7. On success:
-   - set `statusValid=true`;
-   - set `ppmValid=true`;
-   - return `Status::Ok()`.
+1. Reset `out` to a known default and set `out.kind`.
+2. Read the selected CO2 value first:
+   - `Co2ValueKind::Average` uses MV4 through `readCo2Average(ppm)`.
+   - `Co2ValueKind::Fast` uses MV3 through `readCo2Fast(ppm)`.
+3. Store the raw ppm in `out.ppm`.
+4. Store the value-read status in `out.valueReadStatus`.
+5. If the value read fails, return that status with `ppmValid=false` and do not
+   read status.
+6. Read `readStatus(statusByte)` after the value read.
+7. Store the status-read status in `out.statusReadStatus`.
+8. If the status read fails, return that status with `ppmValid=false`.
+9. Set `out.statusByte` and `out.statusValid=true`.
+10. If status bit 3 indicates a CO2 error:
+    - set `out.co2Error=true`;
+    - if `hasErrorCode()` is true, call `readErrorCode(errorCode)`;
+    - if `readErrorCode()` fails, return that communication status;
+    - if the error code read succeeds, set `errorCode` and `errorCodeValid`;
+    - return `Err::CO2_SENSOR_ERROR`;
+    - keep `ppmValid=false`.
+11. If status is clean, validate ppm against the documented EE871 range.
+12. On success, set `ppmValid=true` and return `Status::Ok()`.
 
-Add this new error code append-only at the end of `Err`:
+Add this error code append-only at the end of `Err`:
 
 ```cpp
 CO2_SENSOR_ERROR
 ```
 
-Do not renumber existing `Err` values. Existing implicit numeric values must
-remain stable.
+Do not renumber existing `Err` values.
 
-Recommended mapping:
+Use these return mappings:
 
-- If CO2 status bit is set and `readErrorCode()` succeeds:
-  - return `Status::Error(Err::CO2_SENSOR_ERROR, "CO2 sensor status error",
-    errorCode)`.
-- If CO2 status bit is set but error-code support is not advertised:
-  - return `Status::Error(Err::CO2_SENSOR_ERROR, "CO2 sensor status error",
-    statusByte)`.
-- If CO2 status bit is set and `readErrorCode()` fails:
-  - return the `readErrorCode()` status because the communication failed while
-    collecting the diagnostic.
+- status bit set and error code read succeeds:
 
-Add documented range constants to `CommandTable.h`:
+  ```cpp
+  Status::Error(Err::CO2_SENSOR_ERROR, "CO2 sensor status error", errorCode)
+  ```
+
+- status bit set and error-code support is not advertised:
+
+  ```cpp
+  Status::Error(Err::CO2_SENSOR_ERROR, "CO2 sensor status error", statusByte)
+  ```
+
+- status bit set and error-code read fails: return the error-code read status.
+
+Add these constants to `CommandTable.h`:
 
 ```cpp
 static constexpr uint16_t CO2_PPM_MIN = 0;
 static constexpr uint16_t CO2_PPM_MAX = 50000;
 ```
 
-Use these only in the new sample helpers. Do not change the existing raw
-`readCo2Fast(uint16_t&)` or `readCo2Average(uint16_t&)` behavior beyond any
-bug fixes required by tests.
+Use these constants only in the new sample helpers. Do not change raw
+`readCo2Average(uint16_t&)` or `readCo2Fast(uint16_t&)` range behavior.
 
 If the selected value exceeds `CO2_PPM_MAX`, return:
 
@@ -288,20 +305,27 @@ If the selected value exceeds `CO2_PPM_MAX`, return:
 Status::Error(Err::OUT_OF_RANGE, "CO2 ppm out of range", ppm)
 ```
 
-with `ppmValid=false`.
+Set `out.ppm` to the raw value for diagnostics and keep `out.ppmValid=false`.
 
-### Gap 3: Long Delay Paths Busy-Wait Too Hard
+Do not read status before MV3/MV4 in the new sample helpers. The E+E
+application-note sequence is: read required measured values first, then read
+status so validity of the last measured values can be evaluated and the next
+measurement can be started.
 
-Current behavior:
+Keep the `readStatus()` documentation explicit: reading the status byte can
+start or trigger a measurement and can reset the sensor interval counter under
+the documented timing conditions.
 
-- `sleepMs()` loops over `cfg.delayUs(1000, ...)`.
-- This is bounded, but it keeps the owner task busy during persistent write
-  delays.
+Keep sensor-status errors separate from E2 bus health:
 
-TunnelMonitor fit issue:
+- Returning `Err::CO2_SENSOR_ERROR` must not increment E2 health failures or
+  move `DriverState`.
+- Returning `Err::OUT_OF_RANGE` from sample validation must not increment E2
+  health failures or move `DriverState`.
+- Failed E2 communication while reading value, status, or error code still
+  updates health through the existing tracked transport path.
 
-- A dedicated owner task can tolerate bounded blocking, but long maintenance
-  write delays should allow cooperative yielding or RTOS delay integration.
+### 5. Add Cooperative Long-Delay Callbacks
 
 Add optional callbacks to `Config.h`:
 
@@ -310,7 +334,7 @@ using E2DelayMsFn = void (*)(uint32_t ms, void* user);
 using E2YieldFn = void (*)(void* user);
 ```
 
-Add fields:
+Add these fields to `Config`:
 
 ```cpp
 E2DelayMsFn delayMs = nullptr;
@@ -318,39 +342,61 @@ E2YieldFn yield = nullptr;
 uint8_t longDelaySliceMs = 1;
 ```
 
-Validation:
+Validation and normalization:
 
 - `longDelaySliceMs == 0` normalizes to `1`.
 - `longDelaySliceMs > 50` returns `Err::INVALID_CONFIG`.
+- Existing maximum write-delay validation stays in place.
 
-Replace `sleepMs()` with a helper such as:
+Replace the current millisecond sleep helper with a private helper such as:
 
 ```cpp
 static void delayLongMs(const Config& cfg, uint32_t delayMs);
 ```
 
-Behavior:
+Required behavior:
 
 - Loop in slices of at most `longDelaySliceMs`.
-- If `cfg.delayMs` is present, call it for the slice.
-- Otherwise call `cfg.delayUs(slice * 1000, cfg.busUser)`.
-- After each slice, call `cfg.yield(cfg.busUser)` if non-null.
-- Keep the existing bounded maximum write-delay validation.
+- If `cfg.delayMs` is present, call it once for each slice.
+- If `cfg.delayMs` is absent, call `cfg.delayUs(slice * 1000, cfg.busUser)`.
+- After each slice, call `cfg.yield(cfg.busUser)` when non-null.
+- Use this helper only for millisecond write-delay paths.
+- Do not call `yield` from bit-level E2 timing paths.
 
-Do not call `yield` from bit-level E2 timing paths. Only long millisecond write
-delays should use it.
+Keep all new delay math bounded in `uint32_t`.
 
-### Gap 4: Small State And Settings Consistency Gaps
+### 6. Keep Timer Model 32-Bit
 
-Add the following if missing or incomplete:
+Do not convert EE871 library timing or timestamp fields to `uint64_t` in this
+prompt.
 
-```cpp
-DriverState driverState() const { return state(); }
-```
+Keep these as `uint32_t`:
 
-`healthState()` already exists. Keep it.
+- `tick(uint32_t nowMs)`,
+- `SettingsSnapshot::nowMs`,
+- `SettingsSnapshot::lastOkMs`,
+- `SettingsSnapshot::lastErrorMs`,
+- `_nowMs`,
+- `_lastOkMs`,
+- `_lastErrorMs`,
+- `Config` timeout fields,
+- `Config` write-delay fields,
+- `delayLongMs(... uint32_t delayMs)`.
 
-Extend `SettingsSnapshot` so it exposes all new cache-only state:
+Reason: current timestamps are driver-local diagnostics, and current protocol
+timers are bounded microsecond counters. This prompt adds no long-lived
+scheduling inside the library.
+
+Rules:
+
+- Do not add sample timestamps.
+- Do not add a `NowMsFn`.
+- If any new elapsed check is required, keep it short-lived, bounded, and
+  wrap-safe.
+
+### 7. Extend Cache-Only Settings
+
+Extend `SettingsSnapshot` with:
 
 ```cpp
 BeginPolicy beginPolicy{BeginPolicy::RequirePresent};
@@ -360,254 +406,271 @@ bool hasYield = false;
 uint8_t longDelaySliceMs = 1;
 ```
 
-Keep `getSettings(SettingsSnapshot&)` strictly cache-only. It must not touch
-E2 lines.
+Populate these fields from the normalized active config and cached runtime
+state. `getSettings(SettingsSnapshot&)` and `getSettings()` must remain
+cache-only and must not touch E2 lines.
 
-### Gap 5: Duplicate Code That Should Be Simplified
+Verify existing `driverState()` and `healthState()` aliases remain
+source-compatible.
 
-Refactor only where it directly supports this prompt:
+### 8. Extract Only Useful Private Helpers
 
-- Extract config validation from `begin()` into a private helper:
+Refactor only where it directly supports the requirements above.
 
-  ```cpp
-  Status _validateConfig(const Config& config, Config& normalized) const;
-  ```
+Add these private helpers or equivalently named private helpers:
 
-- Extract bus idle/reset code shared by `begin()` and `busReset()` into a
-  private helper:
+```cpp
+Status _validateConfig(const Config& input, Config& normalized) const;
+Status _busResetRaw();
+Status _readIdentityRaw(IdentitySnapshot& out);
+Status _readFeatureFlagsRaw();
+Status _readCo2Sample(Co2ValueKind kind, Co2ReadResult& out);
+```
 
-  ```cpp
-  Status _busResetRaw();
-  ```
+Required behavior:
 
-  Keep public `busReset()` requiring initialization.
-
-- Extract identity probe into:
-
-  ```cpp
-  Status _readIdentityRaw(uint16_t& group);
-  ```
-
-- Extract feature flag read into:
-
-  ```cpp
-  Status _readFeatureFlagsRaw();
-  ```
-
-- Add `_readCo2Sample()` so the averaged and fast public APIs are wrappers only.
+- `_validateConfig()` centralizes config checks and normalization.
+- `_busResetRaw()` contains the bus idle/reset sequence shared by `begin()` and
+  `busReset()`.
+- Public `busReset()` still requires initialization.
+- `_readIdentityRaw()` reads and validates group, subgroup, and available
+  measurements without health updates.
+- `_readFeatureFlagsRaw()` clears cached feature flags before reading them and
+  leaves them zero if the feature-read sequence fails.
+- `_readCo2Sample()` removes duplication between average and fast sample APIs.
 
 Do not perform broad style-only refactors.
 
-## Sibling Library Pattern Alignment
+## Pattern Alignment Decisions
 
-Match the sibling driver conventions where practical:
+Apply these constraints:
 
-- Public headers remain framework-neutral and free of Arduino, ESP-IDF,
-  FreeRTOS, `Wire`, and owned bus objects.
+- Public headers stay framework-neutral.
+- Core code does not include Arduino, ESP-IDF, FreeRTOS, `Wire`, or hardware I2C
+  driver types.
 - Driver instances remain non-copyable and non-movable.
-- `Config` uses non-owning callbacks and `void* busUser`.
-- `Status` uses static strings only.
-- `probe()` remains diagnostic/raw and does not update health counters.
-- Normal tracked operations update health counters.
-- `DriverState` remains:
-
-  ```cpp
-  UNINIT, READY, DEGRADED, OFFLINE
-  ```
-
-- `offlineThreshold` zero normalizes to one.
-- `getSettings()` remains cache-only.
+- `Config` uses non-owning callbacks and one user pointer.
+- `Status` messages remain static strings.
+- `probe()` remains raw and health-neutral.
+- Normal bus operations remain tracked.
+- `offlineThreshold == 0` normalizes to one.
 - No heap allocation in core driver code.
 - No dynamic STL containers in core driver code.
-- `tick(uint32_t nowMs)` stays void and bounded.
-- Use wrap-safe 32-bit elapsed checks for driver-local short intervals if new
-  interval logic is added.
+- No new generic dirty/uncertain state is needed.
+- No generic measurement struct or cached sample state is needed.
+- No extra driver state such as `ABSENT`, `PROBING`, `RECOVERING`, or
+  `MEASUREMENT_NOT_READY` is needed.
 
-## TunnelMonitor Compatibility Audit To Preserve In The Prompt Output
+## Tests
 
-The implementation report should mention these downstream TunnelMonitor gaps,
-but this prompt must not implement them:
+Use the existing native fake transport. Extend it only with small helpers needed
+for assertions.
 
-- EE871 is E2 over GPIO, not ESP32 hardware I2C. It must not be integrated as a
-  normal `I2cTask` device unless a future architecture decision explicitly
-  makes `I2cTask` own those lines.
-- If EE871 gets its own TunnelMonitor owner task, it needs dedicated E2 GPIOs
-  in `BoardPins`.
-- TunnelMonitor needs a driver-free public contract such as
-  `include/TunnelMonitor/contracts/Ee871.h`.
-- Suggested future TunnelMonitor names:
-  - `Ee871Task`
-  - `DeviceId::Ee871`
-  - `ServiceId::Ee871Task`
-  - `BusId::E2`
-  - `ErrorDomain::Ee871`
-  - `Ee871Operation::Probe`, `ReadAverage`, `ReadFast`, `ReadStatus`,
-    `BusRecover`
-  - `Ee871ResultStatus::Ok`, `Queued`, `Timeout`, `DeviceAbsent`,
-    `SensorError`, `BusStuck`, `Failed`
-  - `Ee871Co2Mode::Average`, `Fast`
-- Suggested future TunnelMonitor owner defaults for first integration:
-  - `kEe871RequestQueueDepth = 8`
-  - `kEe871ResultQueueDepth = 8`
-  - `kEe871TraceCapacity = 16`
-  - `kEe871RuntimeTaskStackBytes = 8192`, verify with HIL high-water
-  - `kEe871RuntimeTaskPriority = 2`
-  - `kEe871RuntimePollIntervalMs = 20`
-  - `kEe871ReadDeadlineMs = 2000`
-  - `kEe871WarmupDeadlineMs = 20000`
-  - `kEe871PowerUpMaxMs = 10000`
-  - `kEe871MeasurementMs = 700`
-  - `kEe871MinimumTriggerIntervalMs = 10000`
-  - `kEe871StatusStaleMs = 30000`
-  - `kEe871StatusFaultMs = 120000`
-- TunnelMonitor sample schema currently has no CO2 fields. Later integration
-  must decide whether to store:
-  - averaged CO2 only,
-  - fast CO2 only,
-  - both averaged and fast CO2,
-  - status/error code as numeric fields or diagnostics only.
-- Suggested future append-only sample fields if both are stored:
-  - `SampleFieldId::Co2AveragePpm = 37`
-  - `SampleFieldId::Co2FastPpm = 38`
-  - `SampleFieldId::Count = 39`
-- If CO2 is added to stored samples, TunnelMonitor must update CSV header,
-  replay JSON builder, cloud body format, native contract enum tests,
-  `MeasurementAssembler`, `MeasurementRuntime`, web status, and CLI surfaces.
-- Future profile name if both existing data and CO2 are stored:
-
-  ```text
-  tm.v1.vw8_shzk16_env_power_co2
-  ```
-
-## Open Questions And Decisions For Later
-
-Do not block this library prompt on these. List them in the implementation
-report as downstream decisions.
-
-1. Dedicated E2 pins for TunnelMonitor hardware revision 2.0.0.
-2. Whether EE871 is optional or required for aggregate health.
-3. Whether TunnelMonitor stores average CO2 only or both average and fast CO2.
-4. Whether the owner task powers the EE871 probe or only reads it.
-5. Whether the owner task should expose maintenance writes at all.
-6. Exact TunnelMonitor sample schema/profile bump.
-7. Exact web/CLI wording and settings persistence fields.
-8. HIL timing table and stack high-water evidence.
-
-## Tests To Add Or Update
-
-Use the existing native fake transport. Extend it only as needed with small
-test helpers:
+Add or update fake support for:
 
 ```cpp
-void setStatusByte(uint8_t status);
+void setPresent(bool present);
 void setCo2FastPpm(uint16_t ppm);
 void setCo2AveragePpm(uint16_t ppm);
+void setStatusByte(uint8_t status);
+void setErrorCode(uint8_t code);
 void setFeatureFlags(uint8_t operatingFunctions,
                      uint8_t operatingModeSupport,
                      uint8_t specialFeatures);
 uint32_t delayMsCalls() const;
 uint32_t yieldCalls() const;
+uint32_t controlReadCount(uint8_t mainCommandNibble) const;
+uint32_t totalBusTransactions() const;
 ```
 
 Required native tests:
 
-1. `Config` defaults:
+1. Config defaults:
    - `beginPolicy == BeginPolicy::RequirePresent`
    - `delayMs == nullptr`
    - `yield == nullptr`
    - `longDelaySliceMs == 1`
 
-2. `begin()` with `RequirePresent` and absent fake preserves current failure
-   behavior:
-   - returns non-OK,
-   - `isInitialized() == false`,
-   - `state() == UNINIT`.
+2. Config validation:
+   - `longDelaySliceMs == 0` normalizes to `1`
+   - `longDelaySliceMs > 50` returns `Err::INVALID_CONFIG`
+   - `offlineThreshold == 0` still normalizes to `1`
 
-3. `begin()` with `AllowAbsent` and absent fake:
-   - returns OK,
-   - `isInitialized() == true`,
-   - `state() == OFFLINE`,
-   - `SettingsSnapshot::beginProbeStatus` contains the absent failure,
-   - feature flags are zero,
-   - normal reads return offline `BUSY`.
+3. `begin()` with `RequirePresent` and absent fake:
+   - returns non-OK
+   - `isInitialized() == false`
+   - `state() == DriverState::UNINIT`
 
-4. `recover()` after absent startup:
-   - fake starts absent, `begin(AllowAbsent)` succeeds offline,
-   - fake is made present,
-   - `recover()` returns OK,
-   - `state() == READY`,
-   - feature flags are populated.
+4. `begin()` with `AllowAbsent` and absent fake:
+   - returns OK
+   - `isInitialized() == true`
+   - `state() == DriverState::OFFLINE`
+   - `consecutiveFailures() == offlineThreshold()`
+   - feature flags are zero
+   - `totalFailures() == 0`
+   - `SettingsSnapshot::beginProbeStatus` contains the accepted absence error
+   - a normal value read returns `Err::BUSY`
+   - the normal value read does not increase fake bus transaction count
 
-5. `readCo2AverageSample()` success:
-   - status byte is clean,
-   - averaged ppm is valid,
-   - `kind == Average`,
-   - `ppmValid == true`,
-   - `statusValid == true`,
-   - return OK.
+5. `AllowAbsent` rejects incompatible identity:
+   - wrong group, wrong subgroup, or missing CO2 bit returns non-OK
+   - driver remains uninitialized
 
-6. `readCo2FastSample()` success:
-   - status byte is clean,
-   - fast ppm is valid,
-   - `kind == Fast`,
-   - return OK.
+6. `probe()` after absent startup:
+   - remains callable
+   - uses raw diagnostic reads
+   - does not change health counters
 
-7. CO2 status error with error-code support:
-   - fake status bit 3 set,
-   - fake error code set to one documented code,
-   - helper returns `Err::CO2_SENSOR_ERROR`,
-   - `co2Error == true`,
-   - `errorCodeValid == true`,
-   - `ppmValid == false`.
+7. `recover()` after absent startup:
+   - fake starts absent
+   - `begin(AllowAbsent)` succeeds offline
+   - fake becomes present
+   - `recover()` returns OK
+   - `state() == DriverState::READY`
+   - feature flags are populated
+   - consecutive failures are zero
 
-8. CO2 status error without error-code support:
-   - fake status bit 3 set,
-   - feature bit for error code cleared,
-   - helper returns `Err::CO2_SENSOR_ERROR`,
-   - `errorCodeValid == false`.
+8. `recover()` failure from `OFFLINE`:
+   - returns non-OK
+   - remains `DriverState::OFFLINE`
+   - `consecutiveFailures() >= offlineThreshold()`
 
-9. PPM out of documented range:
-   - fake returns `50001`,
-   - helper returns `Err::OUT_OF_RANGE`,
-   - `ppmValid == false`.
+9. Normal tracked operations while OFFLINE:
+   - return `Err::BUSY`
+   - do not touch E2 lines
+   - work the same whether OFFLINE came from absent startup or health failures
 
-10. Long delay callbacks:
-    - configure `delayMs`, `yield`, and `longDelaySliceMs`,
-    - run a write-delay path using zero-risk fake persistent write,
-    - assert delay/yield callbacks are used,
-    - assert bit-level normal reads do not call `yield`.
+10. Identity validation:
+    - `begin()`, `probe()`, and `recover()` reject wrong group
+    - `begin()`, `probe()`, and `recover()` reject wrong subgroup
+    - `begin()`, `probe()`, and `recover()` reject missing CO2 bit
 
-11. Snapshot cache-only behavior:
-    - `getSettings()` reports new fields,
-    - no fake bus transaction count changes while reading settings.
+11. `readCo2AverageSample()` success:
+    - returns OK
+    - `kind == Co2ValueKind::Average`
+    - `ppmValid == true`
+    - selected ppm is returned
+    - `statusValid == true`
+    - `co2Error == false`
+    - fake order shows MV4 low/high reads occur before `MAIN_STATUS`
 
-12. Header/API compile tests:
-    - new enums/structs compile from public headers,
-    - existing code using `readCo2Average(uint16_t&)` and
-      `readCo2Fast(uint16_t&)` still compiles.
+12. `readCo2FastSample()` success:
+    - returns OK
+    - `kind == Co2ValueKind::Fast`
+    - `ppmValid == true`
+    - selected ppm is returned
+    - `statusValid == true`
+    - `co2Error == false`
+    - fake order shows MV3 low/high reads occur before `MAIN_STATUS`
 
-## Docs And Examples
+13. Value-read failure:
+    - sample helper returns the underlying value-read status
+    - `ppmValid == false`
+    - `valueReadStatus` matches the returned status
+    - status is not read after the value-read failure
+
+14. CO2 status error with error-code support:
+    - fake value read succeeds
+    - fake status bit 3 is set
+    - fake error code is one documented code
+    - helper returns `Err::CO2_SENSOR_ERROR`
+    - `co2Error == true`
+    - `errorCodeValid == true`
+    - `ppmValid == false`
+    - E2 health failure counters do not increment because bus I/O succeeded
+
+15. CO2 status error without error-code support:
+    - fake value read succeeds
+    - fake status bit 3 is set
+    - feature bit for error-code support is cleared
+    - helper returns `Err::CO2_SENSOR_ERROR`
+    - `errorCodeValid == false`
+    - E2 health failure counters do not increment because bus I/O succeeded
+
+16. Error-code read communication failure:
+    - fake value read succeeds
+    - fake status bit 3 is set
+    - error-code support is advertised
+    - error-code read fails
+    - helper returns the error-code read status
+    - E2 health failure counters update through the tracked communication path
+
+17. PPM out of documented range:
+    - fake returns `50001`
+    - status is clean
+    - helper returns `Err::OUT_OF_RANGE`
+    - `ppmValid == false`
+    - `ppm == 50001`
+    - E2 health failure counters do not increment because bus I/O succeeded
+
+18. Explicit status behavior:
+    - existing `readStatus()` still reads `MAIN_STATUS`
+    - `hasCo2Error()` behavior remains covered
+    - docs/help state that `status` can start or trigger a measurement
+
+19. Long delay callbacks:
+    - configure `delayMs`, `yield`, and `longDelaySliceMs`
+    - run a fake persistent-write path
+    - assert millisecond delay callbacks are used in slices
+    - assert yield callbacks are used after slices
+    - assert normal bit-level reads do not call `yield`
+
+20. Snapshot cache-only behavior:
+    - `getSettings()` reports new fields
+    - fake bus transaction count does not change while reading settings
+
+21. Public header compatibility:
+    - new enums and structs compile from public headers
+    - existing code using `readCo2Average(uint16_t&)`,
+      `readCo2Fast(uint16_t&)`, `readStatus(uint8_t&)`, and
+      `readErrorCode(uint8_t&)` still compiles
+
+## Docs, Examples, And Versioning
 
 Update:
 
 - `README.md`
-- `docs/EE871_E2_RELEASE_NOTES_1.0.0.md` or create a new release-note draft if
-  version metadata is bumped
+- `CHANGELOG.md`
+- release notes for the new version
 - `docs/EE871_E2_HARDENING_FINAL_REPORT.md`
-- `docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md` only to say the new APIs need
-  HIL evidence later, not to claim HIL passed
-- Arduino and IDF example CLI docs where they describe safe commands
+- `docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md` only to mark new HIL coverage
+  as pending unless hardware was actually run
+- Arduino and ESP-IDF example help/docs where they describe CO2 reads
 
-Example CLI updates are allowed if kept small:
+Versioning requirements:
 
-- keep existing `read`, `co2fast`, `co2avg`, and `status`;
-- optionally add `sampleavg` and `samplefast` to print the new
-  `Co2ReadResult` struct fields;
-- do not add new field-write commands.
+- Bump `library.json` to the next minor version from the current version.
+- Regenerate `include/EE871/Version.h` with repository tooling.
+- If the current version is `1.0.0`, create
+  `docs/EE871_E2_RELEASE_NOTES_1.1.0.md`.
+- Do not edit old release notes as if they are the current release.
+- Update any repository version references that are intended to track the active
+  release.
+
+Example CLI requirements:
+
+- Keep existing `status`, `co2avg`, and `co2fast` commands source-compatible.
+- If adding new commands, add exactly these read-only commands:
+  - `sampleavg`
+  - `samplefast`
+- `sampleavg` and `samplefast` must use the new checked sample helpers.
+- Keep help text clear that `status`, `sampleavg`, and `samplefast` can trigger
+  a new measurement because they read status.
+- Do not add new field-write commands.
+
+Docs must clearly separate:
+
+- raw MV3/MV4 reads,
+- checked average/fast sample reads that read value first and status second,
+- explicit status reads with measurement-trigger side effects,
+- maintenance/persistent-write APIs.
+
+Do not add library-level field-use policy. Applications decide which maintenance
+APIs they expose.
 
 ## Validation Commands
 
-Run the relevant checks after implementation:
+Run:
 
 ```powershell
 python tools/check_core_timing_guard.py
@@ -626,24 +689,49 @@ available, state that clearly.
 Do not claim hardware HIL passed unless it was actually run with captured
 artifacts.
 
+## Final Report
+
+The implementation is complete when the final report states:
+
+- files changed,
+- current branch and commit used as baseline,
+- version bump performed,
+- test/build command results,
+- whether `idf.py` was available,
+- no HIL claim unless HIL was run,
+- downstream integration decisions left to consuming firmware:
+  - selected pins,
+  - owner task policy,
+  - warmup/read cadence,
+  - whether and when to call raw value reads versus checked sample helpers,
+  - storage/schema/UI exposure,
+  - HIL timing thresholds.
+
 ## Acceptance Criteria
 
-The implementation is complete when:
-
-- existing public APIs remain source compatible;
-- absent startup is supported through `BeginPolicy::AllowAbsent`;
-- absent startup can later recover to `READY` without rebuilding the driver;
-- feature flags reload after recovery from absent startup;
-- two new production read helpers exist:
-  - `readCo2AverageSample(Co2ReadResult&)`
-  - `readCo2FastSample(Co2ReadResult&)`
-- CO2 status bit and optional error code are surfaced consistently;
-- documented CO2 ppm range is enforced by the new sample helpers;
-- long write delays can yield/cooperate through optional callbacks;
-- `getSettings()` exposes the new cache-only state and remains bus-free;
-- native fake tests cover success, absence, recovery, CO2 sensor-error, range,
-  and long-delay behavior;
-- docs clearly separate safe reads from maintenance writes;
-- the final report lists TunnelMonitor downstream integration decisions without
-  claiming they were implemented.
-
+- Existing public APIs remain source-compatible.
+- `BeginPolicy::AllowAbsent` supports configured offline startup.
+- Normal tracked bus APIs return offline `BUSY` without touching E2 lines until
+  recovery succeeds.
+- `OFFLINE` is latched for normal operations regardless of how it was reached.
+- `begin()`, `probe()`, and `recover()` validate group, subgroup, and CO2
+  availability.
+- `recover()` can transition from accepted absent startup to `READY`.
+- Feature flags reload after recovery from absent startup.
+- `readCo2AverageSample(Co2ReadResult&)` exists.
+- `readCo2FastSample(Co2ReadResult&)` exists.
+- Sample helpers read MV3/MV4 first and status second.
+- Sample helpers do not read status if the value read fails.
+- Sample helpers surface CO2 status-bit errors through append-only
+  `Err::CO2_SENSOR_ERROR`.
+- Sensor status and range validation failures do not count as E2 health
+  failures when bus I/O succeeded.
+- Sample helpers enforce `CO2_PPM_MAX`.
+- Long write delays can use `delayMs` and `yield` callbacks.
+- Bit-level E2 timing paths do not call `yield`.
+- `getSettings()` exposes new cache-only state and remains bus-free.
+- Native tests cover defaults, identity validation, absent startup, offline
+  guard, recovery, checked CO2 reads, ordering, sensor status errors, range
+  validation, long delays, and cache-only settings.
+- Docs separate raw value reads, checked sample reads, status side effects, and
+  maintenance writes.
