@@ -1,8 +1,8 @@
 # Prompt 02 Lifecycle, Identity, And Recovery Handoff
 
-Date: 2026-07-28  
-Branch: `feature/ee871-hardening-series`  
-Baseline commit: `739beeca9017bc678f026d4b466aa2bb6332b08e`  
+Date: 2026-07-28
+Branch: `feature/ee871-hardening-series`
+Baseline commit: `739beeca9017bc678f026d4b466aa2bb6332b08e`
 Version: `1.0.0` (unchanged)
 
 ## Baseline
@@ -61,8 +61,9 @@ invent a transfer timestamp.
 
 | Identity discovery result | `ALLOW_ABSENT` behavior |
 | --- | --- |
-| `NACK` | Accept as absent; initialized and `OFFLINE` |
+| Cleanly terminated `NACK` | Accept as absent; initialized and `OFFLINE` |
 | Definite `DEVICE_NOT_FOUND` | Accept as absent; initialized and `OFFLINE` |
+| `NACK` with failed cleanup STOP | Reject, retain primary NACK, and remain `UNINIT` |
 | `TIMEOUT`, `BUS_STUCK`, `PEC_MISMATCH` | Reject and remain `UNINIT` |
 | Wrong group/subgroup or missing CO2 bit | Reject as `NOT_SUPPORTED` |
 | Any capability pointer/read failure | Reject and remain `UNINIT` |
@@ -132,6 +133,30 @@ fake time does not exceed the advertised bounds.
 
 No HIL, physical sensor, waveform, network, Cloud, or long-run validation was
 performed for this prompt.
+
+## Post-Publication Audit Correction
+
+The audit of published Prompt 02 commit `974f730` found that optional startup
+classified a primary NACK as absence even when its cleanup STOP timed out.
+Production now carries private clean-termination evidence alongside the raw
+identity read. It retains Prompt 01's precise primary NACK but accepts that NACK
+as absence only after cleanup completed. A deterministic absent-device plus
+STOP-timeout regression proves the driver remains `UNINIT`, with invalid
+caches, zero health counters, and no retry.
+
+The audit also:
+
+- removed obsolete example-side group/subgroup remapping to
+  `DEVICE_NOT_FOUND`;
+- aligned the binding lifecycle guideline with recover-only OFFLINE revival;
+- clarified semantic `NOT_SUPPORTED` in `lastError` without a fake transport
+  timestamp or counter;
+- removed handoff whitespace that invalidated the originally recorded diff
+  check.
+
+The complete validation set above was rerun after these corrections. The
+native suite remained 65/65, both Arduino firmware builds passed, the
+repository contract checks passed, and the cumulative Prompt 02 diff is clean.
 
 ## Explicit Deferrals
 

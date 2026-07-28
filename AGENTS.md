@@ -271,10 +271,13 @@ enum class DriverState : uint8_t {
 ```
 
 State transitions:
-- `begin()` success -> READY
+- strict `begin()` success -> READY
+- optional `begin()` with definite, cleanly terminated absence -> OFFLINE
 - Any E2 transfer failure in READY -> DEGRADED
-- Success in DEGRADED/OFFLINE -> READY
+- Successful tracked transfer in DEGRADED -> READY
 - Failures reach `offlineThreshold` -> OFFLINE
+- Normal operations in OFFLINE -> precise OFFLINE with no bus I/O
+- Complete explicit `recover()` success in OFFLINE -> READY
 - `end()` -> UNINIT
 
 ### Transport Wrapper Architecture
@@ -286,9 +289,11 @@ Public API (readStatus, readMeasurement, customRead, customWrite)
     v
 Protocol helpers (readControlByte, customRead/write)
     v
-TRACKED wrappers (_e2TransferTracked, _e2WriteTracked)
-    v  <- _updateHealth() called here ONLY
-RAW wrappers (_e2TransferRaw, _e2WriteRaw)
+TRACKED wrappers (_readControlByteTracked, _setCustomPointerTracked,
+                  _writeCommandTracked, _busResetTracked)
+    v  <- OFFLINE guard before I/O; _updateHealth() after actual I/O ONLY
+RAW wrappers (_readControlByteRaw, _setCustomPointerRaw,
+              _writeCommandRaw, _busResetRaw)
     v
 Transport callbacks (Config::set_scl/set_sda/read_scl/read_sda/delay_us)
 ```
@@ -296,8 +301,11 @@ Transport callbacks (Config::set_scl/set_sda/read_scl/read_sda/delay_us)
 **Rules:**
 - Public API methods NEVER call `_updateHealth()` directly.
 - Protocol helpers use TRACKED wrappers -> health updated automatically.
+- Tracked wrappers reject normal OFFLINE work before touching line callbacks.
 - `probe()` uses RAW wrappers -> no health tracking (diagnostic only).
-- `recover()` tracks probe failures (driver is initialized, so failures count).
+- `recover()` uses a private scoped OFFLINE bypass and tracked reset/identity/
+  capability transfers; it is the only path that can restore OFFLINE to READY.
+- Public `busReset()` and `checkBusIdle()` remain raw and health-neutral.
 
 ### Health Tracking Rules
 
@@ -311,8 +319,9 @@ Transport callbacks (Config::set_scl/set_sda/read_scl/read_sda/delay_us)
 
 - `_lastOkMs` - timestamp of last successful E2 operation
 - `_lastErrorMs` - timestamp of last failed E2 operation
-- `_lastError` - most recent error Status
-- `_consecutiveFailures` - failures since last success (resets on success)
+- `_lastError` - most recent tracked error, or semantic recovery incompatibility
+- `_consecutiveFailures` - failures since last success, or a normalized
+  semantic OFFLINE latch that does not invent wire failures
 - `_totalFailures` / `_totalSuccess` - lifetime counters (wrap at max)
 
 ---

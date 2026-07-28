@@ -618,11 +618,14 @@ Status EE871::begin(const Config& config) {
   }
 
   DeviceIdentity identityCandidate;
-  st = _readAndValidateIdentityRaw(identityCandidate);
+  bool identityNackTerminatedCleanly = false;
+  st = _readAndValidateIdentityRaw(
+      identityCandidate, &identityNackTerminatedCleanly);
   if (!st.ok()) {
     const bool acceptedAbsence =
         _config.beginPolicy == BeginPolicy::ALLOW_ABSENT &&
-        (st.code == Err::NACK || st.code == Err::DEVICE_NOT_FOUND);
+        ((st.code == Err::NACK && identityNackTerminatedCleanly) ||
+         st.code == Err::DEVICE_NOT_FOUND);
     if (acceptedAbsence) {
       _initialized = true;
       _beginProbeStatus = st;
@@ -813,24 +816,41 @@ Status EE871::recover() {
   return Status::Ok();
 }
 
-Status EE871::_readAndValidateIdentityRaw(DeviceIdentity& out) {
-  return _readAndValidateIdentity(out, false);
+Status EE871::_readAndValidateIdentityRaw(
+    DeviceIdentity& out,
+    bool* nackTerminatedCleanly) {
+  return _readAndValidateIdentity(
+      out, false, nackTerminatedCleanly);
 }
 
 Status EE871::_readAndValidateIdentityTracked(DeviceIdentity& out) {
-  return _readAndValidateIdentity(out, true);
+  return _readAndValidateIdentity(out, true, nullptr);
 }
 
 Status EE871::_readAndValidateIdentity(
-    DeviceIdentity& out, bool tracked) {
+    DeviceIdentity& out,
+    bool tracked,
+    bool* nackTerminatedCleanly) {
   out = DeviceIdentity{};
+  if (nackTerminatedCleanly != nullptr) {
+    *nackTerminatedCleanly = false;
+  }
   auto readMain =
-      [this, tracked](uint8_t mainCommand, uint8_t& value) {
+      [this, tracked, nackTerminatedCleanly](
+          uint8_t mainCommand, uint8_t& value) {
         const uint8_t control =
             cmd::makeControlRead(mainCommand, _config.deviceAddress);
-        return tracked
-                   ? _readControlByteTracked(control, value)
-                   : _readControlByteRaw(control, value);
+        if (tracked) {
+          return _readControlByteTracked(control, value);
+        }
+        bool transactionTerminatedCleanly = false;
+        const Status readStatus = _readControlByteRaw(
+            control, value, &transactionTerminatedCleanly);
+        if (nackTerminatedCleanly != nullptr &&
+            readStatus.code == Err::NACK) {
+          *nackTerminatedCleanly = transactionTerminatedCleanly;
+        }
+        return readStatus;
       };
 
   uint8_t groupLow = 0;
@@ -1654,15 +1674,25 @@ Status EE871::checkBusIdle() {
   return Status::Ok();
 }
 
-Status EE871::_readControlByteRaw(uint8_t controlByte, uint8_t& data) {
+Status EE871::_readControlByteRaw(
+    uint8_t controlByte,
+    uint8_t& data,
+    bool* transactionTerminatedCleanly) {
+  if (transactionTerminatedCleanly != nullptr) {
+    *transactionTerminatedCleanly = false;
+  }
   Status st = _e2Start(_config);
   if (!st.ok()) {
     return st;
   }
 
-  auto cleanup = [this](const Status& primary) {
+  auto cleanup = [this, transactionTerminatedCleanly](
+                     const Status& primary) {
     const Status cleanupStatus =
         _e2Stop(_config, ClockWaitClass::NORMAL_BIT, nullptr);
+    if (transactionTerminatedCleanly != nullptr) {
+      *transactionTerminatedCleanly = cleanupStatus.ok();
+    }
     return primary.ok() ? cleanupStatus : primary;
   };
 
@@ -1710,6 +1740,9 @@ Status EE871::_readControlByteRaw(uint8_t controlByte, uint8_t& data) {
           : Status::Error(Err::PEC_MISMATCH, "PEC mismatch", pec);
   const Status stopStatus =
       _e2Stop(_config, ClockWaitClass::NORMAL_BIT, nullptr);
+  if (transactionTerminatedCleanly != nullptr) {
+    *transactionTerminatedCleanly = stopStatus.ok();
+  }
   if (!pecStatus.ok()) {
     return pecStatus;
   }

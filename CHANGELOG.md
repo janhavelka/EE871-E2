@@ -49,6 +49,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explicit through `recover()`.
 - Final-PEC NACK cleanup uses the same write-completion budget and preserves
   `NACK` as the primary result.
+- Optional startup accepts an identity NACK only when its cleanup STOP
+  completes; a NACK with failed cleanup remains a failed, uninitialized begin.
 
 ## [1.0.0] - 2026-06-02
 

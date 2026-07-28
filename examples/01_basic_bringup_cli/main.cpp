@@ -669,17 +669,11 @@ void runStressMix(int count) {
       case 3: {
         uint16_t group = 0;
         st = device.readGroup(group);
-        if (st.ok() && group != EE871::cmd::SENSOR_GROUP_ID) {
-          st = EE871::Status::Error(EE871::Err::DEVICE_NOT_FOUND, "unexpected group", group);
-        }
         break;
       }
       case 4: {
         uint8_t subgroup = 0;
         st = device.readSubgroup(subgroup);
-        if (st.ok() && subgroup != EE871::cmd::SENSOR_SUBGROUP_ID) {
-          st = EE871::Status::Error(EE871::Err::DEVICE_NOT_FOUND, "unexpected subgroup", subgroup);
-        }
         break;
       }
       case 5: {

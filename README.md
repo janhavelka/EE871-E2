@@ -184,10 +184,11 @@ startup succeeds only after the driver validates group `0x0367`, subgroup
 from custom memory `0x03..0x09`.
 
 For a product where the sensor is genuinely optional, set
-`BeginPolicy::ALLOW_ABSENT`. Only a definite identity-read `NACK` or
-`DEVICE_NOT_FOUND` is accepted. The driver then returns success from `begin()`
-but remains initialized and latched `OFFLINE`; identity and capability caches
-stay invalid. The accepted discovery status is available as
+`BeginPolicy::ALLOW_ABSENT`. Only a cleanly terminated identity-read `NACK` or
+definite `DEVICE_NOT_FOUND` is accepted; a failed cleanup STOP is rejected even
+when the primary transfer result remains NACK. The driver then returns success
+from `begin()` but remains initialized and latched `OFFLINE`; identity and
+capability caches stay invalid. The accepted discovery status is available as
 `SettingsSnapshot::beginProbeStatus`. `consecutiveFailures` is normalized to
 the configured offline threshold to preserve the four-state invariant; this
 is a state latch, not invented failed wire traffic, so lifetime failure

@@ -83,8 +83,8 @@ struct SettingsSnapshot {
   uint8_t specialFeatures = 0;    ///< Cached custom-memory 0x09 feature flags.
   uint32_t lastOkMs = 0;          ///< Last tracked successful E2 operation.
   uint32_t lastErrorMs = 0;       ///< Last tracked failed E2 operation.
-  Status lastError = Status::Ok(); ///< Last tracked error status.
-  uint8_t consecutiveFailures = 0; ///< Current consecutive tracked failures.
+  Status lastError = Status::Ok(); ///< Last tracked error, or semantic recovery incompatibility.
+  uint8_t consecutiveFailures = 0; ///< Tracked streak, or normalized semantic OFFLINE latch.
   uint32_t totalFailures = 0;     ///< Total tracked failures.
   uint32_t totalSuccess = 0;      ///< Total tracked successes.
   bool persistentConfigDirty = false; ///< True when persistent config may be partially applied.
@@ -135,9 +135,10 @@ public:
   /// begin() validates timing and callbacks, normalizes configuration, validates
   /// the complete EE871 CO2 identity, and atomically caches custom-memory
   /// capabilities 0x03..0x09. REQUIRE_PRESENT fails closed on any discovery
-  /// error. ALLOW_ABSENT accepts only a definite NACK/DEVICE_NOT_FOUND during
-  /// identity discovery and initializes a latched OFFLINE session; responding
-  /// incompatible devices and partial capability reads still fail.
+  /// error. ALLOW_ABSENT accepts only a cleanly terminated identity NACK or
+  /// definite DEVICE_NOT_FOUND and initializes a latched OFFLINE session;
+  /// responding incompatible devices, cleanup failures, and partial capability
+  /// reads still fail.
   ///
   /// The driver does not configure GPIO, pins, pull-ups, tasks, locks, or
   /// framework handles.
@@ -290,11 +291,18 @@ public:
   uint32_t lastErrorMs() const { return _lastErrorMs; }
 
   /// Most recent error status.
-  /// @return Last tracked failure status.
+  ///
+  /// A responding incompatible identity during recover() records semantic
+  /// NOT_SUPPORTED here without incrementing transport counters or changing
+  /// lastErrorMs(). Otherwise this is the last tracked transfer failure.
+  /// @return Last tracked transfer failure or semantic recovery incompatibility.
   Status lastError() const { return _lastError; }
 
   /// Consecutive failures since last success.
-  /// @return Current consecutive tracked failure count.
+  ///
+  /// Accepted absence and semantic recovery incompatibility normalize this to
+  /// offlineThreshold() as a state latch without inventing transport failures.
+  /// @return Current tracked failure streak or normalized OFFLINE latch.
   uint8_t consecutiveFailures() const { return _consecutiveFailures; }
 
   /// Total failure count (lifetime).
@@ -734,7 +742,10 @@ private:
   Status _setCustomPointerRaw(uint8_t address);
   Status _setCustomPointerTracked(uint8_t address);
 
-  Status _readControlByteRaw(uint8_t controlByte, uint8_t& data);
+  Status _readControlByteRaw(
+      uint8_t controlByte,
+      uint8_t& data,
+      bool* transactionTerminatedCleanly = nullptr);
   Status _readControlByteTracked(uint8_t controlByte, uint8_t& data);
 
   Status _writeCommandRaw(uint8_t controlByte, uint8_t addressByte, uint8_t dataByte,
@@ -745,12 +756,16 @@ private:
                               WriteProgress* progress = nullptr);
   Status _customWriteDirect(uint8_t address, uint8_t value,
                             bool* writeMayHaveEffect = nullptr);
-  Status _readAndValidateIdentityRaw(DeviceIdentity& out);
+  Status _readAndValidateIdentityRaw(
+      DeviceIdentity& out,
+      bool* nackTerminatedCleanly = nullptr);
   Status _readCapabilitiesRaw(CapabilitySnapshot& out);
   Status _readAndValidateIdentityTracked(DeviceIdentity& out);
   Status _readCapabilitiesTracked(CapabilitySnapshot& out);
   Status _readAndValidateIdentity(
-      DeviceIdentity& out, bool tracked);
+      DeviceIdentity& out,
+      bool tracked,
+      bool* nackTerminatedCleanly);
   Status _readCapabilities(
       CapabilitySnapshot& out, bool tracked);
   void _publishIdentityAndCapabilities(

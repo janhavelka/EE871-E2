@@ -56,7 +56,7 @@ using E2YieldFn = void (*)(void* user);
 /// @brief Device-presence policy applied by begin().
 enum class BeginPolicy : uint8_t {
   REQUIRE_PRESENT = 0, ///< Startup succeeds only after full EE871 validation.
-  ALLOW_ABSENT = 1,   ///< A definite absence may initialize a latched OFFLINE session.
+  ALLOW_ABSENT = 1,   ///< Cleanly terminated definite absence may latch OFFLINE.
 };
 
 /// @brief Configuration for EE871 driver.
@@ -107,7 +107,7 @@ struct Config {
   uint8_t longDelaySliceMs = 1;   ///< Long-wait slice, normalized from zero to 1 ms; maximum 50 ms.
 
   // === Startup policy ===
-  BeginPolicy beginPolicy = BeginPolicy::REQUIRE_PRESENT; ///< Strict by default; optional absence accepts only definite absence.
+  BeginPolicy beginPolicy = BeginPolicy::REQUIRE_PRESENT; ///< Strict by default; optional absence must terminate cleanly.
 };
 
 } // namespace EE871

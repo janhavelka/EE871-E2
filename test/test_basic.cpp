@@ -453,6 +453,29 @@ void test_allow_absent_rejects_non_absence_transport_faults() {
         static_cast<uint8_t>(st.code));
     TEST_ASSERT_FALSE(dev.isInitialized());
   }
+
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    fake.setDevicePresent(false);
+    fake.setStretch(
+        StretchPhase::STOP, cmd::BIT_TIMEOUT_MAX_US + 5U);
+
+    const Status st = beginAllowAbsent(dev, fake);
+
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::NACK),
+        static_cast<uint8_t>(st.code));
+    TEST_ASSERT_FALSE(dev.isInitialized());
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(DriverState::UNINIT),
+        static_cast<uint8_t>(dev.state()));
+    TEST_ASSERT_EQUAL_UINT32(0, dev.totalFailures());
+    TEST_ASSERT_EQUAL_UINT32(0, dev.totalSuccess());
+    TEST_ASSERT_EQUAL_UINT32(1, fake.transactionCount());
+    assertIdentityInvalid(dev.identity());
+    assertCapabilitiesInvalid(dev.capabilities());
+  }
 }
 
 void test_all_lifecycle_identity_paths_fail_closed() {

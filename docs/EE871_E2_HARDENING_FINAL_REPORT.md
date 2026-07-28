@@ -891,8 +891,9 @@ introducing firmware or product policy:
 
 - strict begin remains the default and requires exact group/subgroup, CO2
   availability, and all capability bytes `0x03..0x09`;
-- `ALLOW_ABSENT` accepts only identity-stage `NACK` or definite
-  `DEVICE_NOT_FOUND`, retaining an initialized but latched `OFFLINE` driver;
+- `ALLOW_ABSENT` accepts only a cleanly terminated identity-stage `NACK` or
+  definite `DEVICE_NOT_FOUND`, retaining an initialized but latched `OFFLINE`
+  driver;
 - responding incompatible devices, PEC/timing/bus faults, and partial
   capability reads fail closed;
 - identity and capabilities are read into local candidates and publish
@@ -930,3 +931,16 @@ preparation, and all downstream firmware ownership/product integration remain
 deferred to their later prompts. The detailed transition and absence-policy
 tables are in
 `docs/reports/ee871_prompt_02_lifecycle_identity_handoff_20260728.md`.
+
+Post-publication audit correction:
+
+- commit `974f730` accepted a primary identity NACK even when its cleanup STOP
+  timed out;
+- the raw identity path now carries private clean-termination evidence, so the
+  precise NACK remains the returned status but optional begin remains
+  `UNINIT` when cleanup failed;
+- native coverage includes the deterministic absent-device plus STOP-timeout
+  case with no retry, no published cache, and zero pre-initialization health
+  counters;
+- obsolete example-side identity remapping was removed and lifecycle/diagnostic
+  documentation was aligned with the implemented contracts.
