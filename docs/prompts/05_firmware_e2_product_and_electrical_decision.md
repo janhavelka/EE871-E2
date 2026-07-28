@@ -1,4 +1,4 @@
-# Prompt 05: Firmware E2 Product and Electrical Decision Gate
+# Prompt 05: Co2Control E2 Product and Electrical Decision Gate
 
 ## Role
 
@@ -14,15 +14,32 @@ This is a mandatory decision/documentation gate. Do not add runtime code,
 contracts, pins, dependencies, profile rows, schema fields, tasks, or stubs in
 this prompt.
 
+The product allocation is already decided:
+
+```text
+TARGET_PRODUCT = Co2Control
+```
+
+E2 and EE871 must not be enabled, instantiated, pinned, assigned pins, exposed,
+or used by the existing `TunnelMonitor` product or any other production
+product. This prompt resolves the remaining Co2Control details; it must not
+reopen product ownership.
+
 ## Required Invocation Inputs
 
 The person running this prompt must replace every `<REQUIRED>` value with
 explicit approved authority:
 
 ```text
-TARGET_PRODUCT = <TunnelMonitor | Co2Control | another named compile-time product>
+TARGET_PRODUCT = Co2Control
+CO2CONTROL_PROFILE_KEY = <exact compile-time profile key>
 TARGET_BOARD_PROFILE = <exact board profile key>
-E2_COMPILED_ENVIRONMENTS = <exact PlatformIO environment list>
+E2_COMPILE_GATE = <exact repository feature macro>
+E2_PRODUCTION_ENVIRONMENTS = <exact Co2Control PlatformIO environment list>
+E2_VALIDATION_ENVIRONMENTS = <exact native/HIL test environment list>
+NON_CO2CONTROL_PRODUCTION_ENVIRONMENTS =
+    <complete list; every entry must compile with E2 disabled>
+CO2CONTROL_EE871_DEVICE_ID = <exact non-conflicting DeviceId>
 E2_CLK_GPIO = <exact GPIO>
 E2_DATA_GPIO = <exact GPIO>
 E2_INTERNAL_PULLUPS = <true | false with electrical authority>
@@ -55,8 +72,10 @@ If any value is absent, contradictory, or not backed by project authority:
 3. list the missing decisions and affected downstream files;
 4. stop without changing guidelines or code.
 
-Do not invent GPIOs, assume the currently selected product, or convert a
-future reservation into runtime authority.
+Do not invent GPIOs, reuse TunnelMonitor pins/profile IDs, or convert a future
+reservation into runtime authority. If any requested authority assigns E2 or
+EE871 to a product other than Co2Control, treat it as a contradiction and
+produce the blocker report.
 
 ## Read First
 
@@ -80,7 +99,8 @@ Read completely:
 - `platformio.ini`;
 - the EE871 audit and Prompt 04 release handoff in sibling `EE871-E2`.
 
-Record branch, commit, dirty state, and current selected product/profile facts.
+Record branch, commit, dirty state, the current Co2Control reservation, and the
+currently selected production product/profile facts.
 
 ## Existing Authority That Must Be Reconciled
 
@@ -95,20 +115,28 @@ At the 2026-07-28 baseline:
 - `open_questions.md` assigns E2 to future Co2Control composition;
 - the selected TunnelMonitor profile has no CO2 device/field.
 
-These are not defects to work around. The approved inputs must explicitly
-supersede or preserve them.
+These are not defects to work around. Concretizing Co2Control supersedes only
+the future-Co2Control reservation. The selected TunnelMonitor profile's lack
+of CO2/E2 remains intentional and must be preserved.
 
 ## Decision Rules
 
 ### Product
 
-State exactly whether EE871 is:
+Concretize exactly one compile-time `Co2Control` product/profile. Do not
+implement a runtime product selector and do not add EE871 to the existing
+`TunnelMonitor` profile.
 
-- an included device in the current `TunnelMonitor` product;
-- a device in a newly concrete `Co2Control` product; or
-- a device in another named compile-time product.
+Freeze a negative product matrix:
 
-Do not implement a runtime product selector.
+- only approved Co2Control production environments define the E2 production
+  gate as `1`;
+- every other production environment defines it as `0` or omits E2 sources
+  and the EE871 dependency entirely, according to repository convention;
+- native/HIL validation environments may compile E2 only for tests and are not
+  production product ownership;
+- non-Co2Control profiles contain no E2 `DeviceSpec`, binding, pins, schema
+  mapping, health row, CLI/Web capability, or runtime startup call.
 
 Validate the approved row against existing `DeviceSpec` and schema contracts
 before accepting it:
@@ -150,7 +178,7 @@ Do not treat software as evidence that the electrical design is safe.
 
 ### Product defaults
 
-If the product owner has not requested different values, present these as
+If the Co2Control product owner has not requested different values, present these as
 recommendations for approval, not hidden assumptions:
 
 - optional device role;
@@ -185,7 +213,7 @@ Do not copy the I2C owner's 20 ms timing.
 
 ### Durable data
 
-If CO2 enters sample/storage/replay/Cloud:
+If CO2 enters the Co2Control sample/storage/replay/Cloud contract:
 
 - allocate an explicit new data-profile/schema identity;
 - document CSV header and Cloud shape changes;
@@ -195,7 +223,10 @@ If CO2 enters sample/storage/replay/Cloud:
 Do not silently mutate a deployed data-profile identity.
 
 If no durable data changes are authorized, Prompts 07-08 may implement only
-diagnostic/module infrastructure and must not publish CO2 as an existing field.
+Co2Control diagnostic/module infrastructure and must not publish CO2 as an
+existing field. In both cases, the TunnelMonitor schema/profile IDs, CSV,
+replay, Cloud projection, Web surface, and goldens remain byte-for-byte
+unchanged.
 
 ### Dependency
 
@@ -204,6 +235,9 @@ release-ready source, and that the exact remote tag resolves to the specified
 commit. Record whether the remote immutable tag actually exists. Prompt 04
 itself does not commit, tag, or push.
 Do not pin a mutable branch, local path, or unpushed commit in production.
+Authorize this dependency only for Co2Control production and explicit E2
+validation environments. Every non-Co2Control production dependency graph must
+remain EE871-free.
 
 ### Maintenance
 
@@ -235,7 +269,7 @@ implementation unambiguous:
 Add one dated report:
 
 ```text
-docs/reports/ee871_e2_product_decision_YYYYMMDD.md
+docs/reports/co2control_ee871_e2_product_decision_YYYYMMDD.md
 ```
 
 The report must contain:
@@ -243,6 +277,8 @@ The report must contain:
 - the complete approved input block;
 - source/authority for each fact;
 - product and board/profile decision;
+- exact Co2Control production and validation environment lists;
+- negative matrix proving every non-Co2Control product remains E2-disabled;
 - pin-conflict matrix;
 - electrical design assumptions and pending HIL;
 - library tag/commit evidence;
@@ -261,7 +297,7 @@ decision prompt.
 Create only:
 
 ```text
-docs/reports/ee871_e2_product_decision_blocked_YYYYMMDD.md
+docs/reports/co2control_ee871_e2_product_decision_blocked_YYYYMMDD.md
 ```
 
 Do not modify guideline authority as though a decision was made.
@@ -279,13 +315,16 @@ this prompt.
 
 ## Acceptance Criteria
 
-- product/profile is explicit;
+- Co2Control is the sole production product owning E2/EE871;
 - exact E2-enabled build environments are explicit;
+- every non-Co2Control production environment is explicitly E2-disabled;
 - pins are authoritative and conflict-checked;
 - electrical level shifting/pull-ups/cable assumptions are explicit;
 - role, readings, cadence, warm-up, deadlines, schema, and maintenance are
   explicit;
 - exact immutable library release/commit is verified;
 - current guideline contradictions are resolved only with real authority;
+- the TunnelMonitor profile, pins, data schema, runtime composition, health
+  inventory, and operator surface remain outside the approved change;
 - no runtime placeholder or speculative profile change was added;
 - missing authority causes a documented stop, not an invented implementation.

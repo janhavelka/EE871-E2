@@ -1,4 +1,4 @@
-# Prompt 08: Firmware EE871 Product, Data, Health, and Qualification
+# Prompt 08: Co2Control EE871 Product, Data, Health, and Qualification
 
 ## Role and Scope
 
@@ -12,11 +12,14 @@ Work only in `TunnelMonitor-node`.
 
 Prompts 05-07 must be complete and passing. This prompt performs the authorized
 vertical product integration and qualification work. It must use the exact
-product, board, pins, role, sample mode, timing, schema identity, and
+Co2Control board, pins, role, sample mode, timing, schema identity, and
 maintenance authority from Prompt 05.
 
 Do not change those decisions silently. If current code/guidelines conflict
 with the decision report, stop and report the conflict.
+
+This prompt must not add E2/EE871 to the TunnelMonitor product or any other
+production product. Co2Control is the sole production owner.
 
 ## Read First
 
@@ -41,19 +44,15 @@ repository before edits.
 
 ## Product Parameterization
 
-Implement only the `TARGET_PRODUCT` approved by Prompt 05.
-
-For a current `TunnelMonitor` selection, use the following exact additions
-unless Prompt 05 approved different explicit durable identifiers:
-
-```cpp
-inline static constexpr DeviceId kEe871{8};
-```
-
-and one profile row:
+Implement only `TARGET_PRODUCT=Co2Control`. Use the exact
+`CO2CONTROL_EE871_DEVICE_ID` approved by Prompt 05 and add one Co2Control
+profile row:
 
 ```cpp
-{kEe871,
+inline static constexpr DeviceId kEe871{
+    /* CO2CONTROL_EE871_DEVICE_ID */};
+
+{Co2ControlBuildProfile::kEe871,
  DeviceKind::Ee871,
  "co2",
  BusId::E2,
@@ -64,41 +63,39 @@ and one profile row:
  /* exact approved acquire */}
 ```
 
-For `TunnelMonitor`, `included=true`, `acquire=true`, and exactly one durable
-CO2 reading, expected counts are:
+If Co2Control types do not yet exist, create a concrete
+`Co2ControlBuildProfile`, `Co2ControlBoardPins`,
+`Co2ControlRuntimeComposition`, and product-selected sample schema following
+the existing compile-time product interfaces. Do not implement Co2Control as
+`#if E2` branches inside `TunnelMonitorBuildProfile`,
+`TunnelMonitorRuntimeComposition`, or `TunnelMonitorSampleSchema`; that would
+make E2 a variant of the wrong product and is forbidden.
 
-```text
-device specs: 8
-included devices: 8
-acquired devices: 5
-reading catalogs: 5
-reading specs/sample fields: 38
-selected E2 devices: 1
-```
+Derive and compile-time validate all Co2Control device/catalog/reading/health
+counts from the approved composition. Do not reuse the current TunnelMonitor
+counts (`8/5/5/38` or `16/10/8`); they describe another product.
 
-Do not use those counts for a different approved product. Derive and
-compile-time validate that product's exact composition.
+If Co2Control is diagnostics-only (`E2_ACQUIRE=false`), do not add a durable
+sample mapping or Co2Control CSV/Cloud field. Regardless of acquisition mode,
+the existing TunnelMonitor device counts, reading catalogs, sample fields,
+schema/profile identities, CSV, replay, Cloud, Web, and goldens must remain
+unchanged.
 
-If Prompt 05 selected diagnostics-only (`acquire=false`), do not append a
-sample field/catalog mapping or change CSV/Cloud/schema identities. The current
-TunnelMonitor counts remain four catalogs and 37 reading/sample fields, with
-four acquired devices. Derive every count from the approved row instead of
-hard-coding the CO2-bearing case.
+Use the exact `E2_COMPILE_GATE` approved by Prompt 05:
 
-Add a compile-time `TUNNELMONITOR_ENABLE_E2` gate with an exact value for every
-PlatformIO environment. It controls E2 compilation/startup, selected owner
-binding counts, `kE2HealthCompiled`, CLI availability, and native contract
-tests. Do not start or advertise E2 in unrelated products/environments.
-Here `TUNNELMONITOR_` is the repository-wide configuration namespace, not the
-`TunnelMonitor` product selector; product selection remains the existing
-compile-time profile mechanism. If current repository authority uses a
-different product-neutral feature-prefix convention, use that exact convention
-and record it in the Prompt 05 decision instead of adding competing macros.
+- value `1` only in approved Co2Control production environments and explicit
+  native/HIL E2 validation environments;
+- value `0` in every other production environment, including
+  `tunnelmonitor_wifi` and `tunnelmonitor_wifi_hil`;
+- gate EE871 dependency resolution, E2 implementation sources, runtime
+  instantiation/startup, health rows, CLI/Web availability, and binding counts;
+- contract-only enum declarations may remain globally visible, but no
+  non-Co2Control binary may contain or advertise an E2 runtime/device.
 
 ## Board Pins and Electrical Contract
 
-Only now add the exact approved E2 clock/data GPIO constants to the selected
-board profile.
+Only now add the exact approved E2 clock/data GPIO constants to the
+Co2Control board profile.
 
 Requirements:
 
@@ -112,17 +109,21 @@ Requirements:
 - leave both released on startup failure/shutdown;
 - do not repurpose a pin by deleting another owner.
 
+Do not add conditional E2 aliases to the TunnelMonitor pin table. Build-time
+checks must prove TunnelMonitor and every other non-Co2Control board/profile
+have no active E2 pins.
+
 Software checks do not close voltage/rise-time/level-shifter HIL.
 
 ## Runtime Composition
 
-Extend the selected product's permanent runtime composition with exactly:
+Extend only the Co2Control permanent runtime composition with exactly:
 
 - one `Ee871Module`;
 - one immutable `E2DeviceBinding`;
 - selected E2 config from Prompt 05.
 
-The selected composition owns the module, immutable config, and binding array
+The Co2Control composition owns the module, immutable config, and binding array
 and exposes fixed binding/config accessors; it never exposes the module to
 consumers. In the selected
 E2 runtime translation unit, instantiate in lifetime order exactly one static
@@ -140,6 +141,10 @@ Create the selected static-instance facade using:
 include/TunnelMonitor/e2/E2RuntimeFacade.h
 src/e2/E2RuntimeFacade.cpp
 ```
+
+Compile and link this facade only when the approved E2 gate is enabled.
+Non-Co2Control production builds must not receive a dormant global facade or
+stub task; their call sites are excluded at compile time.
 
 Expose the Prompt 07 wrapper through the existing cross-task patterns:
 
@@ -185,11 +190,12 @@ Start order:
 
 An optional absent sensor must not fail system boot or terminate the owner.
 
-Update exact selected binding-coverage validation. Do not add a runtime device
-registry or heap-owned graph.
+Update exact Co2Control binding-coverage validation. Add negative compile-time
+coverage proving all non-Co2Control compositions select zero E2 bindings. Do
+not add a runtime device registry or heap-owned graph.
 
 Add a product/device-family EE871 status publication adapter beside
-`Ee871Status.h` and the selected composition:
+`Ee871Status.h` and the Co2Control composition:
 
 - the E2 worker invokes one fixed, bus-silent publication hook after owner
   work;
@@ -241,6 +247,11 @@ Extend the existing fixed `DeviceSpec::bus` dispatch with `BusId::E2` for:
 - outstanding/settle behavior;
 - due-sample collection;
 - disabled-state behavior.
+
+Compile the E2 dispatch branch only under the approved gate. The common
+measurement code may know the append-only `BusId::E2` value, but
+non-Co2Control builds must have zero selected E2 devices and no references to
+the E2 runtime facade.
 
 Use the exact profile-owned E2 operation deadline derived from released library
 timing bounds plus the approved margin. Do not copy
@@ -296,12 +307,15 @@ SampleFieldId::Co2Ppm = 37
 SampleFieldId::Count = 38
 ```
 
-for the current TunnelMonitor profile.
+at the current global append point, after rechecking the baseline. This
+append-only declaration does not authorize the field in any existing product.
+Map it only in the Co2Control schema; do not add it to the TunnelMonitor
+reading map, valid/required masks, CSV, Cloud projection, or Web model.
 
 Add the EE871 catalog and reading mapping:
 
 ```cpp
-{{BuildProfile::kEe871,
+{{Co2ControlBuildProfile::kEe871,
   toDeviceReadingId(Ee871ReadingId::Co2Ppm)},
  {37,
   "co2.ppm",
@@ -315,25 +329,21 @@ Add the EE871 catalog and reading mapping:
 ```
 
 Use the exact schema/profile IDs approved by Prompt 05. If the approved current
-TunnelMonitor decision adopted the recommended values, add:
+Co2Control decision adopted the recommended values, add:
 
 ```cpp
-inline constexpr const char* kSampleSchemaV1 = "tm.sample.v1";
-inline constexpr const char* kSampleProfileTmBatchCo2V2 =
-    "tm.v2.vw8_shzk16_env_power_co2";
+inline constexpr const char* kSampleSchemaCo2ControlV1 =
+    "co2control.sample.v1";
+inline constexpr const char* kSampleProfileCo2ControlV1 =
+    "co2control.v1.co2";
 ```
 
-There is one current TunnelMonitor `BuildProfileId`; do not invent a second
-runtime/build-profile selector solely for CO2. For the selected TunnelMonitor
-integration, select the approved new schema/profile IDs while retaining old
-constants unchanged for recognition, rejection, or migration policy.
+Create/use the concrete Co2Control build-profile and sample-schema types
+approved by Prompt 05. Do not add an EE871 member to
+`TunnelMonitorBuildProfile` or `TunnelMonitorSampleSchema`.
 
-Use `BuildProfile::kEe871` only inside
-`TunnelMonitorSampleSchema<BuildProfile>`. Elsewhere refer to
-`SelectedBuildProfile::kEe871` or
-`TunnelMonitorBuildProfile::kEe871`, matching existing code.
-
-Do not mutate the meaning of:
+Do not mutate the meaning or output bytes of existing TunnelMonitor identities,
+including:
 
 ```text
 tm.sample.v0
@@ -343,14 +353,15 @@ tm.v1.vw8_shzk16_env_power
 Update:
 
 - sample field count/masks/capacity assertions;
-- selected reading/catalog/spec validation;
-- profile sample builder tests;
-- CSV header/order/value formatting;
-- storage/replay codec and version/header mismatch behavior;
-- Cloud object shape;
-- Web/profile instrumentation;
-- manual synthetic sample fixtures;
-- byte-golden files.
+- Co2Control reading/catalog/spec validation;
+- Co2Control profile sample builder tests;
+- Co2Control CSV header/order/value formatting;
+- Co2Control storage/replay codec and version/header mismatch behavior;
+- Co2Control Cloud object shape;
+- Co2Control Web/profile instrumentation, only if that surface is authorized;
+- Co2Control manual synthetic sample fixtures;
+- new Co2Control byte-golden files;
+- negative TunnelMonitor goldens proving no byte or schema change.
 
 The new CSV field is `co2_ppm`. The new Cloud projection is:
 
@@ -358,29 +369,17 @@ The new CSV field is `co2_ppm`. The new Cloud projection is:
 {"co2":{"ppm":1234}}
 ```
 
-within the existing selected envelope conventions. Preserve null/empty behavior
+within the approved Co2Control envelope conventions. Preserve null/empty behavior
 for disabled, stale, error, and absent values according to current sink rules.
 
 Do not hand-code a second CSV/Cloud formatter.
 
 ## Health and Status
 
-For the current TunnelMonitor selection with E2 compiled/running and one
-included EE871 device, increase exact production counts only after the rows
-are truly emitted:
-
-```text
-production service-health entries: 16
-production system-resource-health entries: 10
-production device-health entries: 8
-```
-
-Existing max capacities already appear sufficient; prove with static asserts
-instead of increasing them.
-
-For an E2-disabled environment/product, retain its existing counts. Derive
-counts from the compile gate and selected device rows; do not apply `16/10/8`
-globally.
+Derive Co2Control service/resource/device health counts from its actual emitted
+rows and prove capacity with static assertions. Do not reuse or change the
+TunnelMonitor `16/10/8` expectations. Every E2-disabled/non-Co2Control product
+retains its existing counts and emits no E2 health row.
 
 Publish:
 
@@ -412,11 +411,12 @@ Keep domains separate:
 
 Apply Prompt 05's optional/required role exactly. Runtime disabled remains
 visible, line-silent, and excluded from aggregate required health only when E2
-is compiled and the selected device uses `RuntimeToggle`. When E2 is
+is compiled and the Co2Control EE871 device uses `RuntimeToggle`. When E2 is
 compile-disabled, emit no E2 service/resource/device row and retain the
 environment's prior counts.
 
-Update all exhaustive service/resource/device string and Web/CLI mappings.
+Update shared exhaustive enum-name mappings as required, but add E2
+service/resource/device rows and Web/CLI capability only to Co2Control.
 
 ## Operator Interface
 
@@ -427,6 +427,10 @@ e2 status
 e2 probe co2
 e2 recover co2
 ```
+
+Register and compile these commands only in Co2Control. The TunnelMonitor and
+all other production command registries/help/availability tables must contain
+no `e2` topic or command.
 
 On the frozen baseline where `CliCommandId::VerboseStorage=97`, append:
 
@@ -478,7 +482,7 @@ retry a maintenance mutation.
 
 If `DeviceEnableMode::RuntimeToggle` was approved:
 
-- add one typed selected-profile enable binding;
+- add one typed Co2Control-profile enable binding;
 - preserve persistence format/version rules;
 - update default/copy/validation/redaction/status tests;
 - disabling cancels/settles work and releases lines;
@@ -486,12 +490,15 @@ If `DeviceEnableMode::RuntimeToggle` was approved:
 
 If `Always` was approved, do not add a redundant setting.
 
+Do not add an EE871/E2 setting key, persisted field, default, or UI control to
+TunnelMonitor or another product.
+
 Cadence and maintenance configuration must not be smuggled into unrelated
 settings fields.
 
 ## Restart and Shutdown
 
-Extend the existing App/restart coordinator sequence:
+Extend only the Co2Control App/restart coordinator sequence:
 
 1. quiesce Measurement and CLI recovery producers;
 2. call `e2RuntimeEnd()`, which closes ingress and asks the still-live worker
@@ -507,7 +514,7 @@ reservation orphaned.
 
 Add cross-layer tests for:
 
-1. exact product device row/ID/kind/key/bus/role/enable/acquire;
+1. exact Co2Control device row/ID/kind/key/bus/role/enable/acquire;
 2. binding coverage and counts;
 3. exact pins and uniqueness checks;
 4. owner/module/backend startup order;
@@ -525,22 +532,27 @@ Add cross-layer tests for:
 16. queued/active cancellation;
 17. sample builder maps only valid `Co2Ppm`;
 18. `SampleFieldId`, catalog, mapping, and counts;
-19. exact new schema/profile strings;
-20. CSV header/order/empty/error/value goldens;
-21. replay encoding/header mismatch/version behavior;
-22. Cloud `co2.ppm` value/null goldens;
-23. Web/profile/status capability and device row;
+19. exact new Co2Control schema/profile strings;
+20. Co2Control CSV header/order/empty/error/value goldens;
+21. Co2Control replay encoding/header mismatch/version behavior;
+22. Co2Control Cloud `co2.ppm` value/null goldens;
+23. Co2Control Web/profile/status capability and device row when authorized;
 24. service/resource/device health counts and aggregation;
 25. read-only CLI routing/results/help;
 26. no arbitrary write command exists;
-27. current non-CO2 products/profiles and existing goldens remain unchanged;
-28. compile-time E2 gate, selected owner binding counts, and CLI availability
-    are exact in every environment;
+27. TunnelMonitor and every other non-Co2Control product retain exact prior
+    device/pin/health/schema/CSV/replay/Cloud/Web goldens;
+28. compile-time E2 gate, dependency graph, source inclusion, selected owner
+    binding counts, and CLI availability are exact in every environment:
+    enabled only for Co2Control production and explicit validation;
 29. restart/shutdown quiesces producers, settles results, and releases both
     lines;
 30. typed EE871 status is worker-published/cache-only and no UI calls the
     module;
-31. complete four-environment/profile/Web/build matrix required by guidelines.
+31. binary/map/source checks find no E2 worker, EE871 dependency, E2 pins,
+    `co2_ppm`, or `e2` operator surface in non-Co2Control production builds;
+32. complete Prompt 05 production/validation environment matrix and all
+    repository-required profile/Web/build checks.
 
 Perform a fresh post-change audit for duplicated owner/module/schema/status
 paths. Delete superseded targeted code rather than leaving forwarding shims.
@@ -549,6 +561,9 @@ paths. Delete superseded targeted code rather than leaving forwarding shims.
 
 Create/update the authorized HIL plan and runner. Run only when the exact board
 and fixture are available.
+
+This is a Co2Control HIL plan. Do not expose its commands, pins, or fault hooks
+in TunnelMonitor firmware.
 
 Required evidence:
 
@@ -577,9 +592,10 @@ not run, leave every physical gate explicitly pending.
 
 ## Documentation and Handoff
 
-Update all active guideline, dependency, board, measurement, health, operator,
-schema, Cloud/storage, and validation documents affected by the selected
-product.
+Update all active Co2Control guideline, dependency, board, measurement, health,
+operator, schema, Cloud/storage, and validation documents. Update shared
+authority only where append-only contracts require it. Do not rewrite
+TunnelMonitor product documentation as if it owned E2.
 
 Create:
 
@@ -612,15 +628,22 @@ python -m platformio run -e tunnelmonitor_wifi_hil
 git diff --check
 ```
 
-Use the selected product's actual environment names if Prompt 05 selected a
-different product. Never claim an unrun command/HIL pass.
+Additionally run every exact Co2Control production and validation environment
+listed by Prompt 05. The two TunnelMonitor builds above are mandatory negative
+isolation checks: they must resolve no EE871 dependency and expose no E2
+runtime/pins/health/CLI/data surface. Repeat the same dependency, source/filter,
+link-map or symbol, profile, and operator-surface checks for every entry in
+`NON_CO2CONTROL_PRODUCTION_ENVIRONMENTS`; a successful build alone is not proof
+that dormant E2 code was excluded. Never claim an unrun command/HIL pass.
 
 ## Production Acceptance Gate
 
 Production consideration requires all of:
 
 - Prompts 01-04 P0 library gates closed and exact immutable release pinned;
-- product/pins/electrical/schema authority explicit;
+- Co2Control product/pins/electrical/schema authority explicit;
+- E2/EE871 dependency, pins, runtime, device, health, data, and operator
+  surfaces absent from every non-Co2Control production product;
 - sole E2 owner and no direct hardware access elsewhere;
 - checked sample only in durable data;
 - warm-up/status-trigger/recovery/stale policy tested;

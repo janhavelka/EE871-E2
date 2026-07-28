@@ -19,7 +19,7 @@ release guidance.
 | [IDF_PORT_IMPLEMENTATION.md](IDF_PORT_IMPLEMENTATION.md) | Short implementation note for files added by the IDF port. | Current implementation summary. |
 | [EE871_E2_Protocol_and_Register_Map.md](EE871_E2_Protocol_and_Register_Map.md) | Curated E2 protocol and EE871 register reference. | Current implementation reference; verify exact vendor tables against PDFs when needed. |
 | [EE871_TUNNELMONITOR_NODE_SUITABILITY_AUDIT_2026-07-28.md](EE871_TUNNELMONITOR_NODE_SUITABILITY_AUDIT_2026-07-28.md) | Cross-repository audit of EE871-E2 v1.0.0 suitability for a dedicated TunnelMonitor E2 worker. | Current audit; identifies library blockers separately from required TunnelMonitor integration work. |
-| [prompts/README.md](prompts/README.md) | Ordered AI-coder prompt series that closes the general EE871 gaps first, then adds a separate E2 owner/module/product integration in consuming firmware. | Current implementation sequence; supersedes the older single TunnelMonitor-fit prompt. |
+| [prompts/README.md](prompts/README.md) | Ordered AI-coder prompt series that closes the general EE871 gaps first, then adds an E2 owner/module exclusively to the Co2Control product in consuming firmware. | Current implementation sequence; supersedes the older single TunnelMonitor-fit prompt and explicitly keeps all non-Co2Control production products E2-disabled. |
 
 ## Historical Docs
 

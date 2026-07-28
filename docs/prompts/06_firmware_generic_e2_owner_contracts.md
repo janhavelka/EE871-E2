@@ -18,6 +18,18 @@ Do not include `EE871/` headers, add `DeviceKind::Ee871`, exact-pin a sensor
 library, select a product row, change the sample schema, or edit board pins.
 Prompt 07 owns the concrete device/backend and Prompt 08 owns product data.
 
+Prompt 05 has fixed Co2Control as the sole production E2 product. This prompt
+may add shared chip-neutral contract declarations, but:
+
+- E2 owner implementation/runtime sources are compiled only in approved
+  Co2Control production environments and explicit native/HIL validation
+  environments;
+- no production runtime is instantiated or started yet;
+- every non-Co2Control production environment must continue to build without
+  an E2 owner object, task, health row, CLI surface, or EE871 dependency;
+- do not edit the TunnelMonitor product profile/composition, pins, schema, or
+  Web surface.
+
 ## Read First
 
 Read:
@@ -522,12 +534,19 @@ Use a fake backend and two fake bound modules. Prove:
 27. failed line setters and failed reads preserve their backend
     `ErrorDetail`; a failed read is not mistaken for a valid low;
 28. no EE871/third-party include or protocol constant exists in generic owner
-    files.
+    files;
+29. approved native validation compiles and exercises the owner, while every
+    existing non-Co2Control production environment has the Prompt 05 E2 gate
+    disabled and contains no E2 owner/runtime/health/operator symbol.
 
 ## Guidelines and Report
 
 Update applicable architecture documents to describe the now-real generic E2
-owner while keeping product selection deferred to Prompt 08.
+owner while keeping its sole production activation deferred to the Co2Control
+integration in Prompt 08. Add the Prompt 05 compile gate with value `0` to
+every existing non-Co2Control production environment and value `1` only to the
+explicit native validation environment. Do not add a Co2Control production
+environment speculatively in this prompt.
 
 Create:
 
@@ -561,5 +580,6 @@ Do not claim hardware HIL.
 - deadlines and terminal-result lifetime are exact;
 - recovery is explicit and retry/backoff remains product-owned;
 - no device protocol or product schema entered the owner;
+- no non-Co2Control product enables or instantiates the owner;
 - no generic registry/framework was added;
 - existing I2C/RS485 behavior and full software matrix remain unchanged.

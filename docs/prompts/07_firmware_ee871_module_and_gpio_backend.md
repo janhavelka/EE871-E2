@@ -23,6 +23,11 @@ an ESP32 open-drain backend, and the E2 worker runtime wrapper. Do not yet add a
 selected product row, board pins, durable sample field, CSV/Cloud/Web mapping,
 or health inventory row. Prompt 08 owns the vertical product cutover.
 
+Co2Control is the sole production target. The module/backend/runtime may be
+compiled by explicit native/HIL validation environments, but they must remain
+compile-disabled and absent from every non-Co2Control production firmware,
+including the existing TunnelMonitor environments.
+
 If Prompt 05 selected `BOTH_DISTINCT_FIELDS`, stop: the current library release
 lacks the required coherent paired checked-sample procedure.
 
@@ -49,9 +54,17 @@ both buses have clock/data wires.
 
 ## Dependency
 
-Add the exact immutable release verified by Prompt 05 to every environment
-that compiles the module, including native tests. Verify the remote tag/version
-resolves to the recorded commit.
+Add the exact immutable release verified by Prompt 05 to the explicit
+native/HIL validation environments that compile the module. If the approved
+Co2Control production environment already exists, add it there too. Otherwise
+create only a named Co2Control-specific dependency block that no existing
+production environment inherits; Prompt 08 attaches it when creating the
+authorized Co2Control environment.
+
+Do not add the dependency to TunnelMonitor or any other production
+environment. Use source filters/conditional dependencies consistent with
+repository policy, and verify the remote tag/version resolves to the recorded
+commit.
 
 Do not use:
 
@@ -240,7 +253,8 @@ parallel adapter.
 
 `sampleStaleMs==0` is a fail-closed policy: a retained reading is never served
 as a valid `ReadLast` value. A nonzero value uses wrap-safe 64-bit age checks.
-Prompt 08 supplies the selected product value; the module does not invent it.
+Prompt 08 supplies the approved Co2Control value; the module does not invent
+it.
 
 The two required-budget callbacks are cache-only and conservative across
 lifecycle state:
@@ -444,7 +458,7 @@ Bus-resource health counts timeout/stuck/PEC/backend/protocol transport errors.
 An accepted `ALLOW_ABSENT` `NACK`/`DEVICE_NOT_FOUND` is device absence, not a
 bus-resource fault. Sensor/range/warm-up results affect the device/sample
 result only. Prompt 08 freezes the required/optional resource projection for
-the selected profile.
+the Co2Control profile.
 
 ## ESP32 Backend
 
@@ -480,13 +494,14 @@ Exact electrical behavior:
   tests and the selected owner deadline accounting for it;
 - backend configures no hardware I2C peripheral.
 
-Prompt 08 supplies actual `BoardPins` values.
+Prompt 08 supplies actual Co2Control board-pin values.
 
 ## Runtime Worker Wrapper
 
 Add a reusable `E2Runtime` wrapper type analogous to the permanent I2C runtime,
 but do not instantiate or start a production static object in this prompt.
-Prompt 08 owns the one selected product instance after pins/bindings exist.
+Prompt 08 owns the one Co2Control production instance after pins/bindings
+exist.
 
 Create:
 
@@ -678,12 +693,14 @@ Prove:
 32. runtime shutdown settles work, has the live worker call owner end, then
     releases both lines before worker join;
 33. no static production runtime instance and no product
-    row/schema/BoardPins change entered this prompt.
+    row/schema/BoardPins change entered this prompt;
+34. every non-Co2Control production environment builds with the E2 gate off,
+    no EE871 dependency, and no module/backend/runtime symbol.
 
 ## Documentation, Validation, and Handoff
 
 Update relevant dependency, ownership, E2, and module guidelines, without
-claiming the module is in a selected product.
+claiming the module is active in Co2Control before Prompt 08.
 
 Create:
 
@@ -714,8 +731,10 @@ Report physical HIL as not run unless it actually ran with retained evidence.
 - recovery is explicit;
 - reusable runtime wrapper is implemented without a second owner path or early
   product instance;
+- EE871 dependency and implementation remain absent from all
+  non-Co2Control production firmware;
 - only checked sample validity enters normalized results;
 - warm-up is firmware policy and prevents false-valid data;
 - GPIO backend implements real open-drain release/low behavior;
-- no selected product/schema/pin mutation occurred early;
+- no Co2Control product/schema/pin mutation occurred early;
 - full existing software behavior remains passing.
