@@ -15,19 +15,22 @@ examples, and HIL validation evidence.
 - **Optional-device lifecycle** - narrow absent-at-start policy with explicit recovery
 - **Checked CO2 samples** - ordered MV3/MV4, status, error, and range evidence
 - **Feature guards** - optional EE871 registers are checked from cached capability flags
-- **Dirty/resync diagnostics** - persistent multi-byte write failures are visible
+- **Mutation truth** - accepted, ambiguous, verified, and resynchronized
+  persistent/maintenance effects remain observable
 - **HIL evidence tooling** - serial runner emits transcript, JSON, and Markdown reports
 
 ## Release And Validation Status
 
-Version metadata is set to `1.0.0` for this release candidate. The driver is
-production-oriented and validation-backed for the tested ESP32-S3/EE871 bench
-setup, but it is not a fully field-proven driver across every physical fault
-case.
+Version metadata is set to `1.1.0` for this source candidate. The version in
+`library.json` is authoritative and the repository version tool synchronizes
+the generated header, ESP-IDF component metadata, and Doxygen project number.
+The driver is production-oriented and validation-backed for the tested
+ESP32-S3/EE871 bench setup, but it is not fully field-proven across every
+physical fault case.
 
 Recorded evidence:
 
-- Native tests: 75 passing in the current checked-sample audit run.
+- Native tests: 91/91 passing on the Prompt 04 final candidate.
 - Arduino PlatformIO builds: `ex_bringup_s3` and `ex_bringup_s2` pass locally
   in the latest hardening/readiness runs.
 - ESP32-S3 safe default HIL: PASS on `COM17`.
@@ -50,7 +53,9 @@ Remaining documented gaps:
 EE871-E2 uses GPIO-style open-drain E2 signaling. The library does not use
 Arduino `Wire`, ESP-IDF `driver/i2c_master`, or a hardware I2C peripheral.
 Applications provide `setScl`, `setSda`, `readScl`, `readSda`, and `delayUs`
-callbacks through `Config`.
+callbacks through `Config`. Optional task-context `delayMs` and `yield`
+callbacks make long bounded completion waits cooperative; the core still owns
+no task, scheduler, timebase, or GPIO.
 
 `Config::deviceAddress` is the 0-7 E2 protocol address encoded into the E2
 control byte. It is not an ESP-IDF or Arduino I2C device address.
@@ -204,10 +209,16 @@ Serial.printf("Failures: %u consecutive, %lu total\n",
               static_cast<unsigned long>(sensor.totalFailures()));
 ```
 
-Validation and precondition errors return before E2 traffic and do not update health counters. `probe()` uses raw E2 reads and is diagnostic-only; normal reads/writes use tracked wrappers. `IN_PROGRESS` is treated as neutral for health if future scheduled operations use it.
+Validation and precondition errors return before E2 traffic and do not update
+health counters. `probe()` uses raw E2 reads and is diagnostic-only; normal
+reads/writes use tracked wrappers. Health counters count those tracked E2
+transfers, not public calls or samples: one checked sample normally contributes
+three successes and can contribute five when detailed error acquisition runs.
+`IN_PROGRESS` is health-neutral.
 `Config::offlineThreshold = 0` is normalized to one failed operation. Failed
-`begin()` and `end()` paths clear stale runtime/cached feature state so later
-diagnostics do not report old sensor capabilities.
+`begin()` and `end()` paths clear stale session/capability state so later
+diagnostics do not report old sensor capabilities, but they preserve an
+unresolved mutation diagnostic until explicit target-specific reconciliation.
 
 Cache-only diagnostics are available through `SettingsSnapshot`,
 `getSettings(SettingsSnapshot&)`, `getSettings()`, `isInitialized()`,
@@ -249,10 +260,13 @@ retry cadence, backoff, power policy, and aggregate health decisions.
 
 The driver is managed synchronous: E2 transactions block for bounded protocol
 time, and `tick(nowMs)` only records the latest application timestamp for
-diagnostics. Ordinary bit and byte stretches retain the E2 limits of 25 ms and
-35 ms. Only the final PEC ACK and STOP of `0x10`/`0x50` writes can consume the
-separate write-completion window. The first interval byte is staged with
-ordinary timing; its high-byte commit uses the separate interval-pair window.
+diagnostics. It does no scheduling or timebase extension. An owner that wants
+current health timestamps should call `tick()` immediately before each owned
+library operation. Ordinary bit and byte stretches retain the E2 limits of
+25 ms and 35 ms. Only the final PEC ACK and STOP of `0x10`/`0x50` writes can
+consume the separate write-completion window. The first interval byte is
+staged with ordinary timing; its high-byte commit uses the separate
+interval-pair window.
 
 `writeDelayMs` values below 150 ms normalize to 150 ms, and
 `intervalWriteDelayMs` values below 300 ms normalize to 300 ms. Those values
@@ -277,24 +291,68 @@ validates a proposed `Config`; the instance overload uses the normalized active
 configuration. Bounds assume callbacks honor requested delays and remain
 bounded. See
 [EE871_E2_OPERATION_TIMING_BOUNDS.md](docs/EE871_E2_OPERATION_TIMING_BOUNDS.md)
-for formulas and count rules.
+for formulas, count rules, and the exhaustive public-method map. The
+`tools/check_public_timing_contract.py` source audit rejects a new public
+callable without an explicit BUS or `NO_E2_IO` Doxygen classification.
 
 The library never owns GPIO pins or an I2C/Wire instance. Applications provide
 the open-drain line and delay callbacks.
 
-## Persistent Configuration Writes
+## Persistent And Maintenance Mutations
 
-Multi-byte persistent writes are not bus-atomic on EE871-E2. A low byte can
-commit before a high byte fails, or a write can be accepted before a later
-readback verify fails. If this happens, persistent sensor configuration may be
-partially changed and should be treated as dirty until it is explicitly
-resynced or inspected.
+Every effectful custom-memory API uses one mutation admission, frame-completion,
+and effect-classification path. `MutationDiagnostic` records the
+`MutationTarget`, best known `MutationEffect`, address range, requested,
+acknowledged, observed, and matched element counts, retained value evidence,
+and the first uncertainty cause. Effects distinguish definite no-effect,
+acknowledged, indeterminate, verified, later resynchronized, and the narrow
+auto-adjust operator acknowledgement.
 
-Use `persistentConfigDirty()` and `persistentConfigDirtyError()` to detect the
-condition and retrieve the original failing `Status`. `SettingsSnapshot`
-includes the same diagnostics. `resyncPersistentConfig()` re-reads the
-persistent fields and clears the dirty state only after the values are readable
-and coherent; unrelated successful reads do not clear it.
+Multi-byte persistent writes are not bus-atomic. A low byte can commit before a
+high byte fails, or an accepted write can fail during STOP, completion, or
+readback. When `mutationDiagnostic().unresolved` is true, every further
+effectful API returns `PERSISTENT_STATE_UNCERTAIN` before E2 I/O. Normal reads,
+diagnostics, probe, recovery, bus inspection/reset, and explicit resync remain
+available. The driver never automatically replays a retained request.
+
+`resyncPersistentConfig()` reads the exact unresolved target and compares it
+with the retained fixed-size intent. A complete match becomes `VERIFIED`; a
+coherent mismatch becomes `RESYNCHRONIZED`, leaving actual state inspectable.
+In either case the application must compare device state with its own intended
+baseline. When no mutation is unresolved, resync performs the complete
+capability-aware coherence read and skips unsupported optional settings.
+
+The source-compatible `persistentConfigDirty()` and
+`persistentConfigDirtyError()` accessors mirror the mutation diagnostic. The
+legacy error is OK whenever uncertainty is resolved, even if historical
+observation evidence remains.
+
+Bus-address change and auto-adjust have deliberately stricter procedures:
+
+- An acknowledged bus-address write remains unresolved because activation
+  timing is not safely inferable in-session. The application calls `end()`,
+  performs its authorized device power procedure if required, supplies the
+  candidate address in a new `Config`, calls `begin()`, then calls
+  `resyncPersistentConfig()`. The driver never scans or guesses an address.
+- `startAutoAdjust()` first observes `0xD9`, rejects an already-running action
+  as `BUSY`, performs one non-replayable write, and observes status again.
+  Running proves this request started. A clean not-running observation after an
+  acknowledged request is historically ambiguous and remains unresolved until
+  later proof or the cache-only, target-specific
+  `acknowledgeAutoAdjustUncertainty()` decision.
+
+Typed optional-setting reads and writes fail bus-silently when the validated
+cached capabilities do not advertise their register. This includes part name,
+address, interval, filter, operating mode, auto-adjust, and calibration
+offset/gain. Raw `customRead()` remains the explicit untyped diagnostic path;
+raw `customWrite()` cannot bypass typed address, interval, calibration,
+auto-adjust, or read-only-register safety rules.
+
+Unresolved evidence survives `end()`, failed/repeated `begin()`, and a later
+successful `begin()` on the same object. Destroying the object or losing
+application RAM necessarily loses that evidence. Applications that must survive
+restart must persist their maintenance workflow outside this library; the core
+does not own NVS or a filesystem.
 
 The bring-up CLIs expose this through safe diagnostic commands:
 
@@ -303,13 +361,12 @@ dirty
 resync
 ```
 
-`dirty` prints `persistentConfigDirty`, the original dirty error status
-code/detail/message, and whether resync is needed. `resync` prints dirty state
-before and after calling `resyncPersistentConfig()`; it does not perform
-arbitrary writes and does not clear dirty state unless the core API reports
-successful verified resync. Normal safe commands such as `probe`, `status`,
-`read`, `selftest`, `stress`, and `stress_mix` should not create persistent
-dirty state.
+`dirty` prints the legacy mirror plus complete mutation
+target/effect/progress evidence. `resync` prints state before and after
+target-specific reconciliation; it does not perform arbitrary writes or
+silently discard uncertainty. Normal safe commands such as `probe`, raw and
+checked samples, `selftest`, `stress`, and `stress_mix` do not create
+persistent state.
 
 Treat persistent writes such as measurement interval, part name, CO2 offset,
 and CO2 gain as maintenance operations. The CLI `reg write <addr> <value>`
@@ -333,7 +390,8 @@ on the same `EE871` instance recursively.
 
 - Lifecycle: `begin`, `tick`, `end`
 - Diagnostics: `probe`, `recover`, `resyncPersistentConfig`, `busReset`,
-  `checkBusIdle`, `persistentConfigDirty`, `persistentConfigDirtyError`
+  `checkBusIdle`, `mutationDiagnostic`, `persistentConfigDirty`,
+  `persistentConfigDirtyError`, `acknowledgeAutoAdjustUncertainty`
 - Admission: static and instance `operationTimingBound`
 - Identification: `readGroup`, `readSubgroup`, `readFirmwareVersion`, `readE2SpecVersion`
 - Measurements: raw `readCo2Fast`/`readCo2Average`, checked
@@ -349,8 +407,9 @@ on the same `EE871` instance recursively.
 ## Examples
 
 - `examples/01_basic_bringup_cli/` - Interactive CLI for testing
-  - Status/error output decodes CO2 error-code names when the feature is
-    available.
+  - `co2fast`/`co2avg` remain raw; `samplefast`/`sampleavg` expose checked
+    value/status/error evidence. Status and checked commands may trigger the
+    next device measurement under documented conditions.
 - `examples/idf/basic_bringup/` - ESP-IDF GPIO E2 diagnostic/basic bring-up CLI using
   `examples/idf/common/E2GpioTransport.h`, with the same user-visible command
   surface and diagnostics as the Arduino CLI. This example owns GPIO setup for
@@ -366,6 +425,7 @@ pio test -e native
 pio run -e ex_bringup_s3
 pio run -e ex_bringup_s2
 python tools/check_core_timing_guard.py
+python tools/check_public_timing_contract.py
 python tools/check_cli_contract.py
 python tools/check_idf_example_contract.py
 ```
@@ -406,7 +466,8 @@ Dry-runs and operator/fault steps are never reported as hardware `PASS`.
 - `docs/EE871_E2_OPERATION_TIMING_BOUNDS.md` - conservative blocking-bound formulas
 - `docs/IDF_PORT.md` - ESP-IDF portability and validation guidance
 - `docs/IDF_PORT_IMPLEMENTATION.md` - ESP-IDF implementation notes
-- `docs/EE871_E2_RELEASE_NOTES_1.0.0.md` - release notes and tagging checklist
+- `docs/EE871_E2_RELEASE_NOTES_1.1.0.md` - current release notes and tagging checklist
+- `docs/EE871_E2_RELEASE_NOTES_1.0.0.md` - historical 1.0.0 release notes
 
 ## License
 

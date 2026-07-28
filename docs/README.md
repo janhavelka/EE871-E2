@@ -15,7 +15,7 @@ release guidance.
 | [EE871_E2_HARDWARE_VALIDATION_MATRIX.md](EE871_E2_HARDWARE_VALIDATION_MATRIX.md) | Hardware validation plan plus recorded bench evidence. | Current evidence ledger. |
 | [EE871_E2_HIL_RUNNER.md](EE871_E2_HIL_RUNNER.md) | Operator guide for `tools/ee871_hil_runner.py`. | Current HIL runner usage. |
 | [EE871_E2_OPERATION_TIMING_BOUNDS.md](EE871_E2_OPERATION_TIMING_BOUNDS.md) | Formula reference for conservative, bus-silent operation admission bounds. | Current public timing-query contract. |
-| [EE871_E2_RELEASE_NOTES_1.0.0.md](EE871_E2_RELEASE_NOTES_1.0.0.md) | Release summary, validation evidence, limitations, and tagging checklist for `1.0.0`. | Current release notes. |
+| [EE871_E2_RELEASE_NOTES_1.1.0.md](EE871_E2_RELEASE_NOTES_1.1.0.md) | Release summary, compatibility, validation boundary, limitations, and tagging checklist for `1.1.0`. | Current source-candidate notes; tag/release pending separate authorization. |
 | [IDF_PORT.md](IDF_PORT.md) | ESP-IDF port architecture, constraints, and validation checklist. | Current guidance; pure IDF build success remains unproven until CI or local `idf.py` proves it. |
 | [IDF_PORT_IMPLEMENTATION.md](IDF_PORT_IMPLEMENTATION.md) | Short implementation note for files added by the IDF port. | Current implementation summary. |
 | [EE871_E2_Protocol_and_Register_Map.md](EE871_E2_Protocol_and_Register_Map.md) | Curated E2 protocol and EE871 register reference. | Current implementation reference; verify exact vendor tables against PDFs when needed. |
@@ -25,6 +25,7 @@ release guidance.
 
 | Document | How to read it |
 | --- | --- |
+| [EE871_E2_RELEASE_NOTES_1.0.0.md](EE871_E2_RELEASE_NOTES_1.0.0.md) | Historical 1.0.0 release notes. Preserve its validation statements and artifact versions as recorded. |
 | [EE871_TUNNELMONITOR_NODE_SUITABILITY_AUDIT_2026-07-28.md](EE871_TUNNELMONITOR_NODE_SUITABILITY_AUDIT_2026-07-28.md) | Pre-decision audit input. Its TunnelMonitor-generic integration language is superseded by the Co2Control-only product decision in the prompt series. |
 | [EE871_IDF_MERGED_INDUSTRY_READINESS_AUDIT.md](EE871_IDF_MERGED_INDUSTRY_READINESS_AUDIT.md) | Historical audit from 2026-05-29. Several findings have since been addressed on `hardening/ee871-e2-industry-readiness`; use the hardening report and hardware matrix for current status. |
 
@@ -59,3 +60,5 @@ PDF if there is any ambiguity.
 - Pure ESP-IDF build success: CI job is configured, but no local or GitHub
   Actions pass evidence is recorded in this workspace.
 - Stuck-line fault-jig validation: not recorded.
+- Prompt 04 physical checked-sample, mutation/resync, bus-address, and
+  auto-adjust scenarios: not run; see the current hardware matrix.

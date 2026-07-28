@@ -351,7 +351,57 @@ const char* errToStr(EE871::Err err) {
     case Err::NOT_SUPPORTED: return "NOT_SUPPORTED";
     case Err::VERIFY_MISMATCH: return "VERIFY_MISMATCH";
     case Err::OFFLINE: return "OFFLINE";
+    case Err::CO2_SENSOR_ERROR: return "CO2_SENSOR_ERROR";
+    case Err::PERSISTENT_STATE_UNCERTAIN:
+      return "PERSISTENT_STATE_UNCERTAIN";
     default: return "UNKNOWN";
+  }
+}
+
+const char* co2SensorErrorToStr(EE871::Co2SensorError error) {
+  using EE871::Co2SensorError;
+  switch (error) {
+    case Co2SensorError::NONE: return "NONE";
+    case Co2SensorError::SUPPLY_VOLTAGE_LOW: return "SUPPLY_VOLTAGE_LOW";
+    case Co2SensorError::SENSOR_COUNTS_LOW: return "SENSOR_COUNTS_LOW";
+    case Co2SensorError::SENSOR_COUNTS_HIGH: return "SENSOR_COUNTS_HIGH";
+    case Co2SensorError::SUPPLY_VOLTAGE_BREAKDOWN_AT_PEAK:
+      return "SUPPLY_VOLTAGE_BREAKDOWN_AT_PEAK";
+    case Co2SensorError::UNKNOWN: return "UNKNOWN";
+    default: return "INVALID";
+  }
+}
+
+const char* mutationTargetToStr(EE871::MutationTarget target) {
+  using EE871::MutationTarget;
+  switch (target) {
+    case MutationTarget::NONE: return "NONE";
+    case MutationTarget::RAW_CUSTOM_BYTE: return "RAW_CUSTOM_BYTE";
+    case MutationTarget::PART_NAME: return "PART_NAME";
+    case MutationTarget::BUS_ADDRESS: return "BUS_ADDRESS";
+    case MutationTarget::GLOBAL_INTERVAL: return "GLOBAL_INTERVAL";
+    case MutationTarget::CO2_INTERVAL_FACTOR: return "CO2_INTERVAL_FACTOR";
+    case MutationTarget::CO2_FILTER: return "CO2_FILTER";
+    case MutationTarget::OPERATING_MODE: return "OPERATING_MODE";
+    case MutationTarget::AUTO_ADJUST: return "AUTO_ADJUST";
+    case MutationTarget::CO2_OFFSET: return "CO2_OFFSET";
+    case MutationTarget::CO2_GAIN: return "CO2_GAIN";
+    default: return "INVALID";
+  }
+}
+
+const char* mutationEffectToStr(EE871::MutationEffect effect) {
+  using EE871::MutationEffect;
+  switch (effect) {
+    case MutationEffect::NONE: return "NONE";
+    case MutationEffect::NO_EFFECT: return "NO_EFFECT";
+    case MutationEffect::ACKNOWLEDGED: return "ACKNOWLEDGED";
+    case MutationEffect::INDETERMINATE: return "INDETERMINATE";
+    case MutationEffect::VERIFIED: return "VERIFIED";
+    case MutationEffect::RESYNCHRONIZED: return "RESYNCHRONIZED";
+    case MutationEffect::OPERATOR_ACKNOWLEDGED:
+      return "OPERATOR_ACKNOWLEDGED";
+    default: return "INVALID";
   }
 }
 
@@ -438,9 +488,70 @@ void printStatus(const EE871::Status& st) {
   }
 }
 
+void printCheckedSample(
+    const EE871::Status& resultStatus,
+    const EE871::Co2ReadResult& result) {
+  printStatus(resultStatus);
+  std::printf("  Sample kind: %s\n",
+              result.kind == EE871::Co2ValueKind::FAST ? "FAST (MV3)"
+                                                      : "AVERAGE (MV4)");
+  std::printf("  Value step: attempted=%s status=%s detail=%ld\n",
+              result.valueReadAttempted ? "yes" : "no",
+              errToStr(result.valueReadStatus.code),
+              static_cast<long>(result.valueReadStatus.detail));
+  std::printf(
+      "  Value step message: %s\n",
+      (result.valueReadStatus.msg != nullptr &&
+       result.valueReadStatus.msg[0] != '\0')
+          ? result.valueReadStatus.msg
+          : "<none>");
+  std::printf("  CO2 value: %u ppm, valid=%s\n",
+              static_cast<unsigned>(result.ppm),
+              result.ppmValid ? "yes" : "no");
+  std::printf("  Status step: attempted=%s status=%s detail=%ld valid=%s",
+              result.statusReadAttempted ? "yes" : "no",
+              errToStr(result.statusReadStatus.code),
+              static_cast<long>(result.statusReadStatus.detail),
+              result.statusValid ? "yes" : "no");
+  if (result.statusValid) {
+    std::printf(", byte=0x%02X, co2Error=%s",
+                static_cast<unsigned>(result.statusByte),
+                result.co2Error ? "yes" : "no");
+  }
+  std::printf("\n");
+  std::printf(
+      "  Status step message: %s\n",
+      (result.statusReadStatus.msg != nullptr &&
+       result.statusReadStatus.msg[0] != '\0')
+          ? result.statusReadStatus.msg
+          : "<none>");
+  std::printf(
+      "  Error-code step: attempted=%s status=%s detail=%ld valid=%s",
+      result.errorCodeReadAttempted ? "yes" : "no",
+      errToStr(result.errorCodeReadStatus.code),
+      static_cast<long>(result.errorCodeReadStatus.detail),
+      result.errorCodeValid ? "yes" : "no");
+  if (result.errorCodeValid) {
+    std::printf(", code=%u (%s)",
+                static_cast<unsigned>(result.errorCode),
+                EE871::cmd::co2ErrorCodeName(result.errorCode));
+  }
+  std::printf("\n");
+  std::printf(
+      "  Error-code step message: %s\n",
+      (result.errorCodeReadStatus.msg != nullptr &&
+       result.errorCodeReadStatus.msg[0] != '\0')
+          ? result.errorCodeReadStatus.msg
+          : "<none>");
+  std::printf("  Sensor error: %s (enum=%u)\n",
+              co2SensorErrorToStr(result.sensorError),
+              static_cast<unsigned>(result.sensorError));
+}
+
 void printPersistentDirtyFields(const EE871::SettingsSnapshot& settings) {
   const bool dirty = settings.persistentConfigDirty;
   const EE871::Status dirtyErr = settings.persistentConfigDirtyError;
+  const EE871::MutationDiagnostic& mutation = settings.mutation;
   std::printf("  persistentConfigDirty: %s%s%s\n",
               dirty ? LOG_COLOR_RED : LOG_COLOR_GREEN,
               dirty ? "yes" : "no",
@@ -455,6 +566,39 @@ void printPersistentDirtyFields(const EE871::SettingsSnapshot& settings) {
               dirty ? LOG_COLOR_RED : LOG_COLOR_GREEN,
               dirty ? "yes" : "no",
               LOG_COLOR_RESET);
+  std::printf("  mutation.unresolved: %s\n",
+              mutation.unresolved ? "yes" : "no");
+  std::printf("  mutation.target: %s (value=%u)\n",
+              mutationTargetToStr(mutation.target),
+              static_cast<unsigned>(mutation.target));
+  std::printf("  mutation.effect: %s (value=%u)\n",
+              mutationEffectToStr(mutation.effect),
+              static_cast<unsigned>(mutation.effect));
+  std::printf("  mutation.addresses: first=0x%02X last=0x%02X\n",
+              static_cast<unsigned>(mutation.firstAddress),
+              static_cast<unsigned>(mutation.lastAddress));
+  std::printf(
+      "  mutation.elements: requested=%u acknowledged=%u observed=%u matched=%u\n",
+      static_cast<unsigned>(mutation.elementsRequested),
+      static_cast<unsigned>(mutation.elementsAcknowledged),
+      static_cast<unsigned>(mutation.elementsObserved),
+      static_cast<unsigned>(mutation.elementsMatched));
+  std::printf("  mutation.attemptedValue: 0x%02X\n",
+              static_cast<unsigned>(mutation.attemptedValue));
+  std::printf("  mutation.preObservedValue: valid=%s value=0x%02X\n",
+              mutation.preObservedValueValid ? "yes" : "no",
+              static_cast<unsigned>(mutation.preObservedValue));
+  std::printf("  mutation.observedValue: valid=%s value=0x%02X\n",
+              mutation.observedValueValid ? "yes" : "no",
+              static_cast<unsigned>(mutation.observedValue));
+  std::printf("  mutation.cause: %s (code=%u, detail=%ld)\n",
+              errToStr(mutation.cause.code),
+              static_cast<unsigned>(mutation.cause.code),
+              static_cast<long>(mutation.cause.detail));
+  std::printf("  mutation.cause message: %s\n",
+              (mutation.cause.msg != nullptr && mutation.cause.msg[0] != '\0')
+                  ? mutation.cause.msg
+                  : "<none>");
 }
 
 void printPersistentDirtyState(const char* title) {
@@ -596,9 +740,11 @@ void printHelp() {
 
   printHelpSection("Device Commands");
   printHelpItem("id", "Read group/subgroup/available bits");
-  printHelpItem("status", "Read status byte (starts measurement)");
+  printHelpItem("status", "Read status; may trigger next measurement");
   printHelpItem("co2fast", "Read MV3 (fast response)");
   printHelpItem("co2avg", "Read MV4 (averaged)");
+  printHelpItem("samplefast", "Checked MV3 + status; may trigger next measurement");
+  printHelpItem("sampleavg", "Checked MV4 + status; may trigger next measurement");
   printHelpItem("error", "Read error code (if status indicates error)");
   printHelpItem("reg read <addr>", "Read custom register (0x00..0xFF)");
   printHelpItem("reg write <addr> <value>", "Write persistent custom register (bench only)");
@@ -1898,6 +2044,14 @@ void processCommand(const char* input) {
     if (st.ok()) {
       std::printf("  CO2 avg: %u ppm\n", static_cast<unsigned>(ppm));
     }
+  } else if (std::strcmp(trimmed, "samplefast") == 0) {
+    EE871::Co2ReadResult result;
+    const auto st = device.readCo2FastSample(result);
+    printCheckedSample(st, result);
+  } else if (std::strcmp(trimmed, "sampleavg") == 0) {
+    EE871::Co2ReadResult result;
+    const auto st = device.readCo2AverageSample(result);
+    printCheckedSample(st, result);
   } else if (std::strcmp(trimmed, "error") == 0) {
     uint8_t code = 0;
     auto st = device.readErrorCode(code);
@@ -2473,6 +2627,8 @@ void configureDevice() {
   deviceCfg.readScl = trace::readScl;
   deviceCfg.readSda = trace::readSda;
   deviceCfg.delayUs = trace::delayUs;
+  deviceCfg.delayMs = ee871_idf::delayMs;
+  deviceCfg.yield = ee871_idf::yieldTask;
   deviceCfg.busUser = &e2Bus;
   deviceCfg.deviceAddress = EE871_ADDRESS;
   deviceCfg.clockLowUs = E2_CLOCK_LOW_US;

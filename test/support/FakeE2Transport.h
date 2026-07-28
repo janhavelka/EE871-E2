@@ -54,6 +54,7 @@ public:
     _transactionCount = 0;
     _currentTransferIndex = 0;
     _devicePresent = true;
+    _respondingDeviceAddress = EE871::cmd::DEFAULT_DEVICE_ADDRESS;
     _group = EE871::cmd::SENSOR_GROUP_ID;
     _subgroup = EE871::cmd::SENSOR_SUBGROUP_ID;
     _availableMeasurements = EE871::cmd::AVAILABLE_MEAS_MASK;
@@ -95,6 +96,7 @@ public:
 
     for (size_t i = 0; i < MAX_RECORDED_TRANSACTIONS; ++i) {
       _transactionMain[i] = 0;
+      _transactionDeviceAddress[i] = 0;
       _transactionAddress[i] = 0;
       _transactionIsRead[i] = false;
       _transactionHasAddress[i] = false;
@@ -130,6 +132,8 @@ public:
         static_cast<uint8_t>(EE871::cmd::INTERVAL_MIN_DECISEC & 0xFF);
     _memory[EE871::cmd::CUSTOM_INTERVAL_H] =
         static_cast<uint8_t>(EE871::cmd::INTERVAL_MIN_DECISEC >> 8);
+    _memory[EE871::cmd::CUSTOM_BUS_ADDRESS] =
+        EE871::cmd::DEFAULT_DEVICE_ADDRESS;
   }
 
   EE871::Config makeConfig(uint8_t offlineThreshold = 5) {
@@ -175,6 +179,7 @@ public:
     _transactionCount = 0;
     for (size_t i = 0; i < MAX_RECORDED_TRANSACTIONS; ++i) {
       _transactionMain[i] = 0;
+      _transactionDeviceAddress[i] = 0;
       _transactionAddress[i] = 0;
       _transactionIsRead[i] = false;
       _transactionHasAddress[i] = false;
@@ -205,6 +210,11 @@ public:
   uint8_t transactionMain(size_t index) const {
     return index < MAX_RECORDED_TRANSACTIONS ? _transactionMain[index] : 0;
   }
+  uint8_t transactionDeviceAddress(size_t index) const {
+    return index < MAX_RECORDED_TRANSACTIONS
+               ? _transactionDeviceAddress[index]
+               : 0;
+  }
   uint8_t transactionAddress(size_t index) const {
     return index < MAX_RECORDED_TRANSACTIONS ? _transactionAddress[index] : 0;
   }
@@ -234,7 +244,25 @@ public:
     return countTransactions(mainCommandNibble, true);
   }
 
+  uint32_t countTransactionsAtDeviceAddress(uint8_t address) const {
+    const size_t count =
+        _transactionCount < MAX_RECORDED_TRANSACTIONS
+            ? _transactionCount
+            : MAX_RECORDED_TRANSACTIONS;
+    uint32_t matches = 0;
+    for (size_t i = 0; i < count; ++i) {
+      if (_transactionDeviceAddress[i] == address) {
+        ++matches;
+      }
+    }
+    return matches;
+  }
+
   void setDevicePresent(bool present) { _devicePresent = present; }
+  void setRespondingDeviceAddress(uint8_t address) {
+    _respondingDeviceAddress =
+        static_cast<uint8_t>(address & EE871::cmd::DEVICE_ADDRESS_MAX);
+  }
   void setIdentity(
       uint16_t group,
       uint8_t subgroup,
@@ -597,6 +625,7 @@ private:
     ++_transactionCount;
     if (index < MAX_RECORDED_TRANSACTIONS) {
       _transactionMain[index] = 0;
+      _transactionDeviceAddress[index] = 0;
       _transactionAddress[index] = 0;
       _transactionIsRead[index] = false;
       _transactionHasAddress[index] = false;
@@ -713,6 +742,7 @@ private:
             _transactionCount == 0U ? 0U : _transactionCount - 1U;
         if (index < MAX_RECORDED_TRANSACTIONS) {
           _transactionMain[index] = mainCommand();
+          _transactionDeviceAddress[index] = controlDeviceAddress();
           _transactionIsRead[index] = controlIsRead();
         }
         if (_transactionStartedDuringPointerCompletion &&
@@ -783,6 +813,10 @@ private:
       return false;
     }
     if (_phase == Phase::ACK_CONTROL &&
+        controlDeviceAddress() != _respondingDeviceAddress) {
+      return false;
+    }
+    if (_phase == Phase::ACK_CONTROL &&
         _failAtTransferEnabled &&
         _currentTransferIndex == _failAtTransferIndex) {
       _failAtTransferEnabled = false;
@@ -812,6 +846,12 @@ private:
 
   uint8_t mainCommand() const {
     return static_cast<uint8_t>(_control >> EE871::cmd::MAIN_SHIFT);
+  }
+
+  uint8_t controlDeviceAddress() const {
+    return static_cast<uint8_t>(
+        (_control >> EE871::cmd::ADDR_SHIFT) &
+        EE871::cmd::DEVICE_ADDRESS_MAX);
   }
 
   void prepareReadResponse() {
@@ -929,6 +969,7 @@ private:
   uint32_t _transactionCount = 0;
   uint32_t _currentTransferIndex = 0;
   bool _devicePresent = true;
+  uint8_t _respondingDeviceAddress = 0;
   uint16_t _group = 0;
   uint8_t _subgroup = 0;
   uint8_t _availableMeasurements = 0;
@@ -968,6 +1009,7 @@ private:
   uint8_t _intervalCompletionDelaysUntilStart = 0;
   bool _intervalTransactionStartedEarly = false;
   uint8_t _transactionMain[MAX_RECORDED_TRANSACTIONS] = {};
+  uint8_t _transactionDeviceAddress[MAX_RECORDED_TRANSACTIONS] = {};
   uint8_t _transactionAddress[MAX_RECORDED_TRANSACTIONS] = {};
   bool _transactionIsRead[MAX_RECORDED_TRANSACTIONS] = {};
   bool _transactionHasAddress[MAX_RECORDED_TRANSACTIONS] = {};

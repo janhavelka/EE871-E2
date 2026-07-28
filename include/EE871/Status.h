@@ -29,7 +29,8 @@ enum class Err : uint8_t {
   NOT_SUPPORTED,             ///< Feature not supported by this device/firmware
   VERIFY_MISMATCH = 15,      ///< Transport completed but write readback did not match
   OFFLINE = 16,              ///< Driver is latched offline; explicit recovery is required
-  CO2_SENSOR_ERROR = 17      ///< Status reports a CO2 sensor-domain measurement error
+  CO2_SENSOR_ERROR = 17,     ///< Status reports a CO2 sensor-domain measurement error
+  PERSISTENT_STATE_UNCERTAIN = 18 ///< Persistent or maintenance state needs explicit reconciliation
 };
 
 /// @brief Status structure returned by all fallible operations.

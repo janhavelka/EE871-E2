@@ -9,6 +9,8 @@
 #include "driver/gpio.h"
 #include "esp_err.h"
 #include "esp_rom_sys.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 namespace ee871_idf {
 
@@ -75,6 +77,18 @@ inline void delayUs(uint32_t us, void*) {
   esp_rom_delay_us(us);
 }
 
+inline void delayMs(uint32_t ms, void*) {
+  if (ms == 0U) {
+    return;
+  }
+  const TickType_t converted = pdMS_TO_TICKS(ms);
+  vTaskDelay(converted > 0 ? converted : 1);
+}
+
+inline void yieldTask(void*) {
+  taskYIELD();
+}
+
 inline EE871::Config makeConfig(E2GpioBus& bus, uint8_t deviceAddress = 0) {
   EE871::Config cfg;
   cfg.setScl = setScl;
@@ -82,6 +96,8 @@ inline EE871::Config makeConfig(E2GpioBus& bus, uint8_t deviceAddress = 0) {
   cfg.readScl = readScl;
   cfg.readSda = readSda;
   cfg.delayUs = delayUs;
+  cfg.delayMs = delayMs;
+  cfg.yield = yieldTask;
   cfg.busUser = &bus;
   cfg.deviceAddress = deviceAddress;
   return cfg;

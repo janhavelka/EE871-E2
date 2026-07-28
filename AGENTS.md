@@ -199,10 +199,19 @@ Rules:
 - Persistent custom-memory writes, interval writes, address writes, and
   maintenance calibration writes must be explicit. Do not hide persistence
   behind read or normal sampling APIs.
+- All effectful custom-memory APIs must use the one mutation admission,
+  frame-completion, effect-classification, and diagnostic path. Do not add a
+  second dirty/effect state system in public wrappers.
 - Multi-step or persistent writes must either keep cached state and hardware
-  synchronized or expose an explicit dirty/resync-needed diagnostic.
-- Dirty or partial persistent state may be cleared only after a successful full
-  readback, resync, recover, or documented verification path.
+  synchronized or expose the fixed mutation diagnostic and retained intent.
+- While mutation state is unresolved, reject every further effectful API
+  before E2 I/O. Do not replay the retained intent automatically.
+- Unresolved mutation state may clear only through successful target-specific
+  verification/resynchronization or the narrow documented auto-adjust operator
+  acknowledgement. Unrelated reads, health success, probe, recover, end, or
+  begin do not clear it.
+- Address change never guesses activation timing or scans addresses. Auto-adjust
+  is a non-replayable maintenance action with pre/post status observation.
 - Do not add new persistent-write APIs without documenting whether they are
   maintenance operations and how partial write failure is diagnosed.
 
@@ -326,11 +335,27 @@ Transport callbacks (Config::set_scl/set_sda/read_scl/read_sda/delay_us)
   semantic OFFLINE latch that does not invent wire failures
 - `_totalFailures` / `_totalSuccess` - lifetime counters (wrap at max)
 
+### Public Timing Classification
+
+- Every public callable except constructors/deleted operators carries exactly
+  one Doxygen timing marker:
+  `@note Timing contract: BUS <OperationKind>.` or
+  `@note Timing contract: NO_E2_IO.`
+- Every BUS declaration appears in the exhaustive method map in
+  `docs/EE871_E2_OPERATION_TIMING_BOUNDS.md`.
+- `tools/check_public_timing_contract.py` must pass after any public API or
+  timing-calculator change.
+- Health counters count tracked E2 transfers, not public calls or samples.
+- `tick(nowMs)` only stores the caller-supplied timestamp. It does not schedule,
+  extend the clock, retry, or touch the bus.
+
 ---
 
 ## Versioning and Releases
 
-Single source of truth: `library.json`. `Version.h` is auto-generated and must never be edited.
+Single source of truth: `library.json`. `Version.h` is auto-generated and must
+never be edited. Repository tooling also synchronizes `idf_component.yml` and
+the Doxygen project number from that version.
 
 SemVer:
 - MAJOR: breaking API/Config/enum changes.

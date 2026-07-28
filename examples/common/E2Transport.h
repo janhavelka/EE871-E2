@@ -81,4 +81,14 @@ inline void delayUs(uint32_t us, void* user) {
   delayMicroseconds(us);
 }
 
+inline void delayMs(uint32_t ms, void* user) {
+  (void)user;
+  delay(ms);
+}
+
+inline void yieldTask(void* user) {
+  (void)user;
+  ::yield();
+}
+
 } // namespace transport

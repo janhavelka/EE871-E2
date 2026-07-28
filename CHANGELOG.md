@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-07-28
+
 ### Added
 
 - Optional task-context `delayMs`/`yield` callbacks with bounded long-delay
@@ -24,6 +26,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   evidence.
 - Broad checked CO2 range constants, cache-only calibration capability
   helpers, and checked-sample timing kinds 13 and 14.
+- `MutationTarget`, `MutationEffect`, `MutationDiagnostic`, cache-only
+  `mutationDiagnostic()`, and the narrow
+  `acknowledgeAutoAdjustUncertainty()` procedure.
+- `PERSISTENT_STATE_UNCERTAIN = 18` and persistent/maintenance timing kinds
+  15 through 18.
+- An exhaustive public timing-method map and
+  `tools/check_public_timing_contract.py` source audit.
+- Checked `sampleavg` and `samplefast` commands with equivalent Arduino and
+  native ESP-IDF output.
 
 ### Changed
 
@@ -43,6 +54,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Raw MV3/MV4/status/error-code APIs remain unchanged. Checked procedures read
   value before side-effecting status, capability-gate detailed error reads,
   and keep sensor/range outcomes separate from E2 transport health.
+- All effectful custom-memory APIs now use one admission, frame-completion,
+  effect-classification, fixed intent, and diagnostic path. Further mutations
+  are bus-silently blocked while evidence is unresolved.
+- Persistent resync is target-specific when uncertainty exists and otherwise
+  performs a complete capability-aware coherence read.
+- Bus-address changes retain an explicit candidate for application-owned
+  end/power/rebegin reconciliation; auto-adjust uses pre/post status evidence
+  and is never replayed automatically.
+- Typed optional-setting reads and writes now require validated cached
+  capability support before bus I/O, including offset/gain calibration.
+- Version tooling synchronizes the generated header, ESP-IDF component
+  metadata, and Doxygen project number from `library.json`.
 
 ### Fixed
 
@@ -59,6 +82,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NACK` as the primary result.
 - Optional startup accepts an identity NACK only when its cleanup STOP
   completes; a NACK with failed cleanup remains a failed, uninitialized begin.
+- Raw custom writes can no longer bypass typed interval, address, calibration,
+  auto-adjust, or documented read-only-address safety.
+- Unresolved mutation evidence now survives `end()`, failed/repeated begin, and
+  a later successful begin on the same object.
+- Interval writes no longer attempt invalid low-byte equality verification
+  before the deferred pair commit.
 
 ## [1.0.0] - 2026-06-02
 
@@ -194,7 +223,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial release with template structure
 - ESP32-S2 and ESP32-S3 support
 
-[Unreleased]: https://github.com/janhavelka/EE871-E2/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/janhavelka/EE871-E2/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/janhavelka/EE871-E2/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/janhavelka/EE871-E2/compare/v0.3.0...v1.0.0
 [0.3.0]: https://github.com/janhavelka/EE871-E2/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/janhavelka/EE871-E2/compare/v0.2.0...v0.2.1

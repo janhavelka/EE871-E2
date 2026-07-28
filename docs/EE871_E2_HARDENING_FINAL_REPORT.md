@@ -989,3 +989,72 @@ Software validation on 2026-07-28:
 - Doxygen and diff checks: PASS;
 - pure ESP-IDF build: not run because `idf.py` is unavailable;
 - HIL, physical sensor, waveform, network, and long-run validation: not run.
+
+## 2026-07-28 Persistent Maintenance And 1.1.0 Release Follow-up
+
+Branch: `feature/ee871-hardening-series`
+
+Prompt 04 closes the remaining reusable-library persistent/maintenance gaps
+without adding firmware ownership or product policy:
+
+- every effectful custom-memory API routes through one admission,
+  frame-completion, effect-classification, fixed intent, and diagnostic path;
+- `MutationTarget`, `MutationEffect`, and `MutationDiagnostic` retain exact
+  target, address, element-progress, value-observation, and first-cause
+  evidence;
+- accepted or indeterminate operations block further mutations bus-silently
+  until target-specific reconciliation, while normal sampling and diagnostics
+  remain available;
+- `resyncPersistentConfig()` verifies or coherently reconciles the retained
+  target and performs a complete capability-aware read when no uncertainty is
+  active;
+- bus-address changes retain an explicit candidate and require
+  application-owned end/power/rebegin/resync; the driver never scans or guesses
+  an address;
+- auto-adjust uses pre/post action-status observation, is never replayed, and
+  has only one narrow cache-only operator acknowledgement for an irreducibly
+  ambiguous clear observation;
+- typed optional-setting reads and writes, including offset/gain, require
+  validated cached capability support before bus I/O;
+- unresolved evidence survives stopped/rebegin transitions on the same driver
+  object. Restart-surviving workflow persistence remains application-owned.
+
+The timing calculator appends operation kinds 15 through 18. The maintained
+timing document now contains every formula and one row per public bus
+declaration. `tools/check_public_timing_contract.py` ties those rows to
+single-line Doxygen BUS/`NO_E2_IO` markers and to calculator switch coverage.
+Health documentation now states that counters represent tracked transfers, not
+samples or public methods; `tick()` remains a caller-supplied timestamp store
+with no hidden scheduler.
+
+Arduino and native ESP-IDF diagnostic examples keep raw `co2avg`/`co2fast`,
+add checked `sampleavg`/`samplefast`, expose complete mutation evidence, and
+use example-only task-context delay/yield callbacks. No arbitrary calibration
+or new custom-write command was added.
+
+Release preparation:
+
+- `library.json` was bumped from 1.0.0 to 1.1.0;
+- repository tooling generated `Version.h` and synchronized
+  `idf_component.yml` and the Doxygen project number;
+- 1.0.0 notes and historical hardware artifacts remain unchanged;
+- `EE871_E2_RELEASE_NOTES_1.1.0.md` records compatibility, validation
+  boundaries, known physical gaps, and the still-pending tag/release step;
+- the hardware matrix marks every new checked-sample, mutation, address,
+  auto-adjust, and lifecycle physical scenario `NOT RUN`.
+
+At the Prompt 04 final-candidate checkpoint on 2026-07-28:
+
+- core timing, public timing, CLI, and IDF example contract checks: PASS;
+- generated-version/metadata check: PASS at 1.1.0;
+- native tests: PASS, 91/91;
+- Arduino ESP32-S3 and ESP32-S2 PlatformIO builds: PASS;
+- local pure ESP-IDF validation was not run because `idf.py` is unavailable on
+  `PATH`;
+- no new HIL, physical sensor, waveform, calibration, address, auto-adjust,
+  network, or long-run validation was performed.
+
+The reusable library is release-source-ready only after all final software
+commands pass. Creating or publishing `v1.1.0` remains a separately authorized
+action, and downstream firmware must verify the resulting immutable reference
+rather than infer it from these source documents.

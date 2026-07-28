@@ -105,6 +105,52 @@ constexpr Co2SensorError co2SensorErrorFromCode(uint8_t code) {
   }
 }
 
+enum class CustomWriteRoute : uint8_t {
+  RAW,
+  READ_ONLY,
+  BUS_ADDRESS,
+  INTERVAL_PAIR,
+  INTERVAL_FACTOR,
+  FILTER,
+  OPERATING_MODE,
+  AUTO_ADJUST,
+  CO2_PAIR,
+};
+
+constexpr CustomWriteRoute classifyCustomWriteAddress(uint8_t address) {
+  if (address <= cmd::CUSTOM_SPECIAL_FEATURES ||
+      (address >= cmd::CUSTOM_CO2_POINT_L_L &&
+       address <= cmd::CUSTOM_CO2_POINT_U_H) ||
+      (address >= cmd::CUSTOM_SERIAL_START &&
+       address < cmd::CUSTOM_SERIAL_START + cmd::CUSTOM_SERIAL_LEN) ||
+      address == cmd::CUSTOM_ERROR_CODE ||
+      address == cmd::CUSTOM_POINTER_LOW ||
+      address == cmd::CUSTOM_POINTER_HIGH) {
+    return CustomWriteRoute::READ_ONLY;
+  }
+  if (address >= cmd::CUSTOM_CO2_OFFSET_L &&
+      address <= cmd::CUSTOM_CO2_GAIN_H) {
+    return CustomWriteRoute::CO2_PAIR;
+  }
+  switch (address) {
+    case cmd::CUSTOM_BUS_ADDRESS:
+      return CustomWriteRoute::BUS_ADDRESS;
+    case cmd::CUSTOM_INTERVAL_L:
+    case cmd::CUSTOM_INTERVAL_H:
+      return CustomWriteRoute::INTERVAL_PAIR;
+    case cmd::CUSTOM_CO2_INTERVAL_FACTOR:
+      return CustomWriteRoute::INTERVAL_FACTOR;
+    case cmd::CUSTOM_FILTER_CO2:
+      return CustomWriteRoute::FILTER;
+    case cmd::CUSTOM_OPERATING_MODE:
+      return CustomWriteRoute::OPERATING_MODE;
+    case cmd::CUSTOM_AUTO_ADJUST:
+      return CustomWriteRoute::AUTO_ADJUST;
+    default:
+      return CustomWriteRoute::RAW;
+  }
+}
+
 } // namespace
 
 void EE871::_delayUs(
@@ -476,8 +522,11 @@ Status EE871::_calculateOperationTimingBound(
     uint16_t elementCount,
     OperationTimingBound& out) {
   const bool blockRead = kind == OperationKind::CUSTOM_BLOCK_READ;
-  if ((!blockRead && elementCount != 1U) ||
-      (blockRead && (elementCount == 0U || elementCount > 256U))) {
+  const bool blockWrite =
+      kind == OperationKind::CUSTOM_BLOCK_WRITE_VERIFY;
+  if ((!blockRead && !blockWrite && elementCount != 1U) ||
+      (blockRead && (elementCount == 0U || elementCount > 256U)) ||
+      (blockWrite && (elementCount == 0U || elementCount > 16U))) {
     return Status::Error(
         Err::INVALID_PARAM, "Invalid timing-bound element count", elementCount);
   }
@@ -563,6 +612,33 @@ Status EE871::_calculateOperationTimingBound(
     case OperationKind::CHECKED_CO2_FAST:
       totalUs = pointerUs;
       st = addScaledU64(totalUs, readUs, 4U);
+      break;
+    case OperationKind::CUSTOM_BLOCK_WRITE_VERIFY: {
+      uint64_t oneElementUs = customWriteUs;
+      st = addScaledU64(oneElementUs, pointerUs, 1U);
+      if (st.ok()) {
+        st = addScaledU64(oneElementUs, readUs, 1U);
+      }
+      if (st.ok()) {
+        st = addScaledU64(totalUs, oneElementUs, elementCount);
+      }
+      break;
+    }
+    case OperationKind::RESYNC_PERSISTENT_CONFIG:
+      st = addScaledU64(totalUs, pointerUs, 9U);
+      if (st.ok()) {
+        st = addScaledU64(totalUs, readUs, 27U);
+      }
+      break;
+    case OperationKind::AUTO_ADJUST_MAINTENANCE:
+      totalUs = customWriteUs;
+      st = addScaledU64(totalUs, pointerUs, 2U);
+      if (st.ok()) {
+        st = addScaledU64(totalUs, readUs, 2U);
+      }
+      break;
+    case OperationKind::BUS_ADDRESS_CHANGE:
+      totalUs = customWriteUs;
       break;
     default:
       return Status::Error(
@@ -693,8 +769,12 @@ Status EE871::getSettings(SettingsSnapshot& out) const {
   out.consecutiveFailures = _consecutiveFailures;
   out.totalFailures = _totalFailures;
   out.totalSuccess = _totalSuccess;
-  out.persistentConfigDirty = _persistentConfigDirty;
-  out.persistentConfigDirtyError = _persistentConfigDirtyError;
+  out.persistentConfigDirty = _mutationDiagnostic.unresolved;
+  out.persistentConfigDirtyError =
+      _mutationDiagnostic.unresolved
+          ? _mutationDiagnostic.cause
+          : Status::Ok();
+  out.mutation = _mutationDiagnostic;
   out.beginPolicy = _config.beginPolicy;
   out.beginProbeStatus = _beginProbeStatus;
   out.identity = _identity;
@@ -722,7 +802,6 @@ void EE871::_resetStoppedState() {
   _consecutiveFailures = 0;
   _totalFailures = 0;
   _totalSuccess = 0;
-  _lastWriteProgress = WriteProgress{};
 }
 
 void EE871::_publishIdentityAndCapabilities(
@@ -766,16 +845,210 @@ bool EE871::_normalOperationAllowed(Status& status) const {
   return true;
 }
 
-void EE871::_markPersistentConfigDirty(const Status& st) {
-  if (!_persistentConfigDirty) {
-    _persistentConfigDirty = true;
-    _persistentConfigDirtyError = st;
+Status EE871::_mutationAdmissionGuard() const {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
+  Status guard;
+  if (!_normalOperationAllowed(guard)) {
+    return guard;
+  }
+  if (_mutationDiagnostic.unresolved) {
+    return Status::Error(
+        Err::PERSISTENT_STATE_UNCERTAIN,
+        "Persistent state unresolved; call resyncPersistentConfig()");
+  }
+  return Status::Ok();
+}
+
+Status EE871::_beginMutation(
+    MutationTarget target,
+    uint8_t firstAddress,
+    const uint8_t* values,
+    uint8_t elementCount) {
+  Status st = _mutationAdmissionGuard();
+  if (!st.ok()) {
+    return st;
+  }
+  if (target == MutationTarget::NONE || values == nullptr ||
+      elementCount == 0U || elementCount > 16U ||
+      static_cast<uint16_t>(firstAddress) + elementCount > 256U) {
+    return Status::Error(
+        Err::INVALID_PARAM, "Invalid mutation intent", elementCount);
+  }
+
+  _mutationDiagnostic = MutationDiagnostic{};
+  _mutationDiagnostic.target = target;
+  _mutationDiagnostic.firstAddress = firstAddress;
+  _mutationDiagnostic.lastAddress =
+      static_cast<uint8_t>(firstAddress + elementCount - 1U);
+  _mutationDiagnostic.elementsRequested = elementCount;
+  _mutationDiagnostic.attemptedValue = values[elementCount - 1U];
+
+  _mutationIntent = MutationIntent{};
+  _mutationIntent.target = target;
+  _mutationIntent.firstAddress = firstAddress;
+  _mutationIntent.elementCount = elementCount;
+  for (uint8_t i = 0; i < elementCount; ++i) {
+    _mutationIntent.values[i] = values[i];
+  }
+  return Status::Ok();
+}
+
+void EE871::_classifyMutationEffect(
+    const Status& status,
+    const MutationProgress& progress) {
+  if (status.ok()) {
+    _mutationDiagnostic.effect = MutationEffect::ACKNOWLEDGED;
+    _mutationDiagnostic.unresolved = true;
+    return;
+  }
+
+  if (progress.requestAcknowledged ||
+      _mutationDiagnostic.elementsAcknowledged != 0U) {
+    _mutationDiagnostic.effect = MutationEffect::ACKNOWLEDGED;
+    _mutationDiagnostic.unresolved = true;
+  } else if (progress.pecTransferred && status.code != Err::NACK) {
+    _mutationDiagnostic.effect = MutationEffect::INDETERMINATE;
+    _mutationDiagnostic.unresolved = true;
+  } else {
+    _mutationDiagnostic.effect = MutationEffect::NO_EFFECT;
+    _mutationDiagnostic.unresolved = false;
+  }
+
+  if (_mutationDiagnostic.cause.ok()) {
+    _mutationDiagnostic.cause = status;
+  }
+  if (!_mutationDiagnostic.unresolved) {
+    _mutationIntent = MutationIntent{};
   }
 }
 
-void EE871::_clearPersistentConfigDirty() {
-  _persistentConfigDirty = false;
-  _persistentConfigDirtyError = Status::Ok();
+Status EE871::_writeCustomByteEffectful(
+    uint8_t address,
+    uint8_t value,
+    MutationTarget target,
+    ClockWaitClass completionClass,
+    MutationProgress& progress) {
+  progress = MutationProgress{};
+  if (_mutationIntent.target != target ||
+      _mutationDiagnostic.target != target) {
+    return Status::Error(
+        Err::INVALID_PARAM, "Mutation target does not match admitted intent");
+  }
+
+  _mutationDiagnostic.attemptedValue = value;
+  const uint8_t control =
+      cmd::makeControlWrite(
+          cmd::MAIN_CUSTOM_WRITE, _config.deviceAddress);
+  Status st = _writeCommandTracked(
+      control, address, value, completionClass, &progress);
+  if (progress.requestAcknowledged) {
+    ++_mutationDiagnostic.elementsAcknowledged;
+  }
+  _classifyMutationEffect(st, progress);
+  return st;
+}
+
+void EE871::_resolveMutation(MutationEffect effect) {
+  _mutationDiagnostic.effect = effect;
+  _mutationDiagnostic.unresolved = false;
+  _mutationIntent = MutationIntent{};
+}
+
+Status EE871::_observeMutationBytes(
+    uint8_t firstAddress,
+    const uint8_t* expected,
+    uint8_t elementCount,
+    bool resolveOnSuccess) {
+  if (expected == nullptr || elementCount == 0U ||
+      static_cast<uint16_t>(firstAddress) + elementCount > 256U) {
+    return Status::Error(Err::INVALID_PARAM, "Invalid mutation observation");
+  }
+
+  Status st = setCustomPointer(firstAddress);
+  if (!st.ok()) {
+    if (_mutationDiagnostic.cause.ok()) {
+      _mutationDiagnostic.cause = st;
+    }
+    _mutationDiagnostic.effect =
+        _mutationDiagnostic.elementsAcknowledged != 0U
+            ? MutationEffect::ACKNOWLEDGED
+            : MutationEffect::INDETERMINATE;
+    _mutationDiagnostic.unresolved = true;
+    return st;
+  }
+
+  for (uint8_t i = 0; i < elementCount; ++i) {
+    uint8_t observed = 0;
+    st = readControlByte(cmd::MAIN_CUSTOM_PTR, observed);
+    if (!st.ok()) {
+      if (_mutationDiagnostic.cause.ok()) {
+        _mutationDiagnostic.cause = st;
+      }
+      _mutationDiagnostic.effect =
+          _mutationDiagnostic.elementsAcknowledged != 0U
+              ? MutationEffect::ACKNOWLEDGED
+              : MutationEffect::INDETERMINATE;
+      _mutationDiagnostic.unresolved = true;
+      return st;
+    }
+    ++_mutationDiagnostic.elementsObserved;
+    _mutationDiagnostic.observedValue = observed;
+    _mutationDiagnostic.observedValueValid = true;
+    if (observed != expected[i]) {
+      Status mismatch = Status::Error(
+          Err::VERIFY_MISMATCH,
+          "Write verification mismatch",
+          observed);
+      if (_mutationDiagnostic.cause.ok()) {
+        _mutationDiagnostic.cause = mismatch;
+      }
+      _mutationDiagnostic.effect = MutationEffect::ACKNOWLEDGED;
+      _mutationDiagnostic.unresolved = true;
+      return mismatch;
+    }
+    ++_mutationDiagnostic.elementsMatched;
+  }
+
+  if (resolveOnSuccess) {
+    _resolveMutation(MutationEffect::VERIFIED);
+  }
+  return Status::Ok();
+}
+
+Status EE871::_writeVerifiedBytes(
+    MutationTarget target,
+    uint8_t firstAddress,
+    const uint8_t* values,
+    uint8_t elementCount) {
+  Status st = _beginMutation(
+      target, firstAddress, values, elementCount);
+  if (!st.ok()) {
+    return st;
+  }
+
+  for (uint8_t i = 0; i < elementCount; ++i) {
+    MutationProgress progress;
+    st = _writeCustomByteEffectful(
+        static_cast<uint8_t>(firstAddress + i),
+        values[i],
+        target,
+        ClockWaitClass::WRITE_COMPLETION,
+        progress);
+    if (!st.ok()) {
+      return st;
+    }
+    st = _observeMutationBytes(
+        static_cast<uint8_t>(firstAddress + i),
+        &values[i],
+        1U,
+        i + 1U == elementCount);
+    if (!st.ok()) {
+      return st;
+    }
+  }
+  return Status::Ok();
 }
 
 Status EE871::probe() {
@@ -974,38 +1247,264 @@ Status EE871::resyncPersistentConfig() {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
   }
+  Status guard;
+  if (!_normalOperationAllowed(guard)) {
+    return guard;
+  }
+  return _mutationDiagnostic.unresolved
+             ? _resyncUnresolvedMutation()
+             : _resyncAllSupportedPersistentConfig();
+}
 
-  uint16_t interval = 0;
-  Status st = readMeasurementInterval(interval);
+Status EE871::_resyncUnresolvedMutation() {
+  if (_mutationIntent.target != _mutationDiagnostic.target ||
+      _mutationIntent.elementCount == 0U) {
+    return Status::Error(
+        Err::PERSISTENT_STATE_UNCERTAIN,
+        "Persistent mutation intent unavailable");
+  }
+
+  if (_mutationIntent.target == MutationTarget::BUS_ADDRESS &&
+      _config.deviceAddress != _mutationIntent.values[0]) {
+    return Status::Error(
+        Err::PERSISTENT_STATE_UNCERTAIN,
+        "Configure the retained candidate address before resync",
+        _mutationIntent.values[0]);
+  }
+
+  switch (_mutationIntent.target) {
+    case MutationTarget::PART_NAME:
+      if (!hasPartName()) {
+        return Status::Error(
+            Err::NOT_SUPPORTED, "Part name not supported");
+      }
+      break;
+    case MutationTarget::BUS_ADDRESS:
+      if (!hasAddressConfig()) {
+        return Status::Error(
+            Err::NOT_SUPPORTED, "Address config not supported");
+      }
+      break;
+    case MutationTarget::GLOBAL_INTERVAL:
+      if (!hasGlobalInterval()) {
+        return Status::Error(
+            Err::NOT_SUPPORTED, "Global interval not supported");
+      }
+      break;
+    case MutationTarget::CO2_INTERVAL_FACTOR:
+      if (!hasSpecificInterval()) {
+        return Status::Error(
+            Err::NOT_SUPPORTED, "Specific interval not supported");
+      }
+      break;
+    case MutationTarget::CO2_FILTER:
+      if (!hasFilterConfig()) {
+        return Status::Error(
+            Err::NOT_SUPPORTED, "Filter config not supported");
+      }
+      break;
+    case MutationTarget::AUTO_ADJUST:
+      if (!hasAutoAdjust()) {
+        return Status::Error(
+            Err::NOT_SUPPORTED, "Auto adjust not supported");
+      }
+      break;
+    case MutationTarget::CO2_OFFSET:
+    case MutationTarget::CO2_GAIN:
+      if (!hasCo2OffsetGain()) {
+        return Status::Error(
+            Err::NOT_SUPPORTED, "CO2 offset/gain not supported");
+      }
+      break;
+    case MutationTarget::NONE:
+      return Status::Error(
+          Err::PERSISTENT_STATE_UNCERTAIN,
+          "Persistent mutation target unavailable");
+    case MutationTarget::RAW_CUSTOM_BYTE:
+    case MutationTarget::OPERATING_MODE:
+      break;
+  }
+
+  _mutationDiagnostic.elementsObserved = 0;
+  _mutationDiagnostic.elementsMatched = 0;
+  _mutationDiagnostic.observedValue = 0;
+  _mutationDiagnostic.observedValueValid = false;
+
+  if (_mutationIntent.target == MutationTarget::AUTO_ADJUST) {
+    uint8_t observed = 0;
+    Status st = customRead(cmd::CUSTOM_AUTO_ADJUST, observed);
+    if (!st.ok()) {
+      return st;
+    }
+    _mutationDiagnostic.elementsObserved = 1;
+    _mutationDiagnostic.observedValue = observed;
+    _mutationDiagnostic.observedValueValid = true;
+    const bool running =
+        (observed & cmd::AUTO_ADJUST_RUNNING_MASK) != 0U;
+    if (running &&
+        _mutationDiagnostic.preObservedValueValid &&
+        (_mutationDiagnostic.preObservedValue &
+         cmd::AUTO_ADJUST_RUNNING_MASK) == 0U) {
+      _mutationDiagnostic.elementsMatched = 1;
+      _resolveMutation(MutationEffect::VERIFIED);
+      return Status::Ok();
+    }
+    _mutationIntent.autoAdjustNotRunningObservedAfterFailure = true;
+    return Status::Error(
+        Err::PERSISTENT_STATE_UNCERTAIN,
+        "Auto-adjust history remains ambiguous");
+  }
+
+  uint8_t observed[16] = {};
+  Status st = setCustomPointer(_mutationIntent.firstAddress);
   if (!st.ok()) {
     return st;
   }
-  if (interval < cmd::INTERVAL_MIN_DECISEC ||
-      interval > cmd::INTERVAL_MAX_DECISEC) {
-    return Status::Error(Err::OUT_OF_RANGE, "Interval out of range", interval);
+  for (uint8_t i = 0; i < _mutationIntent.elementCount; ++i) {
+    st = readControlByte(cmd::MAIN_CUSTOM_PTR, observed[i]);
+    if (!st.ok()) {
+      return st;
+    }
+    ++_mutationDiagnostic.elementsObserved;
+    _mutationDiagnostic.observedValue = observed[i];
+    _mutationDiagnostic.observedValueValid = true;
+    if (observed[i] == _mutationIntent.values[i]) {
+      ++_mutationDiagnostic.elementsMatched;
+    }
   }
 
-  int16_t offset = 0;
-  st = readCo2Offset(offset);
-  if (!st.ok()) {
-    return st;
+  if (_mutationIntent.target == MutationTarget::GLOBAL_INTERVAL) {
+    const uint16_t interval =
+        static_cast<uint16_t>(observed[0]) |
+        (static_cast<uint16_t>(observed[1]) << 8);
+    if (interval < cmd::INTERVAL_MIN_DECISEC ||
+        interval > cmd::INTERVAL_MAX_DECISEC) {
+      return Status::Error(
+          Err::OUT_OF_RANGE, "Interval out of range", interval);
+    }
+  } else if (_mutationIntent.target == MutationTarget::BUS_ADDRESS) {
+    if (observed[0] > cmd::BUS_ADDRESS_MAX) {
+      return Status::Error(
+          Err::OUT_OF_RANGE, "Bus address out of range", observed[0]);
+    }
+  } else if (_mutationIntent.target == MutationTarget::OPERATING_MODE) {
+    if (observed[0] > 0x03U ||
+        ((observed[0] & cmd::OPERATING_MODE_MEASUREMODE_MASK) != 0U &&
+         !hasLowPowerMode()) ||
+        ((observed[0] & cmd::OPERATING_MODE_E2_PRIORITY_MASK) != 0U &&
+         !hasE2Priority())) {
+      return Status::Error(
+          Err::NOT_SUPPORTED,
+          "Observed operating mode is not supported",
+          observed[0]);
+    }
   }
 
-  uint16_t gain = 0;
-  st = readCo2Gain(gain);
-  if (!st.ok()) {
-    return st;
-  }
+  _resolveMutation(
+      _mutationDiagnostic.elementsMatched ==
+              _mutationDiagnostic.elementsRequested
+          ? MutationEffect::VERIFIED
+          : MutationEffect::RESYNCHRONIZED);
+  return Status::Ok();
+}
+
+Status EE871::_resyncAllSupportedPersistentConfig() {
+  Status st = Status::Ok();
+  uint8_t bytes[cmd::CUSTOM_PART_NAME_LEN] = {};
 
   if (hasPartName()) {
-    uint8_t partName[cmd::CUSTOM_PART_NAME_LEN] = {};
-    st = readPartName(partName);
+    st = customRead(
+        cmd::CUSTOM_PART_NAME_START,
+        bytes,
+        cmd::CUSTOM_PART_NAME_LEN);
     if (!st.ok()) {
       return st;
     }
   }
+  if (hasAddressConfig()) {
+    st = customRead(cmd::CUSTOM_BUS_ADDRESS, bytes[0]);
+    if (!st.ok()) {
+      return st;
+    }
+    if (bytes[0] > cmd::BUS_ADDRESS_MAX) {
+      return Status::Error(
+          Err::OUT_OF_RANGE, "Bus address out of range", bytes[0]);
+    }
+  }
+  if (hasGlobalInterval()) {
+    st = customRead(cmd::CUSTOM_INTERVAL_L, bytes, 2U);
+    if (!st.ok()) {
+      return st;
+    }
+    const uint16_t interval =
+        static_cast<uint16_t>(bytes[0]) |
+        (static_cast<uint16_t>(bytes[1]) << 8);
+    if (interval < cmd::INTERVAL_MIN_DECISEC ||
+        interval > cmd::INTERVAL_MAX_DECISEC) {
+      return Status::Error(
+          Err::OUT_OF_RANGE, "Interval out of range", interval);
+    }
+  }
+  if (hasSpecificInterval()) {
+    st = customRead(cmd::CUSTOM_CO2_INTERVAL_FACTOR, bytes[0]);
+    if (!st.ok()) {
+      return st;
+    }
+  }
+  if (hasFilterConfig()) {
+    st = customRead(cmd::CUSTOM_FILTER_CO2, bytes[0]);
+    if (!st.ok()) {
+      return st;
+    }
+  }
+  if (hasLowPowerMode() || hasE2Priority()) {
+    st = customRead(cmd::CUSTOM_OPERATING_MODE, bytes[0]);
+    if (!st.ok()) {
+      return st;
+    }
+    if (bytes[0] > 0x03U ||
+        ((bytes[0] & cmd::OPERATING_MODE_MEASUREMODE_MASK) != 0U &&
+         !hasLowPowerMode()) ||
+        ((bytes[0] & cmd::OPERATING_MODE_E2_PRIORITY_MASK) != 0U &&
+         !hasE2Priority())) {
+      return Status::Error(
+          Err::NOT_SUPPORTED,
+          "Observed operating mode is not supported",
+          bytes[0]);
+    }
+  }
+  if (hasAutoAdjust()) {
+    st = customRead(cmd::CUSTOM_AUTO_ADJUST, bytes[0]);
+    if (!st.ok()) {
+      return st;
+    }
+  }
+  if (hasCo2OffsetGain()) {
+    st = customRead(cmd::CUSTOM_CO2_OFFSET_L, bytes, 2U);
+    if (!st.ok()) {
+      return st;
+    }
+    st = customRead(cmd::CUSTOM_CO2_GAIN_L, bytes, 2U);
+    if (!st.ok()) {
+      return st;
+    }
+  }
+  return Status::Ok();
+}
 
-  _clearPersistentConfigDirty();
+Status EE871::acknowledgeAutoAdjustUncertainty() {
+  if (!_mutationDiagnostic.unresolved ||
+      _mutationDiagnostic.target != MutationTarget::AUTO_ADJUST ||
+      _mutationIntent.target != MutationTarget::AUTO_ADJUST ||
+      !_mutationIntent.autoAdjustNotRunningObservedAfterFailure ||
+      !_mutationDiagnostic.observedValueValid ||
+      (_mutationDiagnostic.observedValue &
+       cmd::AUTO_ADJUST_RUNNING_MASK) != 0U) {
+    return Status::Error(
+        Err::INVALID_PARAM,
+        "No observed not-running auto-adjust ambiguity");
+  }
+  _resolveMutation(MutationEffect::OPERATOR_ACKNOWLEDGED);
   return Status::Ok();
 }
 
@@ -1092,27 +1591,49 @@ Status EE871::customRead(uint8_t address, uint8_t* buf, size_t len) {
 }
 
 Status EE871::customWrite(uint8_t address, uint8_t value) {
-  if (!_initialized) {
-    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
-  }
-  if (address == cmd::CUSTOM_INTERVAL_L || address == cmd::CUSTOM_INTERVAL_H) {
-    uint8_t other = 0;
-    const uint8_t otherAddr = (address == cmd::CUSTOM_INTERVAL_L)
-                                  ? cmd::CUSTOM_INTERVAL_H
-                                  : cmd::CUSTOM_INTERVAL_L;
-    Status st = customRead(otherAddr, other);
-    if (!st.ok()) {
-      return st;
-    }
-    const uint16_t interval = (address == cmd::CUSTOM_INTERVAL_L)
-                                  ? static_cast<uint16_t>(value) |
-                                        (static_cast<uint16_t>(other) << 8)
-                                  : static_cast<uint16_t>(other) |
-                                        (static_cast<uint16_t>(value) << 8);
-    return writeMeasurementInterval(interval);
+  Status st = _mutationAdmissionGuard();
+  if (!st.ok()) {
+    return st;
   }
 
-  return _customWriteDirect(address, value);
+  switch (classifyCustomWriteAddress(address)) {
+    case CustomWriteRoute::READ_ONLY:
+      return Status::Error(
+          Err::NOT_SUPPORTED, "Custom address is read-only", address);
+    case CustomWriteRoute::BUS_ADDRESS:
+      return _writeBusAddressDirect(value);
+    case CustomWriteRoute::INTERVAL_PAIR:
+      return Status::Error(
+          Err::NOT_SUPPORTED,
+          "Use writeMeasurementInterval() for the interval pair",
+          address);
+    case CustomWriteRoute::INTERVAL_FACTOR:
+      return _writeCo2IntervalFactorDirect(
+          static_cast<int8_t>(value));
+    case CustomWriteRoute::FILTER:
+      return _writeCo2FilterDirect(value);
+    case CustomWriteRoute::OPERATING_MODE:
+      return _writeOperatingModeDirect(value);
+    case CustomWriteRoute::AUTO_ADJUST:
+      return value == 1U
+                 ? _startAutoAdjustDirect()
+                 : Status::Error(
+                       Err::NOT_SUPPORTED,
+                       "Only value 1 can start auto-adjust",
+                       value);
+    case CustomWriteRoute::CO2_PAIR:
+      return Status::Error(
+          Err::NOT_SUPPORTED,
+          "Use the paired CO2 offset/gain API",
+          address);
+    case CustomWriteRoute::RAW:
+      return _writeVerifiedBytes(
+          MutationTarget::RAW_CUSTOM_BYTE,
+          address,
+          &value,
+          1U);
+  }
+  return Status::Error(Err::INVALID_PARAM, "Invalid custom-write route");
 }
 
 Status EE871::_setCustomPointerRaw(uint8_t address) {
@@ -1134,52 +1655,14 @@ Status EE871::_setCustomPointerTracked(uint8_t address) {
   return _updateHealth(_setCustomPointerRaw(address));
 }
 
-Status EE871::_customWriteDirect(
-    uint8_t address, uint8_t value, bool* writeMayHaveEffect) {
-  if (writeMayHaveEffect != nullptr) {
-    *writeMayHaveEffect = false;
-  }
-  if (!_initialized) {
-    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
-  }
-
-  const uint8_t control = cmd::makeControlWrite(cmd::MAIN_CUSTOM_WRITE, _config.deviceAddress);
-  WriteProgress progress;
-  Status st = _writeCommandTracked(
-      control,
-      address,
-      value,
-      ClockWaitClass::WRITE_COMPLETION,
-      &progress);
-  if (writeMayHaveEffect != nullptr) {
-    *writeMayHaveEffect =
-        progress.effect == WriteEffect::INDETERMINATE ||
-        progress.effect == WriteEffect::ACKNOWLEDGED ||
-        progress.effect == WriteEffect::VERIFIED;
-  }
-  if (!st.ok()) {
-    return st;
-  }
-
-  uint8_t verify = 0;
-  st = customRead(address, verify);
-  if (!st.ok()) {
-    return st;
-  }
-  if (verify != value) {
-    return Status::Error(
-        Err::VERIFY_MISMATCH, "Write verification mismatch", verify);
-  }
-  _lastWriteProgress.effect = WriteEffect::VERIFIED;
-  return Status::Ok();
+Status EE871::writeMeasurementInterval(uint16_t intervalDeciSeconds) {
+  return _writeMeasurementIntervalDirect(intervalDeciSeconds);
 }
 
-Status EE871::writeMeasurementInterval(uint16_t intervalDeciSeconds) {
-  if (!_initialized) {
-    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
-  }
-  Status guard;
-  if (!_normalOperationAllowed(guard)) {
+Status EE871::_writeMeasurementIntervalDirect(
+    uint16_t intervalDeciSeconds) {
+  Status guard = _mutationAdmissionGuard();
+  if (!guard.ok()) {
     return guard;
   }
   if (!hasGlobalInterval()) {
@@ -1193,51 +1676,39 @@ Status EE871::writeMeasurementInterval(uint16_t intervalDeciSeconds) {
                          intervalDeciSeconds);
   }
 
-  const uint8_t control = cmd::makeControlWrite(cmd::MAIN_CUSTOM_WRITE, _config.deviceAddress);
-  const uint8_t low = static_cast<uint8_t>(intervalDeciSeconds & 0xFF);
-  const uint8_t high = static_cast<uint8_t>(intervalDeciSeconds >> 8);
-
-  WriteProgress lowProgress;
-  Status st = _writeCommandTracked(
-      control,
+  const uint8_t values[2] = {
+      static_cast<uint8_t>(intervalDeciSeconds & 0xFFU),
+      static_cast<uint8_t>(intervalDeciSeconds >> 8)};
+  Status st = _beginMutation(
+      MutationTarget::GLOBAL_INTERVAL,
       cmd::CUSTOM_INTERVAL_L,
-      low,
-      ClockWaitClass::NORMAL_BIT,
-      &lowProgress);
+      values,
+      2U);
   if (!st.ok()) {
-    if (lowProgress.effect == WriteEffect::INDETERMINATE ||
-        lowProgress.effect == WriteEffect::ACKNOWLEDGED) {
-      _markPersistentConfigDirty(st);
-    }
-    return st;
-  }
-  st = _writeCommandTracked(
-      control,
-      cmd::CUSTOM_INTERVAL_H,
-      high,
-      ClockWaitClass::INTERVAL_COMMIT,
-      nullptr);
-  if (!st.ok()) {
-    _markPersistentConfigDirty(st);
     return st;
   }
 
-  uint8_t verifyBytes[2] = {};
-  st = customRead(cmd::CUSTOM_INTERVAL_L, verifyBytes, 2);
+  MutationProgress progress;
+  st = _writeCustomByteEffectful(
+      cmd::CUSTOM_INTERVAL_L,
+      values[0],
+      MutationTarget::GLOBAL_INTERVAL,
+      ClockWaitClass::NORMAL_BIT,
+      progress);
   if (!st.ok()) {
-    _markPersistentConfigDirty(st);
     return st;
   }
-  const uint16_t verify = static_cast<uint16_t>(verifyBytes[0]) |
-                          (static_cast<uint16_t>(verifyBytes[1]) << 8);
-  if (verify != intervalDeciSeconds) {
-    Status err = Status::Error(
-        Err::VERIFY_MISMATCH, "Write verification mismatch", verify);
-    _markPersistentConfigDirty(err);
-    return err;
+  st = _writeCustomByteEffectful(
+      cmd::CUSTOM_INTERVAL_H,
+      values[1],
+      MutationTarget::GLOBAL_INTERVAL,
+      ClockWaitClass::INTERVAL_COMMIT,
+      progress);
+  if (!st.ok()) {
+    return st;
   }
-  _lastWriteProgress.effect = WriteEffect::VERIFIED;
-  return Status::Ok();
+  return _observeMutationBytes(
+      cmd::CUSTOM_INTERVAL_L, values, 2U, true);
 }
 
 Status EE871::readGroup(uint16_t& group) {
@@ -1360,11 +1831,13 @@ Status EE871::_readCo2Sample(
 // ============================================================================
 
 Status EE871::readFirmwareVersion(uint8_t& main, uint8_t& sub) {
-  Status st = customRead(cmd::CUSTOM_FW_VERSION_MAIN, main);
-  if (!st.ok()) {
-    return st;
+  uint8_t values[2] = {};
+  Status st = customRead(cmd::CUSTOM_FW_VERSION_MAIN, values, 2U);
+  if (st.ok()) {
+    main = values[0];
+    sub = values[1];
   }
-  return customRead(cmd::CUSTOM_FW_VERSION_SUB, sub);
+  return st;
 }
 
 Status EE871::readE2SpecVersion(uint8_t& version) {
@@ -1426,11 +1899,8 @@ Status EE871::readPartName(uint8_t* buf) {
 }
 
 Status EE871::writePartName(const uint8_t* buf) {
-  if (!_initialized) {
-    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
-  }
-  Status guard;
-  if (!_normalOperationAllowed(guard)) {
+  Status guard = _mutationAdmissionGuard();
+  if (!guard.ok()) {
     return guard;
   }
   if (buf == nullptr) {
@@ -1439,17 +1909,11 @@ Status EE871::writePartName(const uint8_t* buf) {
   if (!hasPartName()) {
     return Status::Error(Err::NOT_SUPPORTED, "Part name not supported");
   }
-  for (uint8_t i = 0; i < cmd::CUSTOM_PART_NAME_LEN; ++i) {
-    bool accepted = false;
-    Status st = _customWriteDirect(cmd::CUSTOM_PART_NAME_START + i, buf[i], &accepted);
-    if (!st.ok()) {
-      if (i > 0 || accepted) {
-        _markPersistentConfigDirty(st);
-      }
-      return st;
-    }
-  }
-  return Status::Ok();
+  return _writeVerifiedBytes(
+      MutationTarget::PART_NAME,
+      cmd::CUSTOM_PART_NAME_START,
+      buf,
+      cmd::CUSTOM_PART_NAME_LEN);
 }
 
 // ============================================================================
@@ -1457,11 +1921,6 @@ Status EE871::writePartName(const uint8_t* buf) {
 // ============================================================================
 
 Status EE871::readBusAddress(uint8_t& address) {
-  // Address can always be read, guard only applies to write
-  return customRead(cmd::CUSTOM_BUS_ADDRESS, address);
-}
-
-Status EE871::writeBusAddress(uint8_t address) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
   }
@@ -1472,10 +1931,50 @@ Status EE871::writeBusAddress(uint8_t address) {
   if (!hasAddressConfig()) {
     return Status::Error(Err::NOT_SUPPORTED, "Address config not supported");
   }
+  return customRead(cmd::CUSTOM_BUS_ADDRESS, address);
+}
+
+Status EE871::writeBusAddress(uint8_t address) {
+  return _writeBusAddressDirect(address);
+}
+
+Status EE871::_writeBusAddressDirect(uint8_t address) {
+  Status guard = _mutationAdmissionGuard();
+  if (!guard.ok()) {
+    return guard;
+  }
+  if (!hasAddressConfig()) {
+    return Status::Error(Err::NOT_SUPPORTED, "Address config not supported");
+  }
   if (address > cmd::BUS_ADDRESS_MAX) {
     return Status::Error(Err::OUT_OF_RANGE, "Address must be 0-7", address);
   }
-  return customWrite(cmd::CUSTOM_BUS_ADDRESS, address);
+  Status st = _beginMutation(
+      MutationTarget::BUS_ADDRESS,
+      cmd::CUSTOM_BUS_ADDRESS,
+      &address,
+      1U);
+  if (!st.ok()) {
+    return st;
+  }
+  MutationProgress progress;
+  st = _writeCustomByteEffectful(
+      cmd::CUSTOM_BUS_ADDRESS,
+      address,
+      MutationTarget::BUS_ADDRESS,
+      ClockWaitClass::WRITE_COMPLETION,
+      progress);
+  if (!st.ok()) {
+    return st;
+  }
+  Status uncertain = Status::Error(
+      Err::PERSISTENT_STATE_UNCERTAIN,
+      "Bus-address activation requires explicit candidate-session resync",
+      address);
+  if (_mutationDiagnostic.cause.ok()) {
+    _mutationDiagnostic.cause = uncertain;
+  }
+  return uncertain;
 }
 
 // ============================================================================
@@ -1483,33 +1982,28 @@ Status EE871::writeBusAddress(uint8_t address) {
 // ============================================================================
 
 Status EE871::readMeasurementInterval(uint16_t& intervalDeciSeconds) {
-  // Interval can always be read, guard only applies to write
-  uint8_t low = 0;
-  uint8_t high = 0;
-  Status st = customRead(cmd::CUSTOM_INTERVAL_L, low);
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
+  Status guard;
+  if (!_normalOperationAllowed(guard)) {
+    return guard;
+  }
+  if (!hasGlobalInterval()) {
+    return Status::Error(Err::NOT_SUPPORTED, "Global interval not supported");
+  }
+  uint8_t values[2] = {};
+  Status st = customRead(cmd::CUSTOM_INTERVAL_L, values, 2U);
   if (!st.ok()) {
     return st;
   }
-  st = customRead(cmd::CUSTOM_INTERVAL_H, high);
-  if (!st.ok()) {
-    return st;
-  }
-  intervalDeciSeconds = static_cast<uint16_t>(low) | (static_cast<uint16_t>(high) << 8);
+  intervalDeciSeconds =
+      static_cast<uint16_t>(values[0]) |
+      (static_cast<uint16_t>(values[1]) << 8);
   return Status::Ok();
 }
 
 Status EE871::readCo2IntervalFactor(int8_t& factor) {
-  // Factor can always be read, guard only applies to write
-  uint8_t raw = 0;
-  Status st = customRead(cmd::CUSTOM_CO2_INTERVAL_FACTOR, raw);
-  if (!st.ok()) {
-    return st;
-  }
-  factor = static_cast<int8_t>(raw);
-  return Status::Ok();
-}
-
-Status EE871::writeCo2IntervalFactor(int8_t factor) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
   }
@@ -1520,7 +2014,33 @@ Status EE871::writeCo2IntervalFactor(int8_t factor) {
   if (!hasSpecificInterval()) {
     return Status::Error(Err::NOT_SUPPORTED, "Specific interval not supported");
   }
-  return customWrite(cmd::CUSTOM_CO2_INTERVAL_FACTOR, static_cast<uint8_t>(factor));
+  uint8_t raw = 0;
+  Status st = customRead(cmd::CUSTOM_CO2_INTERVAL_FACTOR, raw);
+  if (!st.ok()) {
+    return st;
+  }
+  factor = static_cast<int8_t>(raw);
+  return Status::Ok();
+}
+
+Status EE871::writeCo2IntervalFactor(int8_t factor) {
+  return _writeCo2IntervalFactorDirect(factor);
+}
+
+Status EE871::_writeCo2IntervalFactorDirect(int8_t factor) {
+  Status guard = _mutationAdmissionGuard();
+  if (!guard.ok()) {
+    return guard;
+  }
+  if (!hasSpecificInterval()) {
+    return Status::Error(Err::NOT_SUPPORTED, "Specific interval not supported");
+  }
+  const uint8_t value = static_cast<uint8_t>(factor);
+  return _writeVerifiedBytes(
+      MutationTarget::CO2_INTERVAL_FACTOR,
+      cmd::CUSTOM_CO2_INTERVAL_FACTOR,
+      &value,
+      1U);
 }
 
 // ============================================================================
@@ -1528,11 +2048,6 @@ Status EE871::writeCo2IntervalFactor(int8_t factor) {
 // ============================================================================
 
 Status EE871::readCo2Filter(uint8_t& filter) {
-  // Filter can always be read, guard only applies to write
-  return customRead(cmd::CUSTOM_FILTER_CO2, filter);
-}
-
-Status EE871::writeCo2Filter(uint8_t filter) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
   }
@@ -1543,21 +2058,53 @@ Status EE871::writeCo2Filter(uint8_t filter) {
   if (!hasFilterConfig()) {
     return Status::Error(Err::NOT_SUPPORTED, "Filter config not supported");
   }
-  return customWrite(cmd::CUSTOM_FILTER_CO2, filter);
+  return customRead(cmd::CUSTOM_FILTER_CO2, filter);
+}
+
+Status EE871::writeCo2Filter(uint8_t filter) {
+  return _writeCo2FilterDirect(filter);
+}
+
+Status EE871::_writeCo2FilterDirect(uint8_t filter) {
+  Status guard = _mutationAdmissionGuard();
+  if (!guard.ok()) {
+    return guard;
+  }
+  if (!hasFilterConfig()) {
+    return Status::Error(Err::NOT_SUPPORTED, "Filter config not supported");
+  }
+  return _writeVerifiedBytes(
+      MutationTarget::CO2_FILTER,
+      cmd::CUSTOM_FILTER_CO2,
+      &filter,
+      1U);
 }
 
 Status EE871::readOperatingMode(uint8_t& mode) {
-  // Mode can always be read, guard only applies to write
-  return customRead(cmd::CUSTOM_OPERATING_MODE, mode);
-}
-
-Status EE871::writeOperatingMode(uint8_t mode) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
   }
   Status guard;
   if (!_normalOperationAllowed(guard)) {
     return guard;
+  }
+  if (!hasLowPowerMode() && !hasE2Priority()) {
+    return Status::Error(Err::NOT_SUPPORTED, "Operating mode not supported");
+  }
+  return customRead(cmd::CUSTOM_OPERATING_MODE, mode);
+}
+
+Status EE871::writeOperatingMode(uint8_t mode) {
+  return _writeOperatingModeDirect(mode);
+}
+
+Status EE871::_writeOperatingModeDirect(uint8_t mode) {
+  Status guard = _mutationAdmissionGuard();
+  if (!guard.ok()) {
+    return guard;
+  }
+  if (!hasLowPowerMode() && !hasE2Priority()) {
+    return Status::Error(Err::NOT_SUPPORTED, "Operating mode not supported");
   }
   // Only bits 0 and 1 are valid.
   if (mode > 0x03) {
@@ -1570,7 +2117,11 @@ Status EE871::writeOperatingMode(uint8_t mode) {
   if ((mode & cmd::OPERATING_MODE_E2_PRIORITY_MASK) && !hasE2Priority()) {
     return Status::Error(Err::NOT_SUPPORTED, "E2 priority not supported");
   }
-  return customWrite(cmd::CUSTOM_OPERATING_MODE, mode);
+  return _writeVerifiedBytes(
+      MutationTarget::OPERATING_MODE,
+      cmd::CUSTOM_OPERATING_MODE,
+      &mode,
+      1U);
 }
 
 // ============================================================================
@@ -1578,17 +2129,6 @@ Status EE871::writeOperatingMode(uint8_t mode) {
 // ============================================================================
 
 Status EE871::readAutoAdjustStatus(bool& running) {
-  // Status can always be read, guard only applies to start
-  uint8_t raw = 0;
-  Status st = customRead(cmd::CUSTOM_AUTO_ADJUST, raw);
-  if (!st.ok()) {
-    return st;
-  }
-  running = (raw & cmd::AUTO_ADJUST_RUNNING_MASK) != 0;
-  return Status::Ok();
-}
-
-Status EE871::startAutoAdjust() {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
   }
@@ -1599,8 +2139,88 @@ Status EE871::startAutoAdjust() {
   if (!hasAutoAdjust()) {
     return Status::Error(Err::NOT_SUPPORTED, "Auto adjust not supported");
   }
-  // Writing 1 starts auto adjustment (cannot be stopped)
-  return customWrite(cmd::CUSTOM_AUTO_ADJUST, 0x01);
+  uint8_t raw = 0;
+  Status st = customRead(cmd::CUSTOM_AUTO_ADJUST, raw);
+  if (!st.ok()) {
+    return st;
+  }
+  running = (raw & cmd::AUTO_ADJUST_RUNNING_MASK) != 0;
+  return Status::Ok();
+}
+
+Status EE871::startAutoAdjust() {
+  return _startAutoAdjustDirect();
+}
+
+Status EE871::_startAutoAdjustDirect() {
+  Status guard = _mutationAdmissionGuard();
+  if (!guard.ok()) {
+    return guard;
+  }
+  if (!hasAutoAdjust()) {
+    return Status::Error(Err::NOT_SUPPORTED, "Auto adjust not supported");
+  }
+
+  uint8_t preObserved = 0;
+  Status st = customRead(cmd::CUSTOM_AUTO_ADJUST, preObserved);
+  if (!st.ok()) {
+    return st;
+  }
+  if ((preObserved & cmd::AUTO_ADJUST_RUNNING_MASK) != 0U) {
+    return Status::Error(Err::BUSY, "Auto-adjust already running");
+  }
+
+  const uint8_t requested = 1U;
+  st = _beginMutation(
+      MutationTarget::AUTO_ADJUST,
+      cmd::CUSTOM_AUTO_ADJUST,
+      &requested,
+      1U);
+  if (!st.ok()) {
+    return st;
+  }
+  _mutationDiagnostic.preObservedValue = preObserved;
+  _mutationDiagnostic.preObservedValueValid = true;
+
+  MutationProgress progress;
+  st = _writeCustomByteEffectful(
+      cmd::CUSTOM_AUTO_ADJUST,
+      requested,
+      MutationTarget::AUTO_ADJUST,
+      ClockWaitClass::WRITE_COMPLETION,
+      progress);
+  if (!st.ok()) {
+    return st;
+  }
+
+  uint8_t observed = 0;
+  st = customRead(cmd::CUSTOM_AUTO_ADJUST, observed);
+  if (!st.ok()) {
+    if (_mutationDiagnostic.cause.ok()) {
+      _mutationDiagnostic.cause = st;
+    }
+    _mutationDiagnostic.effect = MutationEffect::ACKNOWLEDGED;
+    _mutationDiagnostic.unresolved = true;
+    return st;
+  }
+  _mutationDiagnostic.elementsObserved = 1;
+  _mutationDiagnostic.observedValue = observed;
+  _mutationDiagnostic.observedValueValid = true;
+  if ((observed & cmd::AUTO_ADJUST_RUNNING_MASK) != 0U) {
+    _mutationDiagnostic.elementsMatched = 1;
+    _resolveMutation(MutationEffect::VERIFIED);
+    return Status::Ok();
+  }
+
+  Status uncertain = Status::Error(
+      Err::PERSISTENT_STATE_UNCERTAIN,
+      "Auto-adjust request acknowledged but not observed running");
+  if (_mutationDiagnostic.cause.ok()) {
+    _mutationDiagnostic.cause = uncertain;
+  }
+  _mutationDiagnostic.effect = MutationEffect::ACKNOWLEDGED;
+  _mutationDiagnostic.unresolved = true;
+  return uncertain;
 }
 
 // ============================================================================
@@ -1608,73 +2228,95 @@ Status EE871::startAutoAdjust() {
 // ============================================================================
 
 Status EE871::readCo2Offset(int16_t& offset) {
-  uint8_t low = 0;
-  uint8_t high = 0;
-  Status st = customRead(cmd::CUSTOM_CO2_OFFSET_L, low);
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
+  Status guard;
+  if (!_normalOperationAllowed(guard)) {
+    return guard;
+  }
+  if (!hasCo2OffsetGain()) {
+    return Status::Error(
+        Err::NOT_SUPPORTED, "CO2 offset/gain not supported");
+  }
+  uint8_t values[2] = {};
+  Status st = customRead(cmd::CUSTOM_CO2_OFFSET_L, values, 2U);
   if (!st.ok()) {
     return st;
   }
-  st = customRead(cmd::CUSTOM_CO2_OFFSET_H, high);
-  if (!st.ok()) {
-    return st;
-  }
-  offset = static_cast<int16_t>(static_cast<uint16_t>(low) | (static_cast<uint16_t>(high) << 8));
+  offset = static_cast<int16_t>(
+      static_cast<uint16_t>(values[0]) |
+      (static_cast<uint16_t>(values[1]) << 8));
   return Status::Ok();
 }
 
 Status EE871::writeCo2Offset(int16_t offset) {
-  const uint16_t raw = static_cast<uint16_t>(offset);
-  bool lowAccepted = false;
-  Status st = _customWriteDirect(cmd::CUSTOM_CO2_OFFSET_L,
-                                 static_cast<uint8_t>(raw & 0xFF),
-                                 &lowAccepted);
-  if (!st.ok()) {
-    if (lowAccepted) {
-      _markPersistentConfigDirty(st);
-    }
-    return st;
-  }
-  st = _customWriteDirect(cmd::CUSTOM_CO2_OFFSET_H, static_cast<uint8_t>(raw >> 8));
-  if (!st.ok()) {
-    _markPersistentConfigDirty(st);
-  }
-  return st;
+  return _writeCo2PairDirect(
+      MutationTarget::CO2_OFFSET,
+      cmd::CUSTOM_CO2_OFFSET_L,
+      static_cast<uint16_t>(offset));
 }
 
 Status EE871::readCo2Gain(uint16_t& gain) {
-  uint8_t low = 0;
-  uint8_t high = 0;
-  Status st = customRead(cmd::CUSTOM_CO2_GAIN_L, low);
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
+  Status guard;
+  if (!_normalOperationAllowed(guard)) {
+    return guard;
+  }
+  if (!hasCo2OffsetGain()) {
+    return Status::Error(
+        Err::NOT_SUPPORTED, "CO2 offset/gain not supported");
+  }
+  uint8_t values[2] = {};
+  Status st = customRead(cmd::CUSTOM_CO2_GAIN_L, values, 2U);
   if (!st.ok()) {
     return st;
   }
-  st = customRead(cmd::CUSTOM_CO2_GAIN_H, high);
-  if (!st.ok()) {
-    return st;
-  }
-  gain = static_cast<uint16_t>(low) | (static_cast<uint16_t>(high) << 8);
+  gain = static_cast<uint16_t>(values[0]) |
+         (static_cast<uint16_t>(values[1]) << 8);
   return Status::Ok();
 }
 
 Status EE871::writeCo2Gain(uint16_t gain) {
-  bool lowAccepted = false;
-  Status st = _customWriteDirect(cmd::CUSTOM_CO2_GAIN_L,
-                                 static_cast<uint8_t>(gain & 0xFF),
-                                 &lowAccepted);
-  if (!st.ok()) {
-    if (lowAccepted) {
-      _markPersistentConfigDirty(st);
-    }
-    return st;
+  return _writeCo2PairDirect(
+      MutationTarget::CO2_GAIN,
+      cmd::CUSTOM_CO2_GAIN_L,
+      gain);
+}
+
+Status EE871::_writeCo2PairDirect(
+    MutationTarget target,
+    uint8_t firstAddress,
+    uint16_t value) {
+  Status guard = _mutationAdmissionGuard();
+  if (!guard.ok()) {
+    return guard;
   }
-  st = _customWriteDirect(cmd::CUSTOM_CO2_GAIN_H, static_cast<uint8_t>(gain >> 8));
-  if (!st.ok()) {
-    _markPersistentConfigDirty(st);
+  if (!hasCo2OffsetGain()) {
+    return Status::Error(
+        Err::NOT_SUPPORTED, "CO2 offset/gain not supported");
   }
-  return st;
+  const uint8_t values[2] = {
+      static_cast<uint8_t>(value & 0xFFU),
+      static_cast<uint8_t>(value >> 8)};
+  return _writeVerifiedBytes(
+      target, firstAddress, values, 2U);
 }
 
 Status EE871::readCo2CalPoints(uint16_t& lower, uint16_t& upper) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
+  Status guard;
+  if (!_normalOperationAllowed(guard)) {
+    return guard;
+  }
+  if (!hasCo2AdjustmentPoints()) {
+    return Status::Error(
+        Err::NOT_SUPPORTED, "CO2 adjustment points not supported");
+  }
   uint8_t buf[4] = {0};
   Status st = customRead(cmd::CUSTOM_CO2_POINT_L_L, buf, 4);
   if (!st.ok()) {
@@ -1846,9 +2488,8 @@ Status EE871::_writeCommandRaw(
     uint8_t addressByte,
     uint8_t dataByte,
     ClockWaitClass completionClass,
-    WriteProgress* progressOut) {
-  WriteProgress progress;
-  _lastWriteProgress = progress;
+    MutationProgress* progressOut) {
+  MutationProgress progress;
 
   Status st = _e2Start(_config);
   if (!st.ok()) {
@@ -1858,8 +2499,7 @@ Status EE871::_writeCommandRaw(
     return st;
   }
 
-  auto publishProgress = [this, progressOut](const WriteProgress& value) {
-    _lastWriteProgress = value;
+  auto publishProgress = [progressOut](const MutationProgress& value) {
     if (progressOut != nullptr) {
       *progressOut = value;
     }
@@ -1914,7 +2554,6 @@ Status EE871::_writeCommandRaw(
   }
 
   progress.pecTransferred = true;
-  progress.effect = WriteEffect::INDETERMINATE;
 
   const bool hasLongCompletion =
       completionClass != ClockWaitClass::NORMAL_BIT;
@@ -1948,7 +2587,6 @@ Status EE871::_writeCommandRaw(
     return st;
   }
   if (!acked) {
-    progress.effect = WriteEffect::NO_EFFECT;
     const Status cleanupStatus = hasLongCompletion
         ? _e2Stop(_config, completionClass, &completionDeadline)
         : _e2Stop(_config, ClockWaitClass::NORMAL_BIT, nullptr);
@@ -1959,7 +2597,6 @@ Status EE871::_writeCommandRaw(
   }
 
   progress.requestAcknowledged = true;
-  progress.effect = WriteEffect::ACKNOWLEDGED;
   st = _e2Stop(
       _config, completionClass, &completionDeadline);
   progress.completionElapsedUs = completionDeadline.elapsedUs;
@@ -1989,11 +2626,11 @@ Status EE871::_writeCommandTracked(
     uint8_t addressByte,
     uint8_t dataByte,
     ClockWaitClass completionClass,
-    WriteProgress* progress) {
+    MutationProgress* progress) {
   Status guard;
   if (!_normalOperationAllowed(guard)) {
     if (progress != nullptr) {
-      *progress = WriteProgress{};
+      *progress = MutationProgress{};
     }
     return guard;
   }

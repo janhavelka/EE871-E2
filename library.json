@@ -1,6 +1,6 @@
 {
   "name": "ee871-e2",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Production-oriented EE871 CO2 sensor driver for GPIO-style E2 bus signaling.",
   "keywords": [
     "ee871",

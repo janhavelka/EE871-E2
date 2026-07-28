@@ -1,8 +1,8 @@
 # EE871-E2 Hardware Validation Matrix
 
 Created: 2026-06-01
-Last updated: 2026-06-02
-Branch: `hardening/ee871-e2-industry-readiness`
+Last updated: 2026-07-28
+Current branch: `feature/ee871-hardening-series`
 
 This matrix started as a hardware validation plan and now also records completed
 bench evidence where available. Default status remains `NOT RUN` until a test is
@@ -26,6 +26,8 @@ Current evidence summary:
 - ESP32-S2 hardware HIL: not recorded.
 - Pure ESP-IDF hardware HIL: not recorded.
 - Power-cycle persistence and stuck-line fault/jig validation: not recorded.
+- No Prompt 04 checked-sample, mutation-effect/resync, bus-address,
+  auto-adjust, or stopped-state persistence scenario was run on hardware.
 
 Allowed statuses:
 
@@ -69,6 +71,8 @@ status
 read
 co2fast
 co2avg
+samplefast
+sampleavg
 features
 caps
 fw
@@ -89,12 +93,17 @@ Notes:
   read-only: tracked reads update driver health, and `recover` may issue bus
   recovery clocks before probing.
 - `probe` is diagnostic-only and should not change health counters.
-- `status` can trigger a new EE871 measurement when the previous sample is old.
-- `read` reads the CO2 averaged value; `co2fast` reads MV3; `co2avg` reads MV4.
-- `dirty` is state-only and should report `persistentConfigDirty: no` on a
-  clean startup and after normal safe commands.
-- `resync` calls `resyncPersistentConfig()`. It performs verified persistent
-  configuration reads and must only clear dirty state when that API returns OK.
+- `status` may trigger a new EE871 measurement under the documented device
+  conditions.
+- `read` and `co2avg` read raw MV4; `co2fast` reads raw MV3.
+  `sampleavg`/`samplefast` perform the checked value-then-status procedure and
+  may trigger the next measurement.
+- `dirty` is state-only and should report no unresolved mutation on a clean
+  startup and after normal safe commands. It also prints target, effect,
+  element progress, observed values, and cause.
+- `resync` calls `resyncPersistentConfig()`. It performs target-specific or
+  full capability-aware coherence reads and must not discard unresolved state
+  on failure.
 - Normal `probe`, `read`, `selftest`, `stress`, and `stress_mix` commands should
   not create persistent dirty state.
 - Record raw command output and timestamps for each board/sensor combination.
@@ -140,11 +149,19 @@ Warnings before persistent writes:
 - Persistent writes can have long delays and flash/endurance implications.
 - Only run persistent-write tests on a bench sensor where configuration changes
   are acceptable and the original values have been recorded.
-- `reg write <addr> <value>` can write arbitrary custom memory, including
-  persistent/configuration addresses; treat it as a bench-only operation.
-- After any failed multi-byte persistent write, run `dirty` before trusting
-  persistent configuration. Use `resync` only to clear dirty state after the
-  driver confirms persistent fields are readable and coherent.
+- `reg write <addr> <value>` remains bench-only. The library rejects documented
+  read-only and unsafe pair/calibration addresses and routes address and
+  auto-adjust targets through their typed safety procedure, but other writable
+  custom bytes can still change device state.
+- After any failed or acknowledged-but-unverified mutation, run `dirty` before
+  trusting configuration. Further mutations must be rejected while unresolved.
+  Use `resync` to establish the actual target state; compare that state with
+  the operator/application baseline before continuing.
+- An acknowledged bus-address request requires the explicit end, authorized
+  power procedure if applicable, candidate-address configuration, begin, and
+  resync flow. Do not scan or guess addresses.
+- Auto-adjust cannot be cancelled and must not be replayed automatically. A
+  later not-running status may require the narrow operator acknowledgement.
 - Induce or observe dirty state through the fake/native tests or dedicated test
   firmware unless deliberately running the bench persistent-write matrix below.
 - The HIL runner requires both `--include-persistent-writes` and
@@ -286,6 +303,8 @@ Stuck-line fault/jig tests were not run.
 | F-11 | Mixed read stress | S2, S3 | `dirty`, `stress_mix 100`, `dirty` | No hangs; failures, if any, are bounded and health counters match output; persistent dirty remains clean. | NOT RUN | Stress summary and dirty output. |
 | F-12 | Repeated CO2 read stress | S2, S3 | `dirty`, `stress 100`, `dirty` | No hangs; CO2 read success rate and health counters are recorded; persistent dirty remains clean. | PASS | Safe HIL `stress 50`: 50/50, 0 errors; extended HIL `stress 500`: 500/500, 0 errors; dirty stayed clean. |
 | F-13 | Dirty resync command on coherent config | S2, S3 | `dirty`, `resync`, `dirty` | `resync` returns precise status; if OK, dirty remains or becomes clean only through `resyncPersistentConfig()`. | PASS | Manual resync artifact: pre dirty clean, `resync` Status OK, post dirty clean. |
+| F-14 | Checked averaged sample | S2, S3 | `sampleavg`, `drv` | Output retains value/status/error-code attempt and validity evidence; sensor-domain error does not invent transport failure. | NOT RUN | Complete checked output and health counters. |
+| F-15 | Checked fast sample | S2, S3 | `samplefast`, `drv` | Output retains value/status/error-code attempt and validity evidence; sensor-domain error does not invent transport failure. | NOT RUN | Complete checked output and health counters. |
 
 ## Persistent Configuration Matrix
 
@@ -298,7 +317,12 @@ Run these only on a bench sensor after recording original values.
 | P-03 | CO2 offset write/readback | S2, S3 | `offset`, `dirty`, record value, `offset <bench_value>`, `offset`, `dirty` | Write returns OK and readback matches; dirty diagnostics checked on failure. | NOT RUN | Read-only baseline/final value recorded as `0 ppm`; no calibration write was performed. |
 | P-04 | CO2 gain write/readback | S2, S3 | `gain`, `dirty`, record value, `gain <bench_value>`, `gain`, `dirty` | Write returns OK and readback matches; dirty diagnostics checked on failure. | NOT RUN | Read-only baseline/final value recorded as `32768`; no calibration write was performed. |
 | P-05 | Part name write/readback | S2, S3 | `partname`, `dirty`, record value, `partname <bench_text>`, `partname`, `dirty` | Write returns OK and readback matches; dirty diagnostics checked on failure. | NOT RUN | Before/write/after output plus dirty diagnostics. |
-| P-06 | Bus address write | S2, S3 | `addr`, record value, `addr <bench_addr>`, power cycle, `scan`; then rebuild/reconfigure firmware for the new address or use a dedicated test wrapper | Address change behaves as documented and does not retarget the current session until power cycle. | NOT RUN | Address read/scan output, configured-address follow-up output. |
+| P-06 | Bus address candidate reconciliation | S2, S3 | Record address/config, issue one authorized candidate write, inspect `dirty`, `end`, perform documented power procedure if required, configure candidate, `begin`, `resync`, `dirty` | Acknowledgement returns unresolved uncertainty; no old-address readback or address scan occurs. Candidate-session resync verifies or coherently reconciles the address. | NOT RUN | Original/candidate config, mutation diagnostic, power procedure, begin/resync output. |
+| P-07 | Verified mutation diagnostic | S2, S3 | On an approved reversible bench setting, record baseline, write an approved value, `dirty`, restore baseline, `dirty` | Successful target-specific verification reports exact requested/acknowledged/observed/matched counts and `VERIFIED` without unresolved state. | NOT RUN | Before/write/after values and full mutation diagnostic. |
+| P-08 | Unresolved mutation and resync | S2, S3 | Dedicated fault jig/test firmware injects a post-acceptance failure, `dirty`, attempt another mutation, remove fault, `resync`, `dirty` | First cause and intent remain; further mutation is bus-silently rejected; successful target resync records `VERIFIED` or `RESYNCHRONIZED`. | NOT RUN | Fault setup, line activity, exact diagnostic before/after, target readback. |
+| P-09 | Auto-adjust pre/post observation | S2, S3 | Dedicated approved maintenance run: inspect status, `autoadj start`, `dirty`; do not repeat automatically | Already-running returns BUSY without a write. A new request records pre/post evidence; ambiguous not-running remains unresolved. | NOT RUN | Explicit operator authorization, status evidence, mutation diagnostic. |
+| P-10 | Auto-adjust ambiguous operator acknowledgement | S2, S3 | Only after P-09 records successful post-failure not-running observation, call `acknowledgeAutoAdjustUncertainty()` from dedicated test firmware | Cache-only acknowledgement performs no E2 I/O, records `OPERATOR_ACKNOWLEDGED`, and clears only AUTO_ADJUST uncertainty. | NOT RUN | Line trace/counters and diagnostic before/after. |
+| P-11 | Uncertainty survives stopped/re-begin state | S2, S3 | Create approved unresolved state in dedicated test firmware, `end`, failed/repeated begin, successful candidate begin, inspect diagnostic, resync | Session/capability state resets but unresolved target/cause/intent survive on the same object until reconciliation. | NOT RUN | Diagnostic after each lifecycle transition and final resync. |
 
 ## Fault And Recovery Matrix
 

@@ -1,5 +1,5 @@
 ﻿#!/usr/bin/env python3
-"""Synchronize Version.h from library.json and expose build metadata via macros.
+"""Synchronize release metadata from library.json and expose build macros.
 
 Default behavior:
 - when run by PlatformIO as an extra script: sync generated headers if needed and
@@ -8,7 +8,7 @@ Default behavior:
 
 Standalone commands:
   sync
-      Regenerate generated headers only if source metadata changed.
+      Regenerate generated headers and synchronized package/docs metadata.
   check
       Exit with code 1 when generated headers are out of date.
   bump patch|minor|major
@@ -355,6 +355,20 @@ def _render_dependency_versions_header(project_root: Path, namespace: str) -> Op
     return "\n".join(lines)
 
 
+def _replace_version_field(
+    content: str,
+    pattern: str,
+    replacement: str,
+    path: Path,
+) -> str:
+    updated, count = re.subn(pattern, replacement, content, flags=re.MULTILINE)
+    if count != 1:
+        raise RuntimeError(
+            f"Expected exactly one version field in {path}; found {count}"
+        )
+    return updated
+
+
 def _expected_outputs(project_root: Path) -> Dict[Path, str]:
     library_json = project_root / "library.json"
     library_data = _load_library_json(library_json)
@@ -365,6 +379,24 @@ def _expected_outputs(project_root: Path) -> Dict[Path, str]:
     outputs = {
         namespace_dir / "Version.h": _render_version_header(namespace, version),
     }
+
+    idf_component = project_root / "idf_component.yml"
+    if idf_component.exists():
+        outputs[idf_component] = _replace_version_field(
+            _read_text(idf_component),
+            r'^(version:\s*)["\']?[^"\'\r\n]+["\']?\s*$',
+            rf'\g<1>"{version}"',
+            idf_component,
+        )
+
+    doxyfile = project_root / "Doxyfile"
+    if doxyfile.exists():
+        outputs[doxyfile] = _replace_version_field(
+            _read_text(doxyfile),
+            r'^(PROJECT_NUMBER\s*=\s*)"?[^"\r\n]*"?\s*$',
+            rf'\g<1>"{version}"',
+            doxyfile,
+        )
 
     dependency_header = _render_dependency_versions_header(project_root, namespace)
     if dependency_header is not None:
