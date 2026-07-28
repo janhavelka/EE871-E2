@@ -129,6 +129,20 @@ schema, task, queue, pin, or persistence implementation was changed.
 No HIL, physical sensor, waveform, network, Cloud, or long-run validation was
 performed for Prompt 03.
 
+## Post-Publication Audit Correction
+
+A fresh audit of published Prompt 03 commit `82b656e` found no production-code
+or test defect. It corrected one stale guideline sentence that described the
+status-read measurement trigger as unconditional. `AGENTS.md` now consistently
+states that status evaluates the last measured value and may start the next
+measurement sequence under the documented conditions.
+
+The correction changes no API, timing, transport, health, persistence,
+firmware, product, example, build-profile, or version behavior. The full
+Prompt 03 software validation set was rerun after the wording correction and
+remained passing. `idf.py` was still unavailable, and no HIL or physical
+hardware validation was performed.
+
 ## Explicit Deferrals
 
 - Prompt 04 owns persistent calibration capability guards, final examples,

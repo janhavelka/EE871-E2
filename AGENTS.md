@@ -215,8 +215,8 @@ Rules:
 - Status reads are side-effecting: reading status can start or trigger a new
   measurement and reset timing under documented conditions.
 - For checked CO2 sample helpers, read the required measured value first and
-  read status second so the status evaluates the last measured value and starts
-  the next measurement sequence.
+  read status second so the status evaluates the last measured value and may
+  start the next measurement sequence under the documented conditions.
 - Do not read status only to make a raw value API look safer. If a helper reads
   status, the helper name and documentation must make that explicit.
 - Warm-up state, triggered-measurement delay, stale-data policy, unsupported
