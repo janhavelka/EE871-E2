@@ -52,7 +52,13 @@ public:
     _lineWrites = 0;
     _lineReads = 0;
     _transactionCount = 0;
+    _currentTransferIndex = 0;
     _devicePresent = true;
+    _group = EE871::cmd::SENSOR_GROUP_ID;
+    _subgroup = EE871::cmd::SENSOR_SUBGROUP_ID;
+    _availableMeasurements = EE871::cmd::AVAILABLE_MEAS_MASK;
+    _failAtTransferEnabled = false;
+    _failAtTransferIndex = 0;
     _holdSclLow = false;
     _sdaStuckLow = false;
     _sdaStuckHigh = false;
@@ -99,6 +105,14 @@ public:
     for (size_t i = 0; i < EE871::cmd::CUSTOM_MEMORY_SIZE; ++i) {
       _memory[i] = 0;
     }
+    _memory[EE871::cmd::CUSTOM_ADJUSTMENT_SUPPORT] =
+        EE871::cmd::FEATURE_CO2_CUSTOM_ADJUSTMENT;
+    _memory[EE871::cmd::CUSTOM_ADJUSTMENT_POINT_SUPPORT] =
+        EE871::cmd::FEATURE_CO2_ADJUSTMENT_POINT;
+    _memory[EE871::cmd::CUSTOM_ADJUSTMENT_TIME_GENERAL_SUPPORT] =
+        EE871::cmd::FEATURE_CUSTOM_ADJUSTMENT_TIME_GENERAL;
+    _memory[EE871::cmd::CUSTOM_ADJUSTMENT_TIME_SUPPORT] =
+        EE871::cmd::FEATURE_CO2_ADJUSTMENT_TIME;
     _memory[EE871::cmd::CUSTOM_OPERATING_FUNCTIONS] =
         EE871::cmd::FEATURE_SERIAL_NUMBER |
         EE871::cmd::FEATURE_PART_NAME |
@@ -217,6 +231,46 @@ public:
   }
 
   void setDevicePresent(bool present) { _devicePresent = present; }
+  void setIdentity(
+      uint16_t group,
+      uint8_t subgroup,
+      uint8_t availableMeasurements) {
+    _group = group;
+    _subgroup = subgroup;
+    _availableMeasurements = availableMeasurements;
+  }
+  void setGroup(uint16_t group) { _group = group; }
+  void setSubgroup(uint8_t subgroup) { _subgroup = subgroup; }
+  void setAvailableMeasurements(uint8_t bits) {
+    _availableMeasurements = bits;
+  }
+  void setCapabilities(
+      uint8_t customAdjustmentSupport,
+      uint8_t adjustmentPointSupport,
+      uint8_t adjustmentTimeGeneralSupport,
+      uint8_t adjustmentTimeSupport,
+      uint8_t operatingFunctions,
+      uint8_t operatingModeSupport,
+      uint8_t specialFeatures) {
+    _memory[EE871::cmd::CUSTOM_ADJUSTMENT_SUPPORT] =
+        customAdjustmentSupport;
+    _memory[EE871::cmd::CUSTOM_ADJUSTMENT_POINT_SUPPORT] =
+        adjustmentPointSupport;
+    _memory[EE871::cmd::CUSTOM_ADJUSTMENT_TIME_GENERAL_SUPPORT] =
+        adjustmentTimeGeneralSupport;
+    _memory[EE871::cmd::CUSTOM_ADJUSTMENT_TIME_SUPPORT] =
+        adjustmentTimeSupport;
+    _memory[EE871::cmd::CUSTOM_OPERATING_FUNCTIONS] =
+        operatingFunctions;
+    _memory[EE871::cmd::CUSTOM_OPERATING_MODE_SUPPORT] =
+        operatingModeSupport;
+    _memory[EE871::cmd::CUSTOM_SPECIAL_FEATURES] =
+        specialFeatures;
+  }
+  void failAtTransferIndex(uint32_t index) {
+    _failAtTransferIndex = index;
+    _failAtTransferEnabled = true;
+  }
 
   void setHoldSclLow(bool hold) {
     const bool wasHigh = physicalSclHigh();
@@ -529,6 +583,7 @@ private:
       _intervalTransactionStartedEarly = true;
     }
     const size_t index = _transactionCount;
+    _currentTransferIndex = static_cast<uint32_t>(index);
     ++_transactionCount;
     if (index < MAX_RECORDED_TRANSACTIONS) {
       _transactionMain[index] = 0;
@@ -717,6 +772,12 @@ private:
     if (!_devicePresent) {
       return false;
     }
+    if (_phase == Phase::ACK_CONTROL &&
+        _failAtTransferEnabled &&
+        _currentTransferIndex == _failAtTransferIndex) {
+      _failAtTransferEnabled = false;
+      return false;
+    }
     if (_phase == Phase::ACK_PEC && _nackNextFinalAck) {
       _nackNextFinalAck = false;
       _finalAckAccepted = false;
@@ -756,13 +817,13 @@ private:
     const uint8_t main = mainCommand();
     switch (main) {
       case EE871::cmd::MAIN_TYPE_LO:
-        return static_cast<uint8_t>(EE871::cmd::SENSOR_GROUP_ID & 0xFF);
+        return static_cast<uint8_t>(_group & 0xFF);
       case EE871::cmd::MAIN_TYPE_HI:
-        return static_cast<uint8_t>(EE871::cmd::SENSOR_GROUP_ID >> 8);
+        return static_cast<uint8_t>(_group >> 8);
       case EE871::cmd::MAIN_TYPE_SUB:
-        return EE871::cmd::SENSOR_SUBGROUP_ID;
+        return _subgroup;
       case EE871::cmd::MAIN_AVAIL_MEAS:
-        return EE871::cmd::AVAILABLE_MEAS_MASK;
+        return _availableMeasurements;
       case EE871::cmd::MAIN_STATUS:
         return _statusByte;
       case EE871::cmd::MAIN_MV3_LO:
@@ -856,7 +917,13 @@ private:
   uint32_t _lineWrites = 0;
   uint32_t _lineReads = 0;
   uint32_t _transactionCount = 0;
+  uint32_t _currentTransferIndex = 0;
   bool _devicePresent = true;
+  uint16_t _group = 0;
+  uint8_t _subgroup = 0;
+  uint8_t _availableMeasurements = 0;
+  bool _failAtTransferEnabled = false;
+  uint32_t _failAtTransferIndex = 0;
   bool _holdSclLow = false;
   bool _sdaStuckLow = false;
   bool _sdaStuckHigh = false;

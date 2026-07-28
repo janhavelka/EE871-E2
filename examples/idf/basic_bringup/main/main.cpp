@@ -350,6 +350,7 @@ const char* errToStr(EE871::Err err) {
     case Err::OUT_OF_RANGE: return "OUT_OF_RANGE";
     case Err::NOT_SUPPORTED: return "NOT_SUPPORTED";
     case Err::VERIFY_MISMATCH: return "VERIFY_MISMATCH";
+    case Err::OFFLINE: return "OFFLINE";
     default: return "UNKNOWN";
   }
 }

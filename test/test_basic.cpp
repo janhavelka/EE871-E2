@@ -19,8 +19,17 @@ static_assert(!std::is_copy_assignable_v<EE871::EE871>);
 static_assert(!std::is_move_constructible_v<EE871::EE871>);
 static_assert(!std::is_move_assignable_v<EE871::EE871>);
 static_assert(static_cast<uint8_t>(Err::VERIFY_MISMATCH) == 15);
+static_assert(static_cast<uint8_t>(Err::OFFLINE) == 16);
+static_assert(static_cast<uint8_t>(BeginPolicy::REQUIRE_PRESENT) == 0);
+static_assert(static_cast<uint8_t>(BeginPolicy::ALLOW_ABSENT) == 1);
 static_assert(static_cast<uint8_t>(OperationKind::CONTROL_READ) == 0);
 static_assert(static_cast<uint8_t>(OperationKind::BUS_RESET) == 8);
+static_assert(static_cast<uint8_t>(OperationKind::BEGIN_REQUIRE_PRESENT) == 9);
+static_assert(static_cast<uint8_t>(OperationKind::BEGIN_ALLOW_ABSENT) == 10);
+static_assert(static_cast<uint8_t>(OperationKind::PROBE_IDENTITY) == 11);
+static_assert(
+    static_cast<uint8_t>(
+        OperationKind::RECOVER_IDENTITY_AND_CAPABILITIES) == 12);
 
 void setUp() {}
 void tearDown() {}
@@ -29,6 +38,14 @@ static Status beginFakeDevice(EE871::EE871& dev,
                               FakeE2Transport& fake,
                               uint8_t offlineThreshold = 5) {
   Config cfg = fake.makeConfig(offlineThreshold);
+  return dev.begin(cfg);
+}
+
+static Status beginAllowAbsent(EE871::EE871& dev,
+                               FakeE2Transport& fake,
+                               uint8_t offlineThreshold = 5) {
+  Config cfg = fake.makeConfig(offlineThreshold);
+  cfg.beginPolicy = BeginPolicy::ALLOW_ABSENT;
   return dev.begin(cfg);
 }
 
@@ -47,6 +64,26 @@ static void assertDirtyWithOriginalError(const EE871::EE871& dev, const Status& 
   TEST_ASSERT_TRUE(dev.getSettings(snap).ok());
   TEST_ASSERT_TRUE(snap.persistentConfigDirty);
   assertSameStatus(st, snap.persistentConfigDirtyError);
+}
+
+static void assertIdentityInvalid(const DeviceIdentity& identity) {
+  TEST_ASSERT_FALSE(identity.valid);
+  TEST_ASSERT_FALSE(identity.co2Available);
+  TEST_ASSERT_EQUAL_UINT16(0, identity.group);
+  TEST_ASSERT_EQUAL_UINT8(0, identity.subgroup);
+  TEST_ASSERT_EQUAL_UINT8(0, identity.availableMeasurements);
+}
+
+static void assertCapabilitiesInvalid(
+    const CapabilitySnapshot& capabilities) {
+  TEST_ASSERT_FALSE(capabilities.valid);
+  TEST_ASSERT_EQUAL_UINT8(0, capabilities.customAdjustmentSupport);
+  TEST_ASSERT_EQUAL_UINT8(0, capabilities.adjustmentPointSupport);
+  TEST_ASSERT_EQUAL_UINT8(0, capabilities.adjustmentTimeGeneralSupport);
+  TEST_ASSERT_EQUAL_UINT8(0, capabilities.adjustmentTimeSupport);
+  TEST_ASSERT_EQUAL_UINT8(0, capabilities.operatingFunctions);
+  TEST_ASSERT_EQUAL_UINT8(0, capabilities.operatingModeSupport);
+  TEST_ASSERT_EQUAL_UINT8(0, capabilities.specialFeatures);
 }
 
 void test_status_ok() {
@@ -86,6 +123,9 @@ void test_config_defaults() {
   TEST_ASSERT_NULL(cfg.delayMs);
   TEST_ASSERT_NULL(cfg.yield);
   TEST_ASSERT_EQUAL_UINT8(1, cfg.longDelaySliceMs);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(BeginPolicy::REQUIRE_PRESENT),
+      static_cast<uint8_t>(cfg.beginPolicy));
 }
 
 void test_default_timing_config_operates_on_healthy_bus() {
@@ -200,6 +240,12 @@ void test_default_health_aliases() {
   TEST_ASSERT_EQUAL_UINT32(0u, snap.totalSuccess);
   TEST_ASSERT_FALSE(snap.persistentConfigDirty);
   TEST_ASSERT_TRUE(snap.persistentConfigDirtyError.ok());
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(BeginPolicy::REQUIRE_PRESENT),
+      static_cast<uint8_t>(snap.beginPolicy));
+  TEST_ASSERT_TRUE(snap.beginProbeStatus.ok());
+  assertIdentityInvalid(snap.identity);
+  assertCapabilitiesInvalid(snap.capabilities);
   TEST_ASSERT_FALSE(dev.persistentConfigDirty());
   TEST_ASSERT_TRUE(dev.persistentConfigDirtyError().ok());
 
@@ -285,6 +331,296 @@ void test_fake_transport_begin_succeeds() {
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::READY),
                           static_cast<uint8_t>(dev.state()));
   TEST_ASSERT_TRUE(dev.hasGlobalInterval());
+}
+
+void test_invalid_begin_policy_is_bus_silent_invalid_config() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  Config cfg = fake.makeConfig();
+  cfg.beginPolicy = static_cast<BeginPolicy>(0xFF);
+  fake.resetActivityCounters();
+  fake.resetElapsed();
+  OperationTimingBound bound;
+
+  const Status queryStatus = EE871::EE871::operationTimingBound(
+      cfg, OperationKind::BEGIN_REQUIRE_PRESENT, 1, bound);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(Err::INVALID_CONFIG),
+      static_cast<uint8_t>(queryStatus.code));
+
+  const Status st = dev.begin(cfg);
+
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(Err::INVALID_CONFIG),
+      static_cast<uint8_t>(st.code));
+  TEST_ASSERT_FALSE(dev.isInitialized());
+  TEST_ASSERT_EQUAL_UINT32(0, fake.lineReads());
+  TEST_ASSERT_EQUAL_UINT32(0, fake.lineWrites());
+  TEST_ASSERT_EQUAL_UINT64(0, fake.elapsedUs());
+}
+
+void test_strict_and_optional_absent_begin_contracts() {
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    fake.setDevicePresent(false);
+
+    const Status st = beginFakeDevice(dev, fake);
+
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::NACK),
+        static_cast<uint8_t>(st.code));
+    TEST_ASSERT_FALSE(dev.isInitialized());
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(DriverState::UNINIT),
+        static_cast<uint8_t>(dev.state()));
+  }
+
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    fake.setDevicePresent(false);
+
+    TEST_ASSERT_TRUE(beginAllowAbsent(dev, fake, 3).ok());
+    TEST_ASSERT_TRUE(dev.isInitialized());
+    TEST_ASSERT_FALSE(dev.isOnline());
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(DriverState::OFFLINE),
+        static_cast<uint8_t>(dev.state()));
+    TEST_ASSERT_EQUAL_UINT8(3, dev.consecutiveFailures());
+    TEST_ASSERT_EQUAL_UINT32(0, dev.totalFailures());
+    TEST_ASSERT_EQUAL_UINT32(0, dev.totalSuccess());
+    TEST_ASSERT_TRUE(dev.lastError().ok());
+    TEST_ASSERT_EQUAL_UINT32(0, dev.lastErrorMs());
+    assertIdentityInvalid(dev.identity());
+    assertCapabilitiesInvalid(dev.capabilities());
+    TEST_ASSERT_EQUAL_UINT32(1, fake.transactionCount());
+
+    const SettingsSnapshot settings = dev.getSettings();
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(BeginPolicy::ALLOW_ABSENT),
+        static_cast<uint8_t>(settings.beginPolicy));
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::NACK),
+        static_cast<uint8_t>(settings.beginProbeStatus.code));
+    assertIdentityInvalid(settings.identity);
+    assertCapabilitiesInvalid(settings.capabilities);
+  }
+}
+
+void test_allow_absent_rejects_non_absence_transport_faults() {
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    fake.setStretch(
+        StretchPhase::DATA_BIT, cmd::BIT_TIMEOUT_MAX_US + 5U);
+    const Status st = beginAllowAbsent(dev, fake);
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::TIMEOUT),
+        static_cast<uint8_t>(st.code));
+    TEST_ASSERT_FALSE(dev.isInitialized());
+  }
+
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    fake.setHoldSclLow(true);
+    const Status st = beginAllowAbsent(dev, fake);
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::BUS_STUCK),
+        static_cast<uint8_t>(st.code));
+    TEST_ASSERT_FALSE(dev.isInitialized());
+  }
+
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    fake.setSdaStuckLow(true);
+    const Status st = beginAllowAbsent(dev, fake);
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::BUS_STUCK),
+        static_cast<uint8_t>(st.code));
+    TEST_ASSERT_FALSE(dev.isInitialized());
+  }
+
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    fake.setCorruptReadPec(true);
+    const Status st = beginAllowAbsent(dev, fake);
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::PEC_MISMATCH),
+        static_cast<uint8_t>(st.code));
+    TEST_ASSERT_FALSE(dev.isInitialized());
+  }
+}
+
+void test_all_lifecycle_identity_paths_fail_closed() {
+  struct IdentityCase {
+    uint16_t group;
+    uint8_t subgroup;
+    uint8_t availableMeasurements;
+  };
+  const IdentityCase cases[] = {
+      {static_cast<uint16_t>(cmd::SENSOR_GROUP_ID + 1U),
+       cmd::SENSOR_SUBGROUP_ID,
+       cmd::AVAILABLE_MEAS_MASK},
+      {cmd::SENSOR_GROUP_ID,
+       static_cast<uint8_t>(cmd::SENSOR_SUBGROUP_ID + 1U),
+       cmd::AVAILABLE_MEAS_MASK},
+      {cmd::SENSOR_GROUP_ID, cmd::SENSOR_SUBGROUP_ID, 0},
+  };
+
+  for (const IdentityCase& identityCase : cases) {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    fake.setIdentity(
+        identityCase.group,
+        identityCase.subgroup,
+        identityCase.availableMeasurements);
+
+    const Status st = beginAllowAbsent(dev, fake);
+
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::NOT_SUPPORTED),
+        static_cast<uint8_t>(st.code));
+    TEST_ASSERT_FALSE(dev.isInitialized());
+    assertIdentityInvalid(dev.identity());
+    assertCapabilitiesInvalid(dev.capabilities());
+  }
+
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    const SettingsSnapshot before = dev.getSettings();
+
+    for (const IdentityCase& identityCase : cases) {
+      fake.setIdentity(
+          identityCase.group,
+          identityCase.subgroup,
+          identityCase.availableMeasurements);
+      const Status st = dev.probe();
+      TEST_ASSERT_EQUAL_UINT8(
+          static_cast<uint8_t>(Err::NOT_SUPPORTED),
+          static_cast<uint8_t>(st.code));
+      TEST_ASSERT_EQUAL_UINT8(
+          static_cast<uint8_t>(before.state),
+          static_cast<uint8_t>(dev.state()));
+      TEST_ASSERT_EQUAL_UINT32(before.totalFailures, dev.totalFailures());
+      TEST_ASSERT_EQUAL_UINT32(before.totalSuccess, dev.totalSuccess());
+      TEST_ASSERT_TRUE(dev.identity().valid);
+      TEST_ASSERT_TRUE(dev.capabilities().valid);
+    }
+  }
+
+  for (const IdentityCase& identityCase : cases) {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    fake.setDevicePresent(false);
+    TEST_ASSERT_TRUE(beginAllowAbsent(dev, fake).ok());
+    fake.setDevicePresent(true);
+    fake.setIdentity(
+        identityCase.group,
+        identityCase.subgroup,
+        identityCase.availableMeasurements);
+
+    const Status st = dev.recover();
+
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::NOT_SUPPORTED),
+        static_cast<uint8_t>(st.code));
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(DriverState::OFFLINE),
+        static_cast<uint8_t>(dev.state()));
+    TEST_ASSERT_EQUAL_UINT32(0, dev.totalFailures());
+    assertIdentityInvalid(dev.identity());
+    assertCapabilitiesInvalid(dev.capabilities());
+  }
+}
+
+void test_begin_capability_load_is_complete_ordered_and_atomic() {
+  for (uint32_t transferIndex = 4; transferIndex < 12; ++transferIndex) {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    fake.failAtTransferIndex(transferIndex);
+
+    const Status st = beginFakeDevice(dev, fake);
+
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::NACK),
+        static_cast<uint8_t>(st.code));
+    TEST_ASSERT_FALSE(dev.isInitialized());
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(DriverState::UNINIT),
+        static_cast<uint8_t>(dev.state()));
+    assertIdentityInvalid(dev.identity());
+    assertCapabilitiesInvalid(dev.capabilities());
+  }
+
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  fake.setIdentity(cmd::SENSOR_GROUP_ID, cmd::SENSOR_SUBGROUP_ID, 0xA8);
+  fake.setCapabilities(0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77);
+
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+
+  const DeviceIdentity identity = dev.identity();
+  TEST_ASSERT_TRUE(identity.valid);
+  TEST_ASSERT_TRUE(identity.co2Available);
+  TEST_ASSERT_EQUAL_UINT16(cmd::SENSOR_GROUP_ID, identity.group);
+  TEST_ASSERT_EQUAL_UINT8(cmd::SENSOR_SUBGROUP_ID, identity.subgroup);
+  TEST_ASSERT_EQUAL_UINT8(0xA8, identity.availableMeasurements);
+
+  const CapabilitySnapshot capabilities = dev.capabilities();
+  TEST_ASSERT_TRUE(capabilities.valid);
+  TEST_ASSERT_EQUAL_UINT8(0x11, capabilities.customAdjustmentSupport);
+  TEST_ASSERT_EQUAL_UINT8(0x22, capabilities.adjustmentPointSupport);
+  TEST_ASSERT_EQUAL_UINT8(0x33, capabilities.adjustmentTimeGeneralSupport);
+  TEST_ASSERT_EQUAL_UINT8(0x44, capabilities.adjustmentTimeSupport);
+  TEST_ASSERT_EQUAL_UINT8(0x55, capabilities.operatingFunctions);
+  TEST_ASSERT_EQUAL_UINT8(0x66, capabilities.operatingModeSupport);
+  TEST_ASSERT_EQUAL_UINT8(0x77, capabilities.specialFeatures);
+  const SettingsSnapshot settings = dev.getSettings();
+  TEST_ASSERT_EQUAL_UINT8(0x55, settings.operatingFunctions);
+  TEST_ASSERT_EQUAL_UINT8(0x66, settings.operatingModeSupport);
+  TEST_ASSERT_EQUAL_UINT8(0x77, settings.specialFeatures);
+  TEST_ASSERT_EQUAL_UINT32(12, fake.transactionCount());
+  TEST_ASSERT_EQUAL_UINT8(cmd::MAIN_CUSTOM_PTR, fake.transactionMain(4));
+  TEST_ASSERT_FALSE(fake.transactionIsRead(4));
+  TEST_ASSERT_EQUAL_UINT8(
+      cmd::CUSTOM_ADJUSTMENT_SUPPORT, fake.transactionAddress(4));
+  for (size_t i = 0; i < 7; ++i) {
+    TEST_ASSERT_EQUAL_UINT8(
+        cmd::MAIN_CUSTOM_PTR, fake.transactionMain(5 + i));
+    TEST_ASSERT_TRUE(fake.transactionIsRead(5 + i));
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(cmd::CUSTOM_ADJUSTMENT_SUPPORT + i),
+        fake.transactionAddress(5 + i));
+  }
+}
+
+void test_identity_capability_and_settings_access_is_bus_silent() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+  fake.resetActivityCounters();
+  fake.resetElapsed();
+
+  const DeviceIdentity identity = dev.identity();
+  const CapabilitySnapshot capabilities = dev.capabilities();
+  SettingsSnapshot settings;
+  TEST_ASSERT_TRUE(dev.getSettings(settings).ok());
+  const SettingsSnapshot settingsByValue = dev.getSettings();
+  TEST_ASSERT_TRUE(dev.hasGlobalInterval());
+  TEST_ASSERT_TRUE(identity.valid);
+  TEST_ASSERT_TRUE(capabilities.valid);
+  TEST_ASSERT_TRUE(settings.identity.valid);
+  TEST_ASSERT_TRUE(settingsByValue.capabilities.valid);
+  TEST_ASSERT_EQUAL_UINT32(0, fake.lineReads());
+  TEST_ASSERT_EQUAL_UINT32(0, fake.lineWrites());
+  TEST_ASSERT_EQUAL_UINT32(0, fake.transactionCount());
+  TEST_ASSERT_EQUAL_UINT64(0, fake.elapsedUs());
 }
 
 void test_clock_stretch_timeout_is_bounded_and_tracked() {
@@ -407,6 +743,291 @@ void test_offline_threshold_and_recover_after_replug() {
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::READY),
                           static_cast<uint8_t>(dev.state()));
   TEST_ASSERT_EQUAL_UINT8(0, dev.consecutiveFailures());
+}
+
+void test_offline_normal_operations_are_bus_silent_and_cannot_revive() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  fake.setDevicePresent(false);
+  TEST_ASSERT_TRUE(beginAllowAbsent(dev, fake, 2).ok());
+  fake.setDevicePresent(true);
+  fake.resetActivityCounters();
+  fake.resetElapsed();
+
+  const uint32_t failuresBefore = dev.totalFailures();
+  const uint32_t successesBefore = dev.totalSuccess();
+  uint8_t value = 0;
+  Status st = dev.readStatus(value);
+  assertSameStatus(
+      Status::Error(Err::OFFLINE, "Driver is offline; call recover()"), st);
+  st = dev.customWrite(cmd::CUSTOM_FILTER_CO2, 4);
+  assertSameStatus(
+      Status::Error(Err::OFFLINE, "Driver is offline; call recover()"), st);
+  st = dev.writeCo2Filter(4);
+  assertSameStatus(
+      Status::Error(Err::OFFLINE, "Driver is offline; call recover()"), st);
+
+  TEST_ASSERT_EQUAL_UINT32(0, fake.lineReads());
+  TEST_ASSERT_EQUAL_UINT32(0, fake.lineWrites());
+  TEST_ASSERT_EQUAL_UINT32(0, fake.transactionCount());
+  TEST_ASSERT_EQUAL_UINT64(0, fake.elapsedUs());
+  TEST_ASSERT_EQUAL_UINT32(failuresBefore, dev.totalFailures());
+  TEST_ASSERT_EQUAL_UINT32(successesBefore, dev.totalSuccess());
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(DriverState::OFFLINE),
+      static_cast<uint8_t>(dev.state()));
+}
+
+void test_runtime_failure_offline_has_same_explicit_recovery_latch() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake, 2).ok());
+  fake.setDevicePresent(false);
+  uint8_t value = 0;
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(Err::NACK),
+      static_cast<uint8_t>(dev.readStatus(value).code));
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(Err::NACK),
+      static_cast<uint8_t>(dev.readStatus(value).code));
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(DriverState::OFFLINE),
+      static_cast<uint8_t>(dev.state()));
+
+  fake.setDevicePresent(true);
+  fake.resetActivityCounters();
+  const uint32_t failuresBefore = dev.totalFailures();
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(Err::OFFLINE),
+      static_cast<uint8_t>(dev.readStatus(value).code));
+  TEST_ASSERT_EQUAL_UINT32(0, fake.lineReads());
+  TEST_ASSERT_EQUAL_UINT32(0, fake.lineWrites());
+  TEST_ASSERT_EQUAL_UINT32(failuresBefore, dev.totalFailures());
+
+  TEST_ASSERT_TRUE(dev.checkBusIdle().ok());
+  TEST_ASSERT_TRUE(dev.busReset().ok());
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(DriverState::OFFLINE),
+      static_cast<uint8_t>(dev.state()));
+  TEST_ASSERT_EQUAL_UINT32(failuresBefore, dev.totalFailures());
+
+  fake.resetActivityCounters();
+  TEST_ASSERT_TRUE(dev.probe().ok());
+  TEST_ASSERT_EQUAL_UINT32(4, fake.transactionCount());
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(DriverState::OFFLINE),
+      static_cast<uint8_t>(dev.state()));
+  TEST_ASSERT_EQUAL_UINT32(failuresBefore, dev.totalFailures());
+}
+
+void test_offline_probe_is_health_cache_and_diagnostic_neutral() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  fake.setDevicePresent(false);
+  TEST_ASSERT_TRUE(beginAllowAbsent(dev, fake, 3).ok());
+  const SettingsSnapshot before = dev.getSettings();
+  fake.setDevicePresent(true);
+  fake.resetActivityCounters();
+
+  TEST_ASSERT_TRUE(dev.probe().ok());
+
+  const SettingsSnapshot after = dev.getSettings();
+  TEST_ASSERT_EQUAL_UINT32(4, fake.transactionCount());
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(before.state),
+      static_cast<uint8_t>(after.state));
+  TEST_ASSERT_EQUAL_UINT32(before.totalFailures, after.totalFailures);
+  TEST_ASSERT_EQUAL_UINT32(before.totalSuccess, after.totalSuccess);
+  TEST_ASSERT_EQUAL_UINT32(before.lastOkMs, after.lastOkMs);
+  TEST_ASSERT_EQUAL_UINT32(before.lastErrorMs, after.lastErrorMs);
+  TEST_ASSERT_EQUAL_UINT8(
+      before.consecutiveFailures, after.consecutiveFailures);
+  assertSameStatus(before.lastError, after.lastError);
+  assertSameStatus(before.beginProbeStatus, after.beginProbeStatus);
+  assertIdentityInvalid(after.identity);
+  assertCapabilitiesInvalid(after.capabilities);
+
+  fake.setGroup(static_cast<uint16_t>(cmd::SENSOR_GROUP_ID + 1U));
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(Err::NOT_SUPPORTED),
+      static_cast<uint8_t>(dev.probe().code));
+  const SettingsSnapshot afterFailure = dev.getSettings();
+  TEST_ASSERT_EQUAL_UINT32(after.totalFailures, afterFailure.totalFailures);
+  TEST_ASSERT_EQUAL_UINT32(after.totalSuccess, afterFailure.totalSuccess);
+  assertSameStatus(after.beginProbeStatus, afterFailure.beginProbeStatus);
+  assertIdentityInvalid(afterFailure.identity);
+  assertCapabilitiesInvalid(afterFailure.capabilities);
+}
+
+void test_successful_recover_reloads_and_atomically_publishes_cache() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  fake.setDevicePresent(false);
+  TEST_ASSERT_TRUE(beginAllowAbsent(dev, fake, 3).ok());
+  fake.setDevicePresent(true);
+  fake.setIdentity(cmd::SENSOR_GROUP_ID, cmd::SENSOR_SUBGROUP_ID, 0x88);
+  fake.setCapabilities(1, 2, 3, 4, 5, 6, 7);
+
+  TEST_ASSERT_TRUE(dev.recover().ok());
+
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(DriverState::READY),
+      static_cast<uint8_t>(dev.state()));
+  TEST_ASSERT_EQUAL_UINT8(0, dev.consecutiveFailures());
+  TEST_ASSERT_TRUE(dev.identity().valid);
+  TEST_ASSERT_EQUAL_UINT8(0x88, dev.identity().availableMeasurements);
+  TEST_ASSERT_TRUE(dev.capabilities().valid);
+  TEST_ASSERT_EQUAL_UINT8(1, dev.capabilities().customAdjustmentSupport);
+  TEST_ASSERT_EQUAL_UINT8(2, dev.capabilities().adjustmentPointSupport);
+  TEST_ASSERT_EQUAL_UINT8(
+      3, dev.capabilities().adjustmentTimeGeneralSupport);
+  TEST_ASSERT_EQUAL_UINT8(4, dev.capabilities().adjustmentTimeSupport);
+  TEST_ASSERT_EQUAL_UINT8(5, dev.capabilities().operatingFunctions);
+  TEST_ASSERT_EQUAL_UINT8(6, dev.capabilities().operatingModeSupport);
+  TEST_ASSERT_EQUAL_UINT8(7, dev.capabilities().specialFeatures);
+  TEST_ASSERT_TRUE(dev.getSettings().beginProbeStatus.ok());
+}
+
+void test_offline_recovery_reset_and_every_reload_failure_stays_offline() {
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    fake.setDevicePresent(false);
+    TEST_ASSERT_TRUE(beginAllowAbsent(dev, fake, 3).ok());
+    fake.setDevicePresent(true);
+    fake.setHoldSclLow(true);
+    fake.resetActivityCounters();
+
+    const Status st = dev.recover();
+
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::BUS_STUCK),
+        static_cast<uint8_t>(st.code));
+    TEST_ASSERT_EQUAL_UINT32(0, fake.transactionCount());
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(DriverState::OFFLINE),
+        static_cast<uint8_t>(dev.state()));
+    TEST_ASSERT_TRUE(dev.consecutiveFailures() >= dev.offlineThreshold());
+    assertIdentityInvalid(dev.identity());
+    assertCapabilitiesInvalid(dev.capabilities());
+  }
+
+  for (uint32_t transferIndex = 0; transferIndex < 12; ++transferIndex) {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    fake.setDevicePresent(false);
+    TEST_ASSERT_TRUE(beginAllowAbsent(dev, fake, 3).ok());
+    fake.setDevicePresent(true);
+    fake.resetActivityCounters();
+    fake.failAtTransferIndex(transferIndex);
+
+    const Status st = dev.recover();
+
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::NACK),
+        static_cast<uint8_t>(st.code));
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(DriverState::OFFLINE),
+        static_cast<uint8_t>(dev.state()));
+    TEST_ASSERT_TRUE(dev.consecutiveFailures() >= dev.offlineThreshold());
+    assertIdentityInvalid(dev.identity());
+    assertCapabilitiesInvalid(dev.capabilities());
+  }
+}
+
+void test_degraded_recovery_uses_transfer_health_and_semantic_latch() {
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake, 5).ok());
+    fake.setDevicePresent(false);
+    dev.tick(100);
+    uint8_t value = 0;
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::NACK),
+        static_cast<uint8_t>(dev.readStatus(value).code));
+    const uint32_t failuresBefore = dev.totalFailures();
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(DriverState::DEGRADED),
+        static_cast<uint8_t>(dev.state()));
+
+    fake.setDevicePresent(true);
+    fake.resetActivityCounters();
+    fake.failAtTransferIndex(11);
+    const Status st = dev.recover();
+
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::NACK),
+        static_cast<uint8_t>(st.code));
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(DriverState::DEGRADED),
+        static_cast<uint8_t>(dev.state()));
+    TEST_ASSERT_EQUAL_UINT8(1, dev.consecutiveFailures());
+    TEST_ASSERT_EQUAL_UINT32(failuresBefore + 1U, dev.totalFailures());
+    TEST_ASSERT_TRUE(dev.identity().valid);
+    TEST_ASSERT_TRUE(dev.capabilities().valid);
+  }
+
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake, 5).ok());
+    fake.setDevicePresent(false);
+    dev.tick(100);
+    uint8_t value = 0;
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::NACK),
+        static_cast<uint8_t>(dev.readStatus(value).code));
+    const uint32_t failuresBefore = dev.totalFailures();
+    const uint32_t errorTimeBefore = dev.lastErrorMs();
+    fake.setDevicePresent(true);
+    fake.setSubgroup(
+        static_cast<uint8_t>(cmd::SENSOR_SUBGROUP_ID + 1U));
+    dev.tick(200);
+
+    const Status st = dev.recover();
+
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::NOT_SUPPORTED),
+        static_cast<uint8_t>(st.code));
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(DriverState::OFFLINE),
+        static_cast<uint8_t>(dev.state()));
+    TEST_ASSERT_EQUAL_UINT32(failuresBefore, dev.totalFailures());
+    TEST_ASSERT_EQUAL_UINT32(errorTimeBefore, dev.lastErrorMs());
+    TEST_ASSERT_TRUE(dev.consecutiveFailures() >= dev.offlineThreshold());
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::NOT_SUPPORTED),
+        static_cast<uint8_t>(dev.lastError().code));
+    assertIdentityInvalid(dev.identity());
+    assertCapabilitiesInvalid(dev.capabilities());
+  }
+}
+
+void test_end_clears_policy_runtime_diagnostics_and_caches() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  fake.setDevicePresent(false);
+  TEST_ASSERT_TRUE(beginAllowAbsent(dev, fake, 3).ok());
+
+  dev.end();
+
+  TEST_ASSERT_FALSE(dev.isInitialized());
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(DriverState::UNINIT),
+      static_cast<uint8_t>(dev.state()));
+  TEST_ASSERT_EQUAL_UINT8(0, dev.consecutiveFailures());
+  TEST_ASSERT_EQUAL_UINT32(0, dev.totalFailures());
+  TEST_ASSERT_EQUAL_UINT32(0, dev.totalSuccess());
+  assertIdentityInvalid(dev.identity());
+  assertCapabilitiesInvalid(dev.capabilities());
+  const SettingsSnapshot settings = dev.getSettings();
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(BeginPolicy::REQUIRE_PRESENT),
+      static_cast<uint8_t>(settings.beginPolicy));
+  TEST_ASSERT_TRUE(settings.beginProbeStatus.ok());
+  assertIdentityInvalid(settings.identity);
+  assertCapabilitiesInvalid(settings.capabilities);
 }
 
 void test_interval_low_byte_write_failure_does_not_dirty() {
@@ -1179,6 +1800,10 @@ void test_operation_timing_bounds_are_exact_for_every_kind() {
       {OperationKind::PART_NAME_WRITE_VERIFY, 1, 12566},
       {OperationKind::RAW_CO2_READ, 1, 311},
       {OperationKind::BUS_RESET, 1, 252},
+      {OperationKind::BEGIN_REQUIRE_PRESENT, 1, 2274},
+      {OperationKind::BEGIN_ALLOW_ABSENT, 1, 2274},
+      {OperationKind::PROBE_IDENTITY, 1, 621},
+      {OperationKind::RECOVER_IDENTITY_AND_CAPABILITIES, 1, 2274},
   };
 
   for (const Case& item : cases) {
@@ -1252,6 +1877,53 @@ void test_operation_timing_queries_are_bus_silent_and_validate_counts() {
   TEST_ASSERT_EQUAL_UINT32(0, fake.lineWrites());
 }
 
+void test_lifecycle_timing_bounds_are_bus_silent_and_conservative() {
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    Config cfg = fake.makeConfig();
+    OperationTimingBound bound;
+    TEST_ASSERT_TRUE(EE871::EE871::operationTimingBound(
+        cfg, OperationKind::BEGIN_REQUIRE_PRESENT, 1, bound).ok());
+    TEST_ASSERT_EQUAL_UINT32(0, fake.lineReads());
+    TEST_ASSERT_EQUAL_UINT32(0, fake.lineWrites());
+    fake.resetElapsed();
+    TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+    TEST_ASSERT_TRUE(
+        fake.elapsedUs() <= static_cast<uint64_t>(bound.maxBlockingMs) * 1000U);
+
+    TEST_ASSERT_TRUE(dev.operationTimingBound(
+        OperationKind::PROBE_IDENTITY, 1, bound).ok());
+    fake.resetElapsed();
+    TEST_ASSERT_TRUE(dev.probe().ok());
+    TEST_ASSERT_TRUE(
+        fake.elapsedUs() <= static_cast<uint64_t>(bound.maxBlockingMs) * 1000U);
+  }
+
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    Config cfg = fake.makeConfig();
+    cfg.beginPolicy = BeginPolicy::ALLOW_ABSENT;
+    fake.setDevicePresent(false);
+    OperationTimingBound bound;
+    TEST_ASSERT_TRUE(EE871::EE871::operationTimingBound(
+        cfg, OperationKind::BEGIN_ALLOW_ABSENT, 1, bound).ok());
+    fake.resetElapsed();
+    TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+    TEST_ASSERT_TRUE(
+        fake.elapsedUs() <= static_cast<uint64_t>(bound.maxBlockingMs) * 1000U);
+
+    fake.setDevicePresent(true);
+    TEST_ASSERT_TRUE(dev.operationTimingBound(
+        OperationKind::RECOVER_IDENTITY_AND_CAPABILITIES, 1, bound).ok());
+    fake.resetElapsed();
+    TEST_ASSERT_TRUE(dev.recover().ok());
+    TEST_ASSERT_TRUE(
+        fake.elapsedUs() <= static_cast<uint64_t>(bound.maxBlockingMs) * 1000U);
+  }
+}
+
 void test_largest_valid_timing_bound_is_exact_and_does_not_wrap() {
   FakeE2Transport fake;
   Config cfg = fake.makeConfig();
@@ -1289,11 +1961,24 @@ int main() {
   RUN_TEST(test_recover_requires_begin);
   RUN_TEST(test_high_level_helpers_check_initialization_first);
   RUN_TEST(test_fake_transport_begin_succeeds);
+  RUN_TEST(test_invalid_begin_policy_is_bus_silent_invalid_config);
+  RUN_TEST(test_strict_and_optional_absent_begin_contracts);
+  RUN_TEST(test_allow_absent_rejects_non_absence_transport_faults);
+  RUN_TEST(test_all_lifecycle_identity_paths_fail_closed);
+  RUN_TEST(test_begin_capability_load_is_complete_ordered_and_atomic);
+  RUN_TEST(test_identity_capability_and_settings_access_is_bus_silent);
   RUN_TEST(test_clock_stretch_timeout_is_bounded_and_tracked);
   RUN_TEST(test_pec_mismatch_probe_is_raw_but_tracked_read_updates_health);
   RUN_TEST(test_device_absent_probe_has_no_health_side_effect_tracked_read_fails);
   RUN_TEST(test_custom_write_verify_mismatch_returns_precise_error);
   RUN_TEST(test_offline_threshold_and_recover_after_replug);
+  RUN_TEST(test_offline_normal_operations_are_bus_silent_and_cannot_revive);
+  RUN_TEST(test_runtime_failure_offline_has_same_explicit_recovery_latch);
+  RUN_TEST(test_offline_probe_is_health_cache_and_diagnostic_neutral);
+  RUN_TEST(test_successful_recover_reloads_and_atomically_publishes_cache);
+  RUN_TEST(test_offline_recovery_reset_and_every_reload_failure_stays_offline);
+  RUN_TEST(test_degraded_recovery_uses_transfer_health_and_semantic_latch);
+  RUN_TEST(test_end_clears_policy_runtime_diagnostics_and_caches);
   RUN_TEST(test_interval_low_byte_write_failure_does_not_dirty);
   RUN_TEST(test_interval_high_byte_write_failure_sets_dirty);
   RUN_TEST(test_interval_verify_failure_sets_dirty_and_unrelated_read_does_not_clear);
@@ -1323,6 +2008,7 @@ int main() {
   RUN_TEST(test_long_wait_callbacks_are_sliced_and_bit_timing_does_not_yield);
   RUN_TEST(test_operation_timing_bounds_are_exact_for_every_kind);
   RUN_TEST(test_operation_timing_queries_are_bus_silent_and_validate_counts);
+  RUN_TEST(test_lifecycle_timing_bounds_are_bus_silent_and_conservative);
   RUN_TEST(test_largest_valid_timing_bound_is_exact_and_does_not_wrap);
   return UNITY_END();
 }

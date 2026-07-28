@@ -33,7 +33,11 @@ enum class OperationKind : uint8_t {
   INTERVAL_WRITE_VERIFY = 5,    ///< Staged interval pair commit and two-byte readback.
   PART_NAME_WRITE_VERIFY = 6,   ///< Complete fixed 16-byte part-name write/readback sequence.
   RAW_CO2_READ = 7,             ///< Low-byte then high-byte raw MV3/MV4 read.
-  BUS_RESET = 8                 ///< Nine reset clocks, bounded line waits, and STOP.
+  BUS_RESET = 8,                ///< Nine reset clocks, bounded line waits, and STOP.
+  BEGIN_REQUIRE_PRESENT = 9,    ///< Strict startup with reset, full identity, and capabilities.
+  BEGIN_ALLOW_ABSENT = 10,      ///< Optional startup; conservative bound matches strict startup.
+  PROBE_IDENTITY = 11,          ///< Raw diagnostic validation of full EE871 CO2 identity.
+  RECOVER_IDENTITY_AND_CAPABILITIES = 12 ///< Tracked reset, identity, and capability reload.
 };
 
 /// @brief Conservative blocking-time result for one operation class.
@@ -41,6 +45,27 @@ struct OperationTimingBound {
   OperationKind kind{OperationKind::CONTROL_READ}; ///< Operation represented by this result.
   uint16_t elementCount{1}; ///< Block element count; one for fixed-size operations.
   uint32_t maxBlockingMs{0}; ///< Conservative maximum while callbacks honor their contract.
+};
+
+/// @brief Atomically cached EE871 identity and CO2 availability.
+struct DeviceIdentity {
+  uint16_t group{0};                 ///< Raw sensor group identifier.
+  uint8_t subgroup{0};               ///< Raw sensor subgroup identifier.
+  uint8_t availableMeasurements{0};  ///< Raw available-measurements bitfield.
+  bool co2Available{false};          ///< True when the CO2 bit is advertised.
+  bool valid{false};                 ///< True only after complete identity validation.
+};
+
+/// @brief Atomically cached custom-memory capability bytes 0x03..0x09.
+struct CapabilitySnapshot {
+  uint8_t customAdjustmentSupport{0};      ///< Custom byte 0x03.
+  uint8_t adjustmentPointSupport{0};       ///< Custom byte 0x04.
+  uint8_t adjustmentTimeGeneralSupport{0}; ///< Custom byte 0x05.
+  uint8_t adjustmentTimeSupport{0};        ///< Custom byte 0x06.
+  uint8_t operatingFunctions{0};           ///< Custom byte 0x07.
+  uint8_t operatingModeSupport{0};         ///< Custom byte 0x08.
+  uint8_t specialFeatures{0};              ///< Custom byte 0x09.
+  bool valid{false};                       ///< True only after all seven bytes load.
 };
 
 /// @brief Snapshot of current configuration, cached feature flags, and driver health.
@@ -64,6 +89,10 @@ struct SettingsSnapshot {
   uint32_t totalSuccess = 0;      ///< Total tracked successes.
   bool persistentConfigDirty = false; ///< True when persistent config may be partially applied.
   Status persistentConfigDirtyError = Status::Ok(); ///< First error that marked persistent config dirty.
+  BeginPolicy beginPolicy{BeginPolicy::REQUIRE_PRESENT}; ///< Active startup policy.
+  Status beginProbeStatus{Status::Ok()}; ///< Accepted startup absence or OK.
+  DeviceIdentity identity{};      ///< Atomically cached validated identity.
+  CapabilitySnapshot capabilities{}; ///< Atomically cached capability bytes.
 };
 
 /// @brief Transport-agnostic EE871 CO2 sensor driver for the E2 bus.
@@ -103,9 +132,15 @@ public:
 
   /// Initialize the driver with configuration.
   ///
-  /// begin() validates timing and callbacks, normalizes configuration, probes
-  /// the EE871, and caches feature flags. The driver does not configure GPIO,
-  /// pins, pull-ups, tasks, locks, or framework handles.
+  /// begin() validates timing and callbacks, normalizes configuration, validates
+  /// the complete EE871 CO2 identity, and atomically caches custom-memory
+  /// capabilities 0x03..0x09. REQUIRE_PRESENT fails closed on any discovery
+  /// error. ALLOW_ABSENT accepts only a definite NACK/DEVICE_NOT_FOUND during
+  /// identity discovery and initializes a latched OFFLINE session; responding
+  /// incompatible devices and partial capability reads still fail.
+  ///
+  /// The driver does not configure GPIO, pins, pull-ups, tasks, locks, or
+  /// framework handles.
   /// @param config Configuration including E2 transport callbacks.
   /// @return Status::Ok() on success, error otherwise.
   Status begin(const Config& config);
@@ -129,16 +164,21 @@ public:
 
   /// Check if device is present on the bus.
   ///
-  /// probe() uses raw diagnostic transfers and does not update health counters
-  /// or driver state.
-  /// @return Status::Ok() if device responds, error otherwise.
+  /// probe() uses raw diagnostic transfers and validates group, subgroup, and
+  /// advertised CO2 support. It is callable while OFFLINE and does not update
+  /// health, state, begin diagnostics, identity, or capability caches.
+  /// @return Status::Ok() if a compatible EE871 CO2 device responds, preserving
+  /// the original precise transport or semantic error otherwise.
   Status probe();
 
   /// Attempt to recover from DEGRADED/OFFLINE state.
   ///
-  /// Recovery performs bounded bus recovery/probe work and tracks failures
-  /// because the driver is initialized.
-  /// @return Status::Ok() if device now responsive, error otherwise.
+  /// Recovery performs a tracked bounded bus reset, validates full identity,
+  /// reloads all seven capabilities into local candidates, and publishes both
+  /// only after complete success. It is the only operation that can restore a
+  /// latched OFFLINE driver. Retry cadence remains application-owned.
+  /// @return Status::Ok() after entering READY with fresh caches; otherwise the
+  /// original precise failure.
   Status recover();
 
   /// Re-read persistent configuration and clear dirty diagnostics when coherent.
@@ -174,11 +214,13 @@ public:
   DriverState healthState() const { return _driverState; }
 
   /// Check whether begin() has completed successfully.
-  /// @return true after successful begin() and before end().
+  /// @return true after successful begin(), including accepted optional
+  /// absence, and before end().
   bool isInitialized() const { return _initialized; }
 
   /// Check if driver is ready for operations.
-  /// @return true when the driver is READY or DEGRADED.
+  /// @return true when the driver is READY or DEGRADED. Accepted optional
+  /// absence is initialized but returns false because it is OFFLINE.
   bool isOnline() const {
     return _driverState == DriverState::READY ||
            _driverState == DriverState::DEGRADED;
@@ -196,6 +238,14 @@ public:
   /// Return current configuration, feature-cache, and health state by value.
   /// @return Current settings snapshot.
   SettingsSnapshot getSettings() const;
+
+  /// Return the atomically cached device identity.
+  /// @return Copy of the current identity snapshot; performs no E2 I/O.
+  DeviceIdentity identity() const { return _identity; }
+
+  /// Return the atomically cached capability bytes.
+  /// @return Copy of the current capability snapshot; performs no E2 I/O.
+  CapabilitySnapshot capabilities() const { return _capabilities; }
 
   /// Calculate a conservative blocking bound from the active normalized config.
   ///
@@ -680,6 +730,7 @@ private:
       const Config& config, bool ack, ByteDeadline& deadline);
 
   Status _busResetRaw();
+  Status _busResetTracked();
   Status _setCustomPointerRaw(uint8_t address);
   Status _setCustomPointerTracked(uint8_t address);
 
@@ -694,6 +745,20 @@ private:
                               WriteProgress* progress = nullptr);
   Status _customWriteDirect(uint8_t address, uint8_t value,
                             bool* writeMayHaveEffect = nullptr);
+  Status _readAndValidateIdentityRaw(DeviceIdentity& out);
+  Status _readCapabilitiesRaw(CapabilitySnapshot& out);
+  Status _readAndValidateIdentityTracked(DeviceIdentity& out);
+  Status _readCapabilitiesTracked(CapabilitySnapshot& out);
+  Status _readAndValidateIdentity(
+      DeviceIdentity& out, bool tracked);
+  Status _readCapabilities(
+      CapabilitySnapshot& out, bool tracked);
+  void _publishIdentityAndCapabilities(
+      const DeviceIdentity& identity,
+      const CapabilitySnapshot& capabilities);
+  void _clearIdentityAndCapabilities();
+  void _latchSemanticOffline(const Status& cause);
+  bool _normalOperationAllowed(Status& status) const;
 
   // =========================================================================
   // Health Management
@@ -715,6 +780,11 @@ private:
   bool _initialized = false;
   DriverState _driverState = DriverState::UNINIT;
   uint32_t _nowMs = 0;
+
+  DeviceIdentity _identity;
+  CapabilitySnapshot _capabilities;
+  Status _beginProbeStatus = Status::Ok();
+  bool _recoveryBypass = false;
 
   // Feature flags (cached during begin())
   uint8_t _operatingFunctions = 0;   ///< Cached 0x07

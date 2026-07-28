@@ -27,7 +27,8 @@ enum class Err : uint8_t {
   ALREADY_INITIALIZED,       ///< begin() called without end()
   OUT_OF_RANGE,              ///< Value out of valid range
   NOT_SUPPORTED,             ///< Feature not supported by this device/firmware
-  VERIFY_MISMATCH = 15       ///< Transport completed but write readback did not match
+  VERIFY_MISMATCH = 15,      ///< Transport completed but write readback did not match
+  OFFLINE = 16               ///< Driver is latched offline; explicit recovery is required
 };
 
 /// @brief Status structure returned by all fallible operations.

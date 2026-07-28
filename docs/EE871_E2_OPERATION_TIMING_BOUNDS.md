@@ -59,6 +59,10 @@ ACK/STOP/quiet terms: it is one total budget beginning after the PEC byte.
 | `PART_NAME_WRITE_VERIFY` | 1 | `16*(2*COMPLETION_WRITE(WD) + READ)` |
 | `RAW_CO2_READ` | 1 | `2*READ` |
 | `BUS_RESET` | 1 | `RESET` |
+| `BEGIN_REQUIRE_PRESENT` | 1 | `RESET + 4*READ + COMPLETION_WRITE(WD) + 7*READ` |
+| `BEGIN_ALLOW_ABSENT` | 1 | `RESET + 4*READ + COMPLETION_WRITE(WD) + 7*READ` |
+| `PROBE_IDENTITY` | 1 | `4*READ` |
+| `RECOVER_IDENTITY_AND_CAPABILITIES` | 1 | `RESET + 4*READ + COMPLETION_WRITE(WD) + 7*READ` |
 
 The pointer component is intentionally included before each custom-memory
 readback. A block read sets the pointer once and then performs
@@ -67,6 +71,13 @@ readback. A block read sets the pointer once and then performs
 The interval formula reflects the real procedure: an ordinary staged low-byte
 write, the high-byte interval commit, one completed pointer write, and two
 auto-incrementing verification reads.
+
+The lifecycle formulas reserve four reads for group low/high, subgroup, and
+available-measurements validation. Begin and recovery then reserve one
+completed pointer write plus seven auto-incrementing reads for capabilities
+`0x03..0x09`. `BEGIN_ALLOW_ABSENT` intentionally uses the same conservative
+bound as strict begin even though a definite early absence returns sooner.
+`PROBE_IDENTITY` does not load or publish capabilities.
 
 ## Validation And Normalization
 
@@ -80,7 +91,8 @@ The static query uses the same centralized validation as `begin()`:
 - `bitTimeoutUs` must be 1..25000;
 - `byteTimeoutUs` must be between `bitTimeoutUs` and 35000;
 - write and interval delays must not exceed 5000 ms;
-- long-delay slice must not exceed 50 ms.
+- long-delay slice must not exceed 50 ms;
+- begin policy must be `REQUIRE_PRESENT` or `ALLOW_ABSENT`.
 
 Write delays below 150 ms normalize to 150 ms. Interval delays below 300 ms
 normalize to 300 ms. A zero long-delay slice normalizes to 1 ms, and a zero
@@ -107,6 +119,9 @@ and 150/300 ms completion windows, the published bounds are:
 | Complete 16-byte part-name write plus per-byte verify | 12566 ms |
 | Raw two-byte CO2 read | 311 ms |
 | Bus reset | 252 ms |
+| Strict or optional begin | 2274 ms |
+| Full identity probe | 621 ms |
+| Identity-and-capability recovery | 2274 ms |
 
 Multi-byte convenience helpers can therefore have substantially larger
 admission bounds than one E2 transaction. Persistent writes remain explicit

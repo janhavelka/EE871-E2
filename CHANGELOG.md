@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `OperationKind`/`OperationTimingBound` types.
 - `VERIFY_MISMATCH` for completed writes whose readback differs.
 - Phase-aware native stretch injection and transaction-order instrumentation.
+- `BeginPolicy`, `DeviceIdentity`, and `CapabilitySnapshot` public contracts
+  for strict or optional-device startup with cache-only diagnostics.
+- `Err::OFFLINE` and lifecycle timing kinds for begin, probe, and complete
+  recovery admission bounds.
 
 ### Changed
 
@@ -25,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   below those protocol minima normalize upward.
 - Custom-pointer completion is ordered before every dependent `0x51` read, and
   block reads use pointer auto-increment.
+- Startup now validates group, subgroup, CO2 availability, and all capability
+  bytes `0x03..0x09`; identity and capabilities publish only after complete
+  success.
+- Optional startup accepts only definite absence/NACK and enters a latched
+  `OFFLINE` state. Normal transfers are bus-silent while offline, raw `probe()`
+  is non-mutating, and explicit `recover()` is the sole route back to `READY`.
 
 ### Fixed
 

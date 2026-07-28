@@ -881,3 +881,52 @@ Software validation on 2026-07-28:
 The exact formulas and callback assumptions are maintained in
 `EE871_E2_OPERATION_TIMING_BOUNDS.md`; the prompt-specific command evidence is
 in the corresponding handoff report under `docs/reports/`.
+
+## 2026-07-28 Lifecycle, Identity, And Recovery Follow-up
+
+Branch: `feature/ee871-hardening-series`
+
+This Prompt 02 follow-up adds a general optional-device lifecycle without
+introducing firmware or product policy:
+
+- strict begin remains the default and requires exact group/subgroup, CO2
+  availability, and all capability bytes `0x03..0x09`;
+- `ALLOW_ABSENT` accepts only identity-stage `NACK` or definite
+  `DEVICE_NOT_FOUND`, retaining an initialized but latched `OFFLINE` driver;
+- responding incompatible devices, PEC/timing/bus faults, and partial
+  capability reads fail closed;
+- identity and capabilities are read into local candidates and publish
+  atomically;
+- ordinary tracked operations fast-fail with precise `OFFLINE` and zero line
+  I/O after the latch is set;
+- raw `probe()` validates complete identity without changing health, state,
+  startup diagnostics, or cache;
+- `recover()` is the only route back from `OFFLINE`, using tracked reset and a
+  complete identity/capability reload.
+
+The semantic offline latch normalizes the consecutive streak to the configured
+threshold only to maintain the four-state invariant. It does not invent
+transport failures or timestamps. Recovery from `DEGRADED` continues to use
+the existing per-transfer health rules.
+
+Public append-only additions are `BeginPolicy`, `DeviceIdentity`,
+`CapabilitySnapshot`, `Err::OFFLINE = 16`, and lifecycle operation timing
+kinds 9 through 12. Existing feature-byte fields remain synchronized from the
+atomic capability snapshot. The minimum-hold reference bounds are 2274 ms for
+strict/optional begin and full recovery, and 621 ms for full identity probe.
+
+Software validation on 2026-07-28:
+
+- core timing guard: PASS;
+- generated version check: PASS; version remains `1.0.0`;
+- native tests: PASS, 65/65;
+- Arduino ESP32-S3 and ESP32-S2 example builds: PASS;
+- `git diff --check`: PASS with line-ending conversion warnings only;
+- pure ESP-IDF build: not run because `idf.py` is unavailable;
+- HIL, physical sensor, waveform, and long-run validation: not run.
+
+Checked CO2 sample procedures, persistent-maintenance completion, release
+preparation, and all downstream firmware ownership/product integration remain
+deferred to their later prompts. The detailed transition and absence-policy
+tables are in
+`docs/reports/ee871_prompt_02_lifecycle_identity_handoff_20260728.md`.

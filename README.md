@@ -11,6 +11,8 @@ examples, and HIL validation evidence.
 - **Health monitoring** - READY/DEGRADED/OFFLINE tracking
 - **Deterministic behavior** - bounded loops, explicit timeouts
 - **Managed synchronous** - blocking transfers with spec-compliant limits
+- **Validated discovery** - full identity and seven capability bytes publish atomically
+- **Optional-device lifecycle** - narrow absent-at-start policy with explicit recovery
 - **Feature guards** - optional EE871 registers are checked from cached capability flags
 - **Dirty/resync diagnostics** - persistent multi-byte write failures are visible
 - **HIL evidence tooling** - serial runner emits transcript, JSON, and Markdown reports
@@ -24,7 +26,7 @@ case.
 
 Recorded evidence:
 
-- Native tests: 51 passing in the current Prompt 01 audit run.
+- Native tests: 65 passing in the current lifecycle/identity audit run.
 - Arduino PlatformIO builds: `ex_bringup_s3` and `ex_bringup_s2` pass locally
   in the latest hardening/readiness runs.
 - ESP32-S3 safe default HIL: PASS on `COM17`.
@@ -171,7 +173,38 @@ diagnostics do not report old sensor capabilities.
 
 Cache-only diagnostics are available through `SettingsSnapshot`,
 `getSettings(SettingsSnapshot&)`, `getSettings()`, `isInitialized()`,
-`getConfig()`, `driverState()`, `healthState()`, and `offlineThreshold()`.
+`getConfig()`, `identity()`, `capabilities()`, `driverState()`,
+`healthState()`, and `offlineThreshold()`.
+
+### Strict And Optional Startup
+
+`Config::beginPolicy` defaults to `BeginPolicy::REQUIRE_PRESENT`. Strict
+startup succeeds only after the driver validates group `0x0367`, subgroup
+`0x09`, the advertised CO2 measurement bit, and all seven capability bytes
+from custom memory `0x03..0x09`.
+
+For a product where the sensor is genuinely optional, set
+`BeginPolicy::ALLOW_ABSENT`. Only a definite identity-read `NACK` or
+`DEVICE_NOT_FOUND` is accepted. The driver then returns success from `begin()`
+but remains initialized and latched `OFFLINE`; identity and capability caches
+stay invalid. The accepted discovery status is available as
+`SettingsSnapshot::beginProbeStatus`. `consecutiveFailures` is normalized to
+the configured offline threshold to preserve the four-state invariant; this
+is a state latch, not invented failed wire traffic, so lifetime failure
+counters and transport timestamps remain unchanged.
+
+Timeout, stuck bus, PEC mismatch, incompatible group/subgroup, missing CO2
+support, and any partial capability-read failure still fail `begin()` and
+leave the driver uninitialized. A responding but incompatible device is never
+treated as absent.
+
+While `OFFLINE`, normal reads and writes return `Err::OFFLINE` without touching
+the E2 lines or changing health counters. `probe()` remains a raw,
+health/cache-neutral identity diagnostic. Public `checkBusIdle()` and
+`busReset()` also remain diagnostic and cannot restore online state. Only
+`recover()` performs tracked reset, full identity validation, and a complete
+capability reload before atomically entering `READY`. The application owns
+retry cadence, backoff, power policy, and aggregate health decisions.
 
 ## Timing And Blocking
 

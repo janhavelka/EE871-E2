@@ -431,6 +431,11 @@ Status EE871::_validateConfig(const Config& input, Config& normalized) {
     return Status::Error(
         Err::INVALID_CONFIG, "longDelaySliceMs exceeds safe limit");
   }
+  const uint8_t beginPolicy = static_cast<uint8_t>(input.beginPolicy);
+  if (beginPolicy >
+      static_cast<uint8_t>(BeginPolicy::ALLOW_ABSENT)) {
+    return Status::Error(Err::INVALID_CONFIG, "Invalid begin policy");
+  }
 
   normalized = input;
   if (normalized.writeDelayMs < cmd::WRITE_DELAY_PROTOCOL_MIN_MS) {
@@ -524,6 +529,21 @@ Status EE871::_calculateOperationTimingBound(
     case OperationKind::BUS_RESET:
       totalUs = busResetBoundUs(normalized);
       break;
+    case OperationKind::BEGIN_REQUIRE_PRESENT:
+    case OperationKind::BEGIN_ALLOW_ABSENT:
+    case OperationKind::RECOVER_IDENTITY_AND_CAPABILITIES:
+      totalUs = busResetBoundUs(normalized);
+      st = addScaledU64(totalUs, readUs, 4U);
+      if (st.ok()) {
+        st = addScaledU64(totalUs, pointerUs, 1U);
+      }
+      if (st.ok()) {
+        st = addScaledU64(totalUs, readUs, 7U);
+      }
+      break;
+    case OperationKind::PROBE_IDENTITY:
+      st = addScaledU64(totalUs, readUs, 4U);
+      break;
     default:
       return Status::Error(
           Err::INVALID_PARAM, "Invalid operation kind");
@@ -588,7 +608,7 @@ Status EE871::begin(const Config& config) {
   }
   _config = normalized;
 
-  // Check bus is idle before probing
+  // Require an idle bus or one successful bounded raw reset.
   if (!readScl(_config) || !readSda(_config)) {
     st = _busResetRaw();
     if (!st.ok()) {
@@ -597,53 +617,34 @@ Status EE871::begin(const Config& config) {
     }
   }
 
-  uint8_t low = 0;
-  uint8_t high = 0;
-  const uint8_t controlLow = cmd::makeControlRead(cmd::MAIN_TYPE_LO, _config.deviceAddress);
-  const uint8_t controlHigh = cmd::makeControlRead(cmd::MAIN_TYPE_HI, _config.deviceAddress);
+  DeviceIdentity identityCandidate;
+  st = _readAndValidateIdentityRaw(identityCandidate);
+  if (!st.ok()) {
+    const bool acceptedAbsence =
+        _config.beginPolicy == BeginPolicy::ALLOW_ABSENT &&
+        (st.code == Err::NACK || st.code == Err::DEVICE_NOT_FOUND);
+    if (acceptedAbsence) {
+      _initialized = true;
+      _beginProbeStatus = st;
+      _latchSemanticOffline(st);
+      return Status::Ok();
+    }
+    _resetStoppedState();
+    return st;
+  }
 
-  st = _readControlByteRaw(controlLow, low);
+  CapabilitySnapshot capabilityCandidate;
+  st = _readCapabilitiesRaw(capabilityCandidate);
   if (!st.ok()) {
     _resetStoppedState();
     return st;
   }
-  st = _readControlByteRaw(controlHigh, high);
-  if (!st.ok()) {
-    _resetStoppedState();
-    return st;
-  }
 
-  const uint16_t group = static_cast<uint16_t>(low) | (static_cast<uint16_t>(high) << 8);
-  if (group != cmd::SENSOR_GROUP_ID) {
-    Status err = Status::Error(Err::DEVICE_NOT_FOUND, "Unexpected group id", group);
-    _resetStoppedState();
-    return err;
-  }
-
-  // Cache feature flags for guards
-  // Use raw reads since we're not fully initialized yet
-  _operatingFunctions = 0;
-  _operatingModeSupport = 0;
-  _specialFeatures = 0;
-
-  // Set pointer to 0x07
-  st = _setCustomPointerRaw(cmd::CUSTOM_OPERATING_FUNCTIONS);
-  if (st.ok()) {
-    const uint8_t readControl = cmd::makeControlRead(cmd::MAIN_CUSTOM_PTR, _config.deviceAddress);
-    // Read 0x07, 0x08, 0x09 in sequence (auto-increment)
-    st = _readControlByteRaw(readControl, _operatingFunctions);
-    if (st.ok()) {
-      st = _readControlByteRaw(readControl, _operatingModeSupport);
-    }
-    if (st.ok()) {
-      st = _readControlByteRaw(readControl, _specialFeatures);
-    }
-  }
-  // If feature read fails, continue with defaults (all features disabled)
-  // This is non-fatal - the device still works, just with guards active
-
+  _publishIdentityAndCapabilities(
+      identityCandidate, capabilityCandidate);
   _initialized = true;
   _driverState = DriverState::READY;
+  _beginProbeStatus = Status::Ok();
   return Status::Ok();
 }
 
@@ -671,6 +672,10 @@ Status EE871::getSettings(SettingsSnapshot& out) const {
   out.totalSuccess = _totalSuccess;
   out.persistentConfigDirty = _persistentConfigDirty;
   out.persistentConfigDirtyError = _persistentConfigDirtyError;
+  out.beginPolicy = _config.beginPolicy;
+  out.beginProbeStatus = _beginProbeStatus;
+  out.identity = _identity;
+  out.capabilities = _capabilities;
   return Status::Ok();
 }
 
@@ -685,9 +690,9 @@ void EE871::_resetStoppedState() {
   _initialized = false;
   _driverState = DriverState::UNINIT;
   _nowMs = 0;
-  _operatingFunctions = 0;
-  _operatingModeSupport = 0;
-  _specialFeatures = 0;
+  _clearIdentityAndCapabilities();
+  _beginProbeStatus = Status::Ok();
+  _recoveryBypass = false;
   _lastOkMs = 0;
   _lastErrorMs = 0;
   _lastError = Status::Ok();
@@ -695,6 +700,47 @@ void EE871::_resetStoppedState() {
   _totalFailures = 0;
   _totalSuccess = 0;
   _lastWriteProgress = WriteProgress{};
+}
+
+void EE871::_publishIdentityAndCapabilities(
+    const DeviceIdentity& identity,
+    const CapabilitySnapshot& capabilities) {
+  _identity = identity;
+  _capabilities = capabilities;
+  _operatingFunctions = capabilities.operatingFunctions;
+  _operatingModeSupport = capabilities.operatingModeSupport;
+  _specialFeatures = capabilities.specialFeatures;
+}
+
+void EE871::_clearIdentityAndCapabilities() {
+  _identity = DeviceIdentity{};
+  _capabilities = CapabilitySnapshot{};
+  _operatingFunctions = 0;
+  _operatingModeSupport = 0;
+  _specialFeatures = 0;
+}
+
+void EE871::_latchSemanticOffline(const Status& cause) {
+  _clearIdentityAndCapabilities();
+  _driverState = DriverState::OFFLINE;
+  if (_consecutiveFailures < _config.offlineThreshold) {
+    _consecutiveFailures = _config.offlineThreshold;
+  }
+  if (cause.code == Err::NOT_SUPPORTED) {
+    _lastError = cause;
+  }
+}
+
+bool EE871::_normalOperationAllowed(Status& status) const {
+  if (_initialized &&
+      _driverState == DriverState::OFFLINE &&
+      !_recoveryBypass) {
+    status = Status::Error(
+        Err::OFFLINE, "Driver is offline; call recover()");
+    return false;
+  }
+  status = Status::Ok();
+  return true;
 }
 
 void EE871::_markPersistentConfigDirty(const Status& st) {
@@ -714,25 +760,8 @@ Status EE871::probe() {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
   }
 
-  uint8_t low = 0;
-  uint8_t high = 0;
-  const uint8_t controlLow = cmd::makeControlRead(cmd::MAIN_TYPE_LO, _config.deviceAddress);
-  const uint8_t controlHigh = cmd::makeControlRead(cmd::MAIN_TYPE_HI, _config.deviceAddress);
-
-  Status st = _readControlByteRaw(controlLow, low);
-  if (!st.ok()) {
-    return st;
-  }
-  st = _readControlByteRaw(controlHigh, high);
-  if (!st.ok()) {
-    return st;
-  }
-
-  const uint16_t group = static_cast<uint16_t>(low) | (static_cast<uint16_t>(high) << 8);
-  if (group != cmd::SENSOR_GROUP_ID) {
-    return Status::Error(Err::DEVICE_NOT_FOUND, "Unexpected group id", group);
-  }
-  return Status::Ok();
+  DeviceIdentity candidate;
+  return _readAndValidateIdentityRaw(candidate);
 }
 
 Status EE871::recover() {
@@ -740,17 +769,165 @@ Status EE871::recover() {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
   }
 
-  // Attempt bus reset first to clear any stuck state (no health tracking)
-  // Ignore result - still try to probe even if bus reset reports stuck
-  busReset();
+  const bool enteredOffline =
+      _driverState == DriverState::OFFLINE;
+  struct RecoveryBypassScope {
+    explicit RecoveryBypassScope(bool& bypassIn) : bypass(bypassIn) {
+      bypass = true;
+    }
+    ~RecoveryBypassScope() { bypass = false; }
+    bool& bypass;
+  } bypassScope(_recoveryBypass);
 
-  // Probe device (tracked - updates health state)
-  uint16_t group = 0;
-  Status st = readGroup(group);
-  if (st.ok()) {
-    return Status::Ok();
+  Status st = _busResetTracked();
+  if (!st.ok()) {
+    if (enteredOffline) {
+      _latchSemanticOffline(st);
+    }
+    return st;
   }
-  return st;
+
+  DeviceIdentity identityCandidate;
+  st = _readAndValidateIdentityTracked(identityCandidate);
+  if (!st.ok()) {
+    if (enteredOffline || st.code == Err::NOT_SUPPORTED) {
+      _latchSemanticOffline(st);
+    }
+    return st;
+  }
+
+  CapabilitySnapshot capabilityCandidate;
+  st = _readCapabilitiesTracked(capabilityCandidate);
+  if (!st.ok()) {
+    if (enteredOffline) {
+      _latchSemanticOffline(st);
+    }
+    return st;
+  }
+
+  _publishIdentityAndCapabilities(
+      identityCandidate, capabilityCandidate);
+  _beginProbeStatus = Status::Ok();
+  _driverState = DriverState::READY;
+  _consecutiveFailures = 0;
+  return Status::Ok();
+}
+
+Status EE871::_readAndValidateIdentityRaw(DeviceIdentity& out) {
+  return _readAndValidateIdentity(out, false);
+}
+
+Status EE871::_readAndValidateIdentityTracked(DeviceIdentity& out) {
+  return _readAndValidateIdentity(out, true);
+}
+
+Status EE871::_readAndValidateIdentity(
+    DeviceIdentity& out, bool tracked) {
+  out = DeviceIdentity{};
+  auto readMain =
+      [this, tracked](uint8_t mainCommand, uint8_t& value) {
+        const uint8_t control =
+            cmd::makeControlRead(mainCommand, _config.deviceAddress);
+        return tracked
+                   ? _readControlByteTracked(control, value)
+                   : _readControlByteRaw(control, value);
+      };
+
+  uint8_t groupLow = 0;
+  uint8_t groupHigh = 0;
+  uint8_t subgroup = 0;
+  uint8_t availableMeasurements = 0;
+  Status st = readMain(cmd::MAIN_TYPE_LO, groupLow);
+  if (!st.ok()) {
+    return st;
+  }
+  st = readMain(cmd::MAIN_TYPE_HI, groupHigh);
+  if (!st.ok()) {
+    return st;
+  }
+
+  const uint16_t group =
+      static_cast<uint16_t>(groupLow) |
+      (static_cast<uint16_t>(groupHigh) << 8);
+  if (group != cmd::SENSOR_GROUP_ID) {
+    return Status::Error(
+        Err::NOT_SUPPORTED, "Unexpected group id", group);
+  }
+
+  st = readMain(cmd::MAIN_TYPE_SUB, subgroup);
+  if (!st.ok()) {
+    return st;
+  }
+  if (subgroup != cmd::SENSOR_SUBGROUP_ID) {
+    return Status::Error(
+        Err::NOT_SUPPORTED, "Unexpected subgroup id", subgroup);
+  }
+
+  st = readMain(cmd::MAIN_AVAIL_MEAS, availableMeasurements);
+  if (!st.ok()) {
+    return st;
+  }
+  if ((availableMeasurements & cmd::AVAILABLE_MEAS_MASK) == 0U) {
+    return Status::Error(
+        Err::NOT_SUPPORTED,
+        "CO2 measurement not advertised",
+        availableMeasurements);
+  }
+
+  DeviceIdentity candidate;
+  candidate.group = group;
+  candidate.subgroup = subgroup;
+  candidate.availableMeasurements = availableMeasurements;
+  candidate.co2Available = true;
+  candidate.valid = true;
+  out = candidate;
+  return Status::Ok();
+}
+
+Status EE871::_readCapabilitiesRaw(CapabilitySnapshot& out) {
+  return _readCapabilities(out, false);
+}
+
+Status EE871::_readCapabilitiesTracked(CapabilitySnapshot& out) {
+  return _readCapabilities(out, true);
+}
+
+Status EE871::_readCapabilities(
+    CapabilitySnapshot& out, bool tracked) {
+  out = CapabilitySnapshot{};
+  Status st = tracked
+                  ? _setCustomPointerTracked(
+                        cmd::CUSTOM_ADJUSTMENT_SUPPORT)
+                  : _setCustomPointerRaw(
+                        cmd::CUSTOM_ADJUSTMENT_SUPPORT);
+  if (!st.ok()) {
+    return st;
+  }
+
+  uint8_t values[7] = {};
+  const uint8_t control =
+      cmd::makeControlRead(
+          cmd::MAIN_CUSTOM_PTR, _config.deviceAddress);
+  for (uint8_t i = 0; i < 7U; ++i) {
+    st = tracked
+             ? _readControlByteTracked(control, values[i])
+             : _readControlByteRaw(control, values[i]);
+    if (!st.ok()) {
+      return st;
+    }
+  }
+
+  CapabilitySnapshot candidate;
+  candidate.customAdjustmentSupport = values[0];
+  candidate.adjustmentPointSupport = values[1];
+  candidate.adjustmentTimeGeneralSupport = values[2];
+  candidate.adjustmentTimeSupport = values[3];
+  candidate.operatingFunctions = values[4];
+  candidate.operatingModeSupport = values[5];
+  candidate.specialFeatures = values[6];
+  candidate.valid = true;
+  out = candidate;
+  return Status::Ok();
 }
 
 Status EE871::resyncPersistentConfig() {
@@ -910,6 +1087,10 @@ Status EE871::_setCustomPointerRaw(uint8_t address) {
 }
 
 Status EE871::_setCustomPointerTracked(uint8_t address) {
+  Status guard;
+  if (!_normalOperationAllowed(guard)) {
+    return guard;
+  }
   return _updateHealth(_setCustomPointerRaw(address));
 }
 
@@ -956,6 +1137,10 @@ Status EE871::_customWriteDirect(
 Status EE871::writeMeasurementInterval(uint16_t intervalDeciSeconds) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
+  Status guard;
+  if (!_normalOperationAllowed(guard)) {
+    return guard;
   }
   if (!hasGlobalInterval()) {
     return Status::Error(Err::NOT_SUPPORTED, "Global interval not supported");
@@ -1021,7 +1206,7 @@ Status EE871::readGroup(uint16_t& group) {
     return st;
   }
   if (group != cmd::SENSOR_GROUP_ID) {
-    return Status::Error(Err::DEVICE_NOT_FOUND, "Unexpected group id", group);
+    return Status::Error(Err::NOT_SUPPORTED, "Unexpected group id", group);
   }
   return Status::Ok();
 }
@@ -1032,7 +1217,7 @@ Status EE871::readSubgroup(uint8_t& subgroup) {
     return st;
   }
   if (subgroup != cmd::SENSOR_SUBGROUP_ID) {
-    return Status::Error(Err::DEVICE_NOT_FOUND, "Unexpected subgroup id", subgroup);
+    return Status::Error(Err::NOT_SUPPORTED, "Unexpected subgroup id", subgroup);
   }
   return Status::Ok();
 }
@@ -1048,6 +1233,10 @@ Status EE871::readStatus(uint8_t& status) {
 Status EE871::readErrorCode(uint8_t& code) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
+  Status guard;
+  if (!_normalOperationAllowed(guard)) {
+    return guard;
   }
   if (!hasErrorCode()) {
     return Status::Error(Err::NOT_SUPPORTED, "Error code not supported");
@@ -1103,6 +1292,10 @@ Status EE871::readSerialNumber(uint8_t* buf) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
   }
+  Status guard;
+  if (!_normalOperationAllowed(guard)) {
+    return guard;
+  }
   if (buf == nullptr) {
     return Status::Error(Err::INVALID_PARAM, "Null buffer");
   }
@@ -1116,6 +1309,10 @@ Status EE871::readPartName(uint8_t* buf) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
   }
+  Status guard;
+  if (!_normalOperationAllowed(guard)) {
+    return guard;
+  }
   if (buf == nullptr) {
     return Status::Error(Err::INVALID_PARAM, "Null buffer");
   }
@@ -1128,6 +1325,10 @@ Status EE871::readPartName(uint8_t* buf) {
 Status EE871::writePartName(const uint8_t* buf) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
+  Status guard;
+  if (!_normalOperationAllowed(guard)) {
+    return guard;
   }
   if (buf == nullptr) {
     return Status::Error(Err::INVALID_PARAM, "Null buffer");
@@ -1160,6 +1361,10 @@ Status EE871::readBusAddress(uint8_t& address) {
 Status EE871::writeBusAddress(uint8_t address) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
+  Status guard;
+  if (!_normalOperationAllowed(guard)) {
+    return guard;
   }
   if (!hasAddressConfig()) {
     return Status::Error(Err::NOT_SUPPORTED, "Address config not supported");
@@ -1205,6 +1410,10 @@ Status EE871::writeCo2IntervalFactor(int8_t factor) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
   }
+  Status guard;
+  if (!_normalOperationAllowed(guard)) {
+    return guard;
+  }
   if (!hasSpecificInterval()) {
     return Status::Error(Err::NOT_SUPPORTED, "Specific interval not supported");
   }
@@ -1224,6 +1433,10 @@ Status EE871::writeCo2Filter(uint8_t filter) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
   }
+  Status guard;
+  if (!_normalOperationAllowed(guard)) {
+    return guard;
+  }
   if (!hasFilterConfig()) {
     return Status::Error(Err::NOT_SUPPORTED, "Filter config not supported");
   }
@@ -1238,6 +1451,10 @@ Status EE871::readOperatingMode(uint8_t& mode) {
 Status EE871::writeOperatingMode(uint8_t mode) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
+  Status guard;
+  if (!_normalOperationAllowed(guard)) {
+    return guard;
   }
   // Only bits 0 and 1 are valid.
   if (mode > 0x03) {
@@ -1271,6 +1488,10 @@ Status EE871::readAutoAdjustStatus(bool& running) {
 Status EE871::startAutoAdjust() {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
+  Status guard;
+  if (!_normalOperationAllowed(guard)) {
+    return guard;
   }
   if (!hasAutoAdjust()) {
     return Status::Error(Err::NOT_SUPPORTED, "Auto adjust not supported");
@@ -1404,6 +1625,14 @@ Status EE871::_busResetRaw() {
   return Status::Ok();
 }
 
+Status EE871::_busResetTracked() {
+  Status guard;
+  if (!_normalOperationAllowed(guard)) {
+    return guard;
+  }
+  return _updateHealth(_busResetRaw());
+}
+
 Status EE871::checkBusIdle() {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
@@ -1488,6 +1717,10 @@ Status EE871::_readControlByteRaw(uint8_t controlByte, uint8_t& data) {
 }
 
 Status EE871::_readControlByteTracked(uint8_t controlByte, uint8_t& data) {
+  Status guard;
+  if (!_normalOperationAllowed(guard)) {
+    return guard;
+  }
   Status st = _readControlByteRaw(controlByte, data);
   return _updateHealth(st);
 }
@@ -1641,6 +1874,13 @@ Status EE871::_writeCommandTracked(
     uint8_t dataByte,
     ClockWaitClass completionClass,
     WriteProgress* progress) {
+  Status guard;
+  if (!_normalOperationAllowed(guard)) {
+    if (progress != nullptr) {
+      *progress = WriteProgress{};
+    }
+    return guard;
+  }
   Status st = _writeCommandRaw(
       controlByte,
       addressByte,

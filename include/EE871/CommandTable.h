@@ -110,6 +110,10 @@ static constexpr uint8_t CUSTOM_FW_VERSION_MAIN = 0x00; ///< Firmware main versi
 static constexpr uint8_t CUSTOM_FW_VERSION_SUB = 0x01;  ///< Firmware sub version custom-memory address.
 static constexpr uint8_t CUSTOM_E2_SPEC_VERSION = 0x02; ///< Device E2 specification version address.
 
+static constexpr uint8_t CUSTOM_ADJUSTMENT_SUPPORT = 0x03; ///< Adjustment-support flags address.
+static constexpr uint8_t CUSTOM_ADJUSTMENT_POINT_SUPPORT = 0x04; ///< Adjustment-point support flags address.
+static constexpr uint8_t CUSTOM_ADJUSTMENT_TIME_GENERAL_SUPPORT = 0x05; ///< General adjustment-time support flags address.
+static constexpr uint8_t CUSTOM_ADJUSTMENT_TIME_SUPPORT = 0x06; ///< Per-measurement adjustment-time support flags address.
 static constexpr uint8_t CUSTOM_OPERATING_FUNCTIONS = 0x07;    ///< Feature-support flags address.
 static constexpr uint8_t CUSTOM_OPERATING_MODE_SUPPORT = 0x08; ///< Operating-mode support flags address.
 static constexpr uint8_t CUSTOM_SPECIAL_FEATURES = 0x09;       ///< Special-feature support flags address.
@@ -198,6 +202,18 @@ inline const char* co2ErrorCodeName(uint8_t code) {
 // ============================================================================
 // Feature Flags
 // ============================================================================
+
+// CUSTOM_ADJUSTMENT_SUPPORT (0x03)
+static constexpr uint8_t FEATURE_CO2_CUSTOM_ADJUSTMENT = 0x08; ///< CO2 custom-adjustment support bit.
+
+// CUSTOM_ADJUSTMENT_POINT_SUPPORT (0x04)
+static constexpr uint8_t FEATURE_CO2_ADJUSTMENT_POINT = 0x08; ///< CO2 adjustment-point support bit.
+
+// CUSTOM_ADJUSTMENT_TIME_GENERAL_SUPPORT (0x05)
+static constexpr uint8_t FEATURE_CUSTOM_ADJUSTMENT_TIME_GENERAL = 0x01; ///< General custom adjustment-time support bit.
+
+// CUSTOM_ADJUSTMENT_TIME_SUPPORT (0x06)
+static constexpr uint8_t FEATURE_CO2_ADJUSTMENT_TIME = 0x08; ///< CO2 adjustment-time support bit.
 
 // CUSTOM_OPERATING_FUNCTIONS (0x07)
 static constexpr uint8_t FEATURE_SERIAL_NUMBER = 0x01;      ///< Serial number support bit in 0x07.
