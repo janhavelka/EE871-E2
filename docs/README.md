@@ -1,6 +1,6 @@
 # EE871-E2 Documentation Index
 
-Last updated: 2026-06-02
+Last updated: 2026-07-28
 
 Use this index to choose the right document. The repository contains maintained
 engineering docs, historical audit records, curated protocol notes, and raw
@@ -18,6 +18,8 @@ release guidance.
 | [IDF_PORT.md](IDF_PORT.md) | ESP-IDF port architecture, constraints, and validation checklist. | Current guidance; pure IDF build success remains unproven until CI or local `idf.py` proves it. |
 | [IDF_PORT_IMPLEMENTATION.md](IDF_PORT_IMPLEMENTATION.md) | Short implementation note for files added by the IDF port. | Current implementation summary. |
 | [EE871_E2_Protocol_and_Register_Map.md](EE871_E2_Protocol_and_Register_Map.md) | Curated E2 protocol and EE871 register reference. | Current implementation reference; verify exact vendor tables against PDFs when needed. |
+| [EE871_TUNNELMONITOR_NODE_SUITABILITY_AUDIT_2026-07-28.md](EE871_TUNNELMONITOR_NODE_SUITABILITY_AUDIT_2026-07-28.md) | Cross-repository audit of EE871-E2 v1.0.0 suitability for a dedicated TunnelMonitor E2 worker. | Current audit; identifies library blockers separately from required TunnelMonitor integration work. |
+| [prompts/README.md](prompts/README.md) | Ordered AI-coder prompt series that closes the general EE871 gaps first, then adds a separate E2 owner/module/product integration in consuming firmware. | Current implementation sequence; supersedes the older single TunnelMonitor-fit prompt. |
 
 ## Historical Docs
 
