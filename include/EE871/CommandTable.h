@@ -154,8 +154,17 @@ static constexpr uint8_t BUS_ADDRESS_MAX = 7;           ///< Maximum persistent 
 
 static constexpr uint8_t BUS_RESET_CLOCKS = 9; ///< Minimum clocks with SDA high to reset slave state machine.
 
+static constexpr uint16_t CLOCK_LOW_MIN_US = 100;  ///< Minimum E2 clock-low phase.
+static constexpr uint16_t CLOCK_HIGH_MIN_US = 100; ///< Minimum E2 clock-high phase.
+static constexpr uint32_t CLOCK_PERIOD_MAX_US = 2000; ///< Slowest legal effective clock period (500 Hz).
+static constexpr uint32_t BIT_TIMEOUT_MAX_US = 25000; ///< Maximum accepted per-bit stretch timeout.
+static constexpr uint32_t BYTE_TIMEOUT_MAX_US = 35000; ///< Maximum accepted per-byte timeout.
+static constexpr uint8_t LONG_DELAY_SLICE_MAX_MS = 50; ///< Maximum cooperative long-wait slice.
+
 static constexpr uint32_t WRITE_DELAY_MAX_MS = 5000; ///< Maximum accepted 0x10/0x50 write delay configuration.
 static constexpr uint32_t INTERVAL_WRITE_DELAY_MAX_MS = 5000; ///< Maximum accepted interval write delay configuration.
+static constexpr uint32_t WRITE_DELAY_PROTOCOL_MIN_MS = 150; ///< Minimum safe 0x10/0x50 completion window.
+static constexpr uint32_t INTERVAL_WRITE_DELAY_PROTOCOL_MIN_MS = 300; ///< Minimum safe interval-pair commit window.
 
 // ============================================================================
 // CO2 Error Codes (read from custom memory 0xC1 when status bit3 set)

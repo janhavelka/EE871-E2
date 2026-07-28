@@ -1,8 +1,8 @@
 # EE871-E2 Hardening Final Report
 
 Started: 2026-05-31
-Last updated: 2026-06-02
-Branch: `hardening/ee871-e2-industry-readiness`
+Last updated: 2026-07-28
+Original branch: `hardening/ee871-e2-industry-readiness`
 
 ## Current Status Summary
 
@@ -841,3 +841,40 @@ Field/industry-grade wording:
   ESP32-S3/EE871 bench setup."
 - Do not claim "fully field-proven" or equivalent coverage across all physical
   fault cases.
+
+## 2026-07-28 Protocol Timing And Fault-Precision Follow-up
+
+Branch: `feature/ee871-hardening-series`
+
+This follow-up corrects protocol mechanics without changing the managed
+synchronous or framework-neutral architecture:
+
+- one deadline-aware transport path now separates ordinary bit/byte timing,
+  normal `0x10`/`0x50` completion, and interval-pair commit completion;
+- START verifies physical SDA high and reports precise `BUS_STUCK`;
+- pointer completion is ordered before every dependent `0x51`, while block
+  reads retain pointer auto-increment;
+- optional task-context long waits are bounded and cooperative;
+- write readback mismatch is the distinct `VERIFY_MISMATCH` status and remains
+  transport-health neutral;
+- static and active-config timing queries expose conservative, bus-silent
+  owner-admission bounds.
+
+The native callback-boundary fake now injects exact stretch durations by
+protocol phase and records transaction ordering. Native coverage is 46 tests,
+including exact 25/35 ms boundaries, near-limit 150/300 ms completion,
+completion overruns, callback slicing, all operation-bound formulas, and
+largest-valid-input arithmetic.
+
+Software validation on 2026-07-28:
+
+- core timing guard: PASS;
+- generated version check: PASS, version remains `1.0.0`;
+- native tests: PASS, 46/46;
+- Arduino ESP32-S3 and ESP32-S2 example builds: PASS;
+- pure ESP-IDF build: not run because `idf.py` is unavailable;
+- HIL and physical fault-jig validation: not run.
+
+The exact formulas and callback assumptions are maintained in
+`EE871_E2_OPERATION_TIMING_BOUNDS.md`; the prompt-specific command evidence is
+in the corresponding handoff report under `docs/reports/`.

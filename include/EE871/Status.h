@@ -26,7 +26,8 @@ enum class Err : uint8_t {
   BUS_STUCK,                 ///< Bus lines stuck (SDA or SCL held low)
   ALREADY_INITIALIZED,       ///< begin() called without end()
   OUT_OF_RANGE,              ///< Value out of valid range
-  NOT_SUPPORTED              ///< Feature not supported by this device/firmware
+  NOT_SUPPORTED,             ///< Feature not supported by this device/firmware
+  VERIFY_MISMATCH = 15       ///< Transport completed but write readback did not match
 };
 
 /// @brief Status structure returned by all fallible operations.

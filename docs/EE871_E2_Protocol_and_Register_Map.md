@@ -3,7 +3,7 @@
 **Target device:** EE871 CO2 probe, E2 interface, **0...5% CO2 (0...50,000 ppm)**.  
 This document is a **curated implementation reference** for writing an E2 master library.
 
-Last reviewed: 2026-06-02.
+Last reviewed: 2026-07-28.
 
 This is the curated implementation reference. It condenses the vendor PDFs and
 the driver requirements into one working protocol document. For release or
@@ -97,6 +97,25 @@ Your master must therefore:
 - When releasing CLK to HIGH, **read back CLK** (or wait until it actually becomes HIGH)
 - Apply timeouts: per-bit stretch timeout <= 25 ms; per-byte timeout <= 35 ms
 
+### 3.5 Ordinary timing versus write completion
+
+The ordinary 25 ms per-bit and 35 ms per-byte limits are not enlarged for a
+whole write frame. EE871 write commands have a separate completion phase:
+
+- `0x10` direct custom writes and `0x50` pointer writes allow up to 150 ms;
+- the high-byte commit of the `0xC6`/`0xC7` interval pair allows up to 300 ms;
+- the low interval byte is only a staged ordinary write.
+
+The completion budget starts after the full PEC byte is transferred. Only the
+final PEC ACK and final STOP SCL-high wait may use it. Their polling and
+driver-requested delays consume the same total budget; after STOP, the master
+waits only the remainder. This is deliberately distinct from adding a full
+quiet delay after a full long stretch.
+
+The library accepts configured completion windows through 5000 ms for source
+compatibility, normalizes values below 150/300 ms upward, and recommends the
+150/300 ms protocol values.
+
 ---
 
 ## 4) Layer 2: Byte framing, ACK/NACK, PEC
@@ -168,6 +187,11 @@ Defined write main commands:
   - Set by **0x50** write: AddressByte = pointer high, DataByte = pointer low
   - Defaults to **0x0000 after power-up**
   - **Auto-increments after each read** via 0x51 (and after write commands per flowcharts)
+
+The `0x50` operation must complete before the next transaction begins. Do not
+probe with `0x51` or otherwise issue a new START during the pointer-completion
+window. For a block read, set the pointer once, wait for completion once, then
+perform repeated `0x51` reads using auto-increment.
 
 ---
 

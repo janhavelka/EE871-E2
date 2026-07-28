@@ -35,6 +35,24 @@ using E2ReadLineFn = bool (*)(void* user);
 /// @param user User context pointer passed through from Config.
 using E2DelayUsFn = void (*)(uint32_t us, void* user);
 
+/// @brief Optional task-context millisecond delay callback signature.
+///
+/// Long write-completion waits use this callback in bounded slices when it is
+/// supplied. It must delay for at least the requested duration, remain
+/// bounded, and must not call public methods on the same EE871 instance.
+/// This callback is never used for E2 bit signaling and is not ISR-safe.
+/// @param ms Milliseconds to delay.
+/// @param user User context pointer passed through from Config.
+using E2DelayMsFn = void (*)(uint32_t ms, void* user);
+
+/// @brief Optional cooperative task-context yield callback signature.
+///
+/// The driver invokes this callback after each completed long-delay slice.
+/// It is never invoked from START, STOP, bit, byte, ACK, PEC, or ordinary
+/// clock-stretch timing.
+/// @param user User context pointer passed through from Config.
+using E2YieldFn = void (*)(void* user);
+
 /// @brief Configuration for EE871 driver.
 ///
 /// The transport callbacks implement GPIO-style open-drain E2 line control.
@@ -72,6 +90,11 @@ struct Config {
 
   // === Health Tracking ===
   uint8_t offlineThreshold = 5;   ///< Consecutive failures before OFFLINE; zero normalizes to 1 in begin().
+
+  // === Optional task-context long-wait support ===
+  E2DelayMsFn delayMs = nullptr;  ///< Optional bounded millisecond delay for write-completion waits.
+  E2YieldFn yield = nullptr;      ///< Optional cooperative yield after each long-delay slice.
+  uint8_t longDelaySliceMs = 1;   ///< Long-wait slice, normalized from zero to 1 ms; maximum 50 ms.
 };
 
 } // namespace EE871

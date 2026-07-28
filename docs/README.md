@@ -14,6 +14,7 @@ release guidance.
 | [EE871_E2_HARDENING_FINAL_REPORT.md](EE871_E2_HARDENING_FINAL_REPORT.md) | Running hardening, validation, and release-readiness record for the branch. | Current branch report. |
 | [EE871_E2_HARDWARE_VALIDATION_MATRIX.md](EE871_E2_HARDWARE_VALIDATION_MATRIX.md) | Hardware validation plan plus recorded bench evidence. | Current evidence ledger. |
 | [EE871_E2_HIL_RUNNER.md](EE871_E2_HIL_RUNNER.md) | Operator guide for `tools/ee871_hil_runner.py`. | Current HIL runner usage. |
+| [EE871_E2_OPERATION_TIMING_BOUNDS.md](EE871_E2_OPERATION_TIMING_BOUNDS.md) | Formula reference for conservative, bus-silent operation admission bounds. | Current public timing-query contract. |
 | [EE871_E2_RELEASE_NOTES_1.0.0.md](EE871_E2_RELEASE_NOTES_1.0.0.md) | Release summary, validation evidence, limitations, and tagging checklist for `1.0.0`. | Current release notes. |
 | [IDF_PORT.md](IDF_PORT.md) | ESP-IDF port architecture, constraints, and validation checklist. | Current guidance; pure IDF build success remains unproven until CI or local `idf.py` proves it. |
 | [IDF_PORT_IMPLEMENTATION.md](IDF_PORT_IMPLEMENTATION.md) | Short implementation note for files added by the IDF port. | Current implementation summary. |

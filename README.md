@@ -175,9 +175,40 @@ Cache-only diagnostics are available through `SettingsSnapshot`,
 
 ## Timing And Blocking
 
-The driver is managed synchronous: E2 transactions block for bounded protocol time, and `tick(nowMs)` only records the latest application timestamp for diagnostics. Clock stretching is bounded by `bitTimeoutUs` and `byteTimeoutUs`; flash writes are bounded by `writeDelayMs` or `intervalWriteDelayMs` with max 5000 ms validation.
+The driver is managed synchronous: E2 transactions block for bounded protocol
+time, and `tick(nowMs)` only records the latest application timestamp for
+diagnostics. Ordinary bit and byte stretches retain the E2 limits of 25 ms and
+35 ms. Only the final PEC ACK and STOP of `0x10`/`0x50` writes can consume the
+separate write-completion window. The first interval byte is staged with
+ordinary timing; its high-byte commit uses the separate interval-pair window.
 
-The library never owns GPIO pins or an I2C/Wire instance. Applications provide `setScl`, `setSda`, `readScl`, `readSda`, and `delayUs` callbacks.
+`writeDelayMs` values below 150 ms normalize to 150 ms, and
+`intervalWriteDelayMs` values below 300 ms normalize to 300 ms. Those values
+are the recommended normal settings. Existing values through 5000 ms remain
+valid, but can make multi-step convenience operations block for several
+seconds.
+
+Pointer writes complete before any dependent `0x51` read begins. Block reads
+set the pointer once, wait once, and then use pointer auto-increment. Persistent
+write readback mismatches return `VERIFY_MISMATCH`; they are not transport
+failures.
+
+Applications can supply optional `delayMs` and `yield` callbacks. Long
+completion waits are divided into `longDelaySliceMs` slices (1..50 ms), use
+`delayMs` when available, and yield after each completed slice. These callbacks
+are task-context facilities and are not ISR-safe. They are never called from
+bit-level signaling or ordinary clock-stretch polling.
+
+Use either `operationTimingBound()` overload to obtain a conservative,
+configuration-derived admission bound without E2 I/O. The static overload
+validates a proposed `Config`; the instance overload uses the normalized active
+configuration. Bounds assume callbacks honor requested delays and remain
+bounded. See
+[EE871_E2_OPERATION_TIMING_BOUNDS.md](docs/EE871_E2_OPERATION_TIMING_BOUNDS.md)
+for formulas and count rules.
+
+The library never owns GPIO pins or an I2C/Wire instance. Applications provide
+the open-drain line and delay callbacks.
 
 ## Persistent Configuration Writes
 
@@ -231,6 +262,7 @@ on the same `EE871` instance recursively.
 - Lifecycle: `begin`, `tick`, `end`
 - Diagnostics: `probe`, `recover`, `resyncPersistentConfig`, `busReset`,
   `checkBusIdle`, `persistentConfigDirty`, `persistentConfigDirtyError`
+- Admission: static and instance `operationTimingBound`
 - Identification: `readGroup`, `readSubgroup`, `readFirmwareVersion`, `readE2SpecVersion`
 - Measurements: `readStatus`, `readCo2Fast`, `readCo2Average`, `readErrorCode`
 - Custom memory/config: `customRead`, `customWrite`, `writeMeasurementInterval`, bus address, filter, operating mode, auto-adjust, calibration helpers
@@ -296,6 +328,7 @@ Dry-runs and operator/fault steps are never reported as hardware `PASS`.
 - `CHANGELOG.md` - full release history
 - `docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md` - hardware validation plan and CLI recipe
 - `docs/EE871_E2_HIL_RUNNER.md` - automatic serial HIL runner usage and verdict rules
+- `docs/EE871_E2_OPERATION_TIMING_BOUNDS.md` - conservative blocking-bound formulas
 - `docs/IDF_PORT.md` - ESP-IDF portability and validation guidance
 - `docs/IDF_PORT_IMPLEMENTATION.md` - ESP-IDF implementation notes
 - `docs/EE871_E2_RELEASE_NOTES_1.0.0.md` - release notes and tagging checklist

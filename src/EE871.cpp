@@ -9,6 +9,7 @@ namespace EE871 {
 namespace {
 
 static constexpr uint32_t kPollStepUs = 5;
+static constexpr uint32_t kDataSetupUs = 10;
 
 inline void setScl(const Config& cfg, bool level) {
   cfg.setScl(level, cfg.busUser);
@@ -26,156 +27,59 @@ inline bool readSda(const Config& cfg) {
   return cfg.readSda(cfg.busUser);
 }
 
-inline void delayUs(const Config& cfg, uint32_t us, uint32_t* elapsedUs) {
-  cfg.delayUs(us, cfg.busUser);
-  if (elapsedUs != nullptr) {
-    const uint32_t room = std::numeric_limits<uint32_t>::max() - *elapsedUs;
-    *elapsedUs = (us > room) ? std::numeric_limits<uint32_t>::max() : (*elapsedUs + us);
-  }
+uint32_t saturatingAddU32(uint32_t lhs, uint32_t rhs) {
+  const uint32_t room = std::numeric_limits<uint32_t>::max() - lhs;
+  return (rhs > room) ? std::numeric_limits<uint32_t>::max() : (lhs + rhs);
 }
 
-static Status waitSclHigh(const Config& cfg, uint32_t* elapsedUs) {
-  uint32_t waitedUs = 0;
-  while (!readScl(cfg)) {
-    if (waitedUs >= cfg.bitTimeoutUs) {
-      return Status::Error(Err::TIMEOUT, "Clock stretch timeout", static_cast<int32_t>(waitedUs));
-    }
-    if (elapsedUs != nullptr) {
-      const uint32_t remaining =
-          (*elapsedUs < cfg.byteTimeoutUs) ? (cfg.byteTimeoutUs - *elapsedUs) : 0U;
-      if (remaining < kPollStepUs) {
-        return Status::Error(Err::TIMEOUT, "Byte timeout", static_cast<int32_t>(*elapsedUs));
-      }
-    }
-    delayUs(cfg, kPollStepUs, elapsedUs);
-    waitedUs += kPollStepUs;
+bool checkedAddU64(uint64_t& value, uint64_t addend) {
+  if (addend > std::numeric_limits<uint64_t>::max() - value) {
+    return false;
+  }
+  value += addend;
+  return true;
+}
+
+Status addScaledU64(uint64_t& value, uint64_t factor, uint64_t count) {
+  if (factor != 0 && count > std::numeric_limits<uint64_t>::max() / factor) {
+    return Status::Error(Err::OUT_OF_RANGE, "Timing bound overflow");
+  }
+  if (!checkedAddU64(value, factor * count)) {
+    return Status::Error(Err::OUT_OF_RANGE, "Timing bound overflow");
   }
   return Status::Ok();
 }
 
-// Data setup time before SCL rises (minimum per E2 spec)
-static constexpr uint32_t kDataSetupUs = 10;
-
-static Status e2Start(const Config& cfg) {
-  setSda(cfg, true);
-  setScl(cfg, true);
-  Status st = waitSclHigh(cfg, nullptr);
-  if (!st.ok()) {
-    return st;
-  }
-  delayUs(cfg, cfg.startHoldUs, nullptr);
-  setSda(cfg, false);
-  delayUs(cfg, cfg.startHoldUs, nullptr);
-  setScl(cfg, false);
-  delayUs(cfg, cfg.clockLowUs, nullptr);
-  return Status::Ok();
+uint64_t startBoundUs(const Config& cfg) {
+  return static_cast<uint64_t>(cfg.bitTimeoutUs) +
+         (2ULL * cfg.startHoldUs) + cfg.clockLowUs;
 }
 
-static Status e2Stop(const Config& cfg) {
-  // SCL is already low with proper low time from last bit
-  setSda(cfg, false);  // Ensure SDA low before releasing SCL
-  delayUs(cfg, kDataSetupUs, nullptr);
-  setScl(cfg, true);
-  Status st = waitSclHigh(cfg, nullptr);
-  if (!st.ok()) {
-    return st;
-  }
-  delayUs(cfg, cfg.stopHoldUs, nullptr);
-  setSda(cfg, true);
-  delayUs(cfg, cfg.stopHoldUs, nullptr);
-  return Status::Ok();
+uint64_t stopBoundUs(const Config& cfg) {
+  return static_cast<uint64_t>(kDataSetupUs) + cfg.bitTimeoutUs +
+         (2ULL * cfg.stopHoldUs);
 }
 
-static Status writeBit(const Config& cfg, bool bit, uint32_t* elapsedUs) {
-  // SCL is already low from previous bit or START
-  setSda(cfg, bit);
-  delayUs(cfg, kDataSetupUs, elapsedUs);  // Data setup time
-  setScl(cfg, true);
-  Status st = waitSclHigh(cfg, elapsedUs);
-  if (!st.ok()) {
-    return st;
-  }
-  delayUs(cfg, cfg.clockHighUs, elapsedUs);
-  setScl(cfg, false);
-  delayUs(cfg, cfg.clockLowUs, elapsedUs);  // Clock low time AFTER pulling low
-  return Status::Ok();
+uint64_t readTransactionBoundUs(const Config& cfg) {
+  return startBoundUs(cfg) + (3ULL * cfg.byteTimeoutUs) + stopBoundUs(cfg);
 }
 
-static Status readBit(const Config& cfg, bool& bit, uint32_t* elapsedUs) {
-  // SCL is already low from previous bit
-  setSda(cfg, true);  // Release SDA for slave to drive
-  delayUs(cfg, kDataSetupUs, elapsedUs);  // Setup time
-  setScl(cfg, true);
-  Status st = waitSclHigh(cfg, elapsedUs);
-  if (!st.ok()) {
-    return st;
-  }
-  const uint32_t sampleDelay = cfg.clockHighUs / 2;
-  delayUs(cfg, sampleDelay, elapsedUs);
-  bit = readSda(cfg);
-  delayUs(cfg, cfg.clockHighUs - sampleDelay, elapsedUs);
-  setScl(cfg, false);
-  delayUs(cfg, cfg.clockLowUs, elapsedUs);  // Clock low time AFTER pulling low
-  return Status::Ok();
+uint64_t normalWriteTransactionBoundUs(const Config& cfg) {
+  return startBoundUs(cfg) + (4ULL * cfg.byteTimeoutUs) + stopBoundUs(cfg);
 }
 
-static Status writeByte(const Config& cfg, uint8_t value, uint32_t* elapsedUs) {
-  for (uint8_t mask = 0x80; mask != 0; mask >>= 1) {
-    Status st = writeBit(cfg, (value & mask) != 0, elapsedUs);
-    if (!st.ok()) {
-      return st;
-    }
-  }
-  return Status::Ok();
+uint64_t completionWriteTransactionBoundUs(
+    const Config& cfg, uint32_t completionMs) {
+  return startBoundUs(cfg) + (4ULL * cfg.byteTimeoutUs) +
+         (static_cast<uint64_t>(completionMs) * 1000ULL);
 }
 
-static Status readByte(const Config& cfg, uint8_t& value, uint32_t* elapsedUs) {
-  value = 0;
-  for (uint8_t mask = 0x80; mask != 0; mask >>= 1) {
-    bool bit = false;
-    Status st = readBit(cfg, bit, elapsedUs);
-    if (!st.ok()) {
-      return st;
-    }
-    if (bit) {
-      value |= mask;
-    }
-  }
-  return Status::Ok();
-}
-
-static Status readAck(const Config& cfg, bool& acked, uint32_t* elapsedUs) {
-  // SCL is already low from last data bit
-  setSda(cfg, true);  // Release SDA for slave to drive ACK
-  delayUs(cfg, kDataSetupUs, elapsedUs);
-  setScl(cfg, true);
-  Status st = waitSclHigh(cfg, elapsedUs);
-  if (!st.ok()) {
-    return st;
-  }
-  const uint32_t sampleDelay = cfg.clockHighUs / 2;
-  delayUs(cfg, sampleDelay, elapsedUs);
-  acked = !readSda(cfg);  // ACK = SDA low
-  delayUs(cfg, cfg.clockHighUs - sampleDelay, elapsedUs);
-  setScl(cfg, false);
-  delayUs(cfg, cfg.clockLowUs, elapsedUs);  // Low time for next phase
-  return Status::Ok();
-}
-
-static Status sendAck(const Config& cfg, bool ack, uint32_t* elapsedUs) {
-  // SCL is already low from last data bit
-  setSda(cfg, !ack);  // ACK = SDA low, NACK = SDA high
-  delayUs(cfg, kDataSetupUs, elapsedUs);
-  setScl(cfg, true);
-  Status st = waitSclHigh(cfg, elapsedUs);
-  if (!st.ok()) {
-    return st;
-  }
-  delayUs(cfg, cfg.clockHighUs, elapsedUs);
-  setScl(cfg, false);
-  delayUs(cfg, cfg.clockLowUs, elapsedUs);  // Low time for next phase
-  setSda(cfg, true);  // Release SDA
-  return Status::Ok();
+uint64_t busResetBoundUs(const Config& cfg) {
+  const uint64_t pulse =
+      static_cast<uint64_t>(cfg.clockLowUs) + cfg.bitTimeoutUs + cfg.clockHighUs;
+  return (static_cast<uint64_t>(cmd::BUS_RESET_CLOCKS) * pulse) +
+         cfg.clockLowUs + kDataSetupUs + cfg.bitTimeoutUs +
+         (2ULL * cfg.stopHoldUs);
 }
 
 static uint8_t calcPecRead(uint8_t controlByte, uint8_t dataByte) {
@@ -186,13 +90,472 @@ static uint8_t calcPecWrite(uint8_t controlByte, uint8_t addressByte, uint8_t da
   return static_cast<uint8_t>((controlByte + addressByte + dataByte) & 0xFF);
 }
 
-static void sleepMs(const Config& cfg, uint32_t delayMs) {
-  for (uint32_t i = 0; i < delayMs; ++i) {
-    cfg.delayUs(1000, cfg.busUser);
+} // namespace
+
+void EE871::_delayUs(
+    const Config& config, uint32_t us, ByteDeadline* deadline) {
+  config.delayUs(us, config.busUser);
+  if (deadline != nullptr) {
+    deadline->elapsedUs = saturatingAddU32(deadline->elapsedUs, us);
   }
 }
 
-} // namespace
+Status EE871::_delayWithinDeadline(
+    const Config& config,
+    uint32_t us,
+    ClockWaitClass waitClass,
+    ByteDeadline& deadline) {
+  if (deadline.elapsedUs > deadline.limitUs ||
+      us > deadline.limitUs - deadline.elapsedUs) {
+    return Status::Error(
+        Err::TIMEOUT,
+        waitClass == ClockWaitClass::NORMAL_BIT
+            ? "Byte timeout"
+            : (waitClass == ClockWaitClass::INTERVAL_COMMIT
+                   ? "Interval commit timeout"
+                   : "Write completion timeout"),
+        static_cast<int32_t>(deadline.elapsedUs));
+  }
+  _delayUs(config, us, &deadline);
+  return Status::Ok();
+}
+
+void EE871::_delayLongMs(const Config& config, uint32_t totalMs) {
+  uint32_t remainingMs = totalMs;
+  while (remainingMs != 0U) {
+    const uint32_t slice =
+        (remainingMs > config.longDelaySliceMs)
+            ? config.longDelaySliceMs
+            : remainingMs;
+    if (config.delayMs != nullptr) {
+      config.delayMs(slice, config.busUser);
+    } else {
+      config.delayUs(slice * 1000U, config.busUser);
+    }
+    if (config.yield != nullptr) {
+      (config.yield)(config.busUser);
+    }
+    remainingMs -= slice;
+  }
+}
+
+Status EE871::_waitSclHigh(
+    const Config& config,
+    ClockWaitClass waitClass,
+    ByteDeadline& deadline) {
+  uint32_t waitedUs = 0;
+  const uint32_t bitLimit =
+      (waitClass == ClockWaitClass::NORMAL_BIT)
+          ? config.bitTimeoutUs
+          : deadline.limitUs;
+
+  while (!readScl(config)) {
+    if (waitedUs > bitLimit || kPollStepUs > bitLimit - waitedUs) {
+      return Status::Error(
+          Err::TIMEOUT,
+          waitClass == ClockWaitClass::NORMAL_BIT
+              ? "Clock stretch timeout"
+              : (waitClass == ClockWaitClass::INTERVAL_COMMIT
+                     ? "Interval commit timeout"
+                     : "Write completion timeout"),
+          static_cast<int32_t>(waitedUs));
+    }
+    if (deadline.elapsedUs > deadline.limitUs ||
+        kPollStepUs > deadline.limitUs - deadline.elapsedUs) {
+      return Status::Error(
+          Err::TIMEOUT,
+          waitClass == ClockWaitClass::NORMAL_BIT
+              ? "Byte timeout"
+              : (waitClass == ClockWaitClass::INTERVAL_COMMIT
+                     ? "Interval commit timeout"
+                     : "Write completion timeout"),
+          static_cast<int32_t>(deadline.elapsedUs));
+    }
+    _delayUs(config, kPollStepUs, &deadline);
+    waitedUs += kPollStepUs;
+  }
+  return Status::Ok();
+}
+
+Status EE871::_e2Start(const Config& config) {
+  setSda(config, true);
+  setScl(config, true);
+  ByteDeadline idleWait{0, config.bitTimeoutUs};
+  Status st = _waitSclHigh(
+      config, ClockWaitClass::NORMAL_BIT, idleWait);
+  if (!st.ok()) {
+    return Status::Error(
+        Err::BUS_STUCK, "SCL low before START", st.detail);
+  }
+  if (!readSda(config)) {
+    return Status::Error(Err::BUS_STUCK, "SDA low before START");
+  }
+  _delayUs(config, config.startHoldUs);
+  setSda(config, false);
+  _delayUs(config, config.startHoldUs);
+  setScl(config, false);
+  _delayUs(config, config.clockLowUs);
+  return Status::Ok();
+}
+
+Status EE871::_e2Stop(
+    const Config& config,
+    ClockWaitClass waitClass,
+    ByteDeadline* suppliedDeadline) {
+  ByteDeadline normalDeadline{0, config.bitTimeoutUs};
+  ByteDeadline& deadline =
+      suppliedDeadline != nullptr ? *suppliedDeadline : normalDeadline;
+
+  setSda(config, false);
+  Status st = _delayWithinDeadline(
+      config, kDataSetupUs, waitClass, deadline);
+  if (!st.ok()) {
+    return st;
+  }
+  setScl(config, true);
+  st = _waitSclHigh(config, waitClass, deadline);
+  if (!st.ok()) {
+    return st;
+  }
+  st = _delayWithinDeadline(
+      config, config.stopHoldUs, waitClass, deadline);
+  if (!st.ok()) {
+    return st;
+  }
+  setSda(config, true);
+  return _delayWithinDeadline(
+      config, config.stopHoldUs, waitClass, deadline);
+}
+
+Status EE871::_writeBit(
+    const Config& config, bool bit, ByteDeadline& deadline) {
+  setSda(config, bit);
+  Status st = _delayWithinDeadline(
+      config, kDataSetupUs, ClockWaitClass::NORMAL_BIT, deadline);
+  if (!st.ok()) {
+    return st;
+  }
+  setScl(config, true);
+  st = _waitSclHigh(
+      config, ClockWaitClass::NORMAL_BIT, deadline);
+  if (!st.ok()) {
+    return st;
+  }
+  st = _delayWithinDeadline(
+      config, config.clockHighUs, ClockWaitClass::NORMAL_BIT, deadline);
+  if (!st.ok()) {
+    return st;
+  }
+  setScl(config, false);
+  return _delayWithinDeadline(
+      config, config.clockLowUs, ClockWaitClass::NORMAL_BIT, deadline);
+}
+
+Status EE871::_readBit(
+    const Config& config, bool& bit, ByteDeadline& deadline) {
+  setSda(config, true);
+  Status st = _delayWithinDeadline(
+      config, kDataSetupUs, ClockWaitClass::NORMAL_BIT, deadline);
+  if (!st.ok()) {
+    return st;
+  }
+  setScl(config, true);
+  st = _waitSclHigh(
+      config, ClockWaitClass::NORMAL_BIT, deadline);
+  if (!st.ok()) {
+    return st;
+  }
+  const uint32_t sampleDelay = config.clockHighUs / 2U;
+  st = _delayWithinDeadline(
+      config, sampleDelay, ClockWaitClass::NORMAL_BIT, deadline);
+  if (!st.ok()) {
+    return st;
+  }
+  bit = readSda(config);
+  st = _delayWithinDeadline(
+      config,
+      config.clockHighUs - sampleDelay,
+      ClockWaitClass::NORMAL_BIT,
+      deadline);
+  if (!st.ok()) {
+    return st;
+  }
+  setScl(config, false);
+  return _delayWithinDeadline(
+      config, config.clockLowUs, ClockWaitClass::NORMAL_BIT, deadline);
+}
+
+Status EE871::_writeByte(
+    const Config& config, uint8_t value, ByteDeadline& deadline) {
+  for (uint8_t mask = 0x80; mask != 0; mask >>= 1) {
+    Status st = _writeBit(config, (value & mask) != 0, deadline);
+    if (!st.ok()) {
+      return st;
+    }
+  }
+  return Status::Ok();
+}
+
+Status EE871::_readByte(
+    const Config& config, uint8_t& value, ByteDeadline& deadline) {
+  value = 0;
+  for (uint8_t mask = 0x80; mask != 0; mask >>= 1) {
+    bool bit = false;
+    Status st = _readBit(config, bit, deadline);
+    if (!st.ok()) {
+      return st;
+    }
+    if (bit) {
+      value |= mask;
+    }
+  }
+  return Status::Ok();
+}
+
+Status EE871::_readAck(
+    const Config& config,
+    bool& acked,
+    ClockWaitClass waitClass,
+    ByteDeadline& deadline) {
+  setSda(config, true);
+  Status st = _delayWithinDeadline(
+      config, kDataSetupUs, waitClass, deadline);
+  if (!st.ok()) {
+    return st;
+  }
+  setScl(config, true);
+  st = _waitSclHigh(config, waitClass, deadline);
+  if (!st.ok()) {
+    return st;
+  }
+  const uint32_t sampleDelay = config.clockHighUs / 2U;
+  st = _delayWithinDeadline(config, sampleDelay, waitClass, deadline);
+  if (!st.ok()) {
+    return st;
+  }
+  acked = !readSda(config);
+  st = _delayWithinDeadline(
+      config, config.clockHighUs - sampleDelay, waitClass, deadline);
+  if (!st.ok()) {
+    return st;
+  }
+  setScl(config, false);
+  return _delayWithinDeadline(
+      config, config.clockLowUs, waitClass, deadline);
+}
+
+Status EE871::_sendAck(
+    const Config& config, bool ack, ByteDeadline& deadline) {
+  setSda(config, !ack);
+  Status st = _delayWithinDeadline(
+      config, kDataSetupUs, ClockWaitClass::NORMAL_BIT, deadline);
+  if (!st.ok()) {
+    return st;
+  }
+  setScl(config, true);
+  st = _waitSclHigh(
+      config, ClockWaitClass::NORMAL_BIT, deadline);
+  if (!st.ok()) {
+    return st;
+  }
+  st = _delayWithinDeadline(
+      config, config.clockHighUs, ClockWaitClass::NORMAL_BIT, deadline);
+  if (!st.ok()) {
+    return st;
+  }
+  setScl(config, false);
+  st = _delayWithinDeadline(
+      config, config.clockLowUs, ClockWaitClass::NORMAL_BIT, deadline);
+  if (!st.ok()) {
+    return st;
+  }
+  setSda(config, true);
+  return Status::Ok();
+}
+
+Status EE871::_validateConfig(const Config& input, Config& normalized) {
+  if (input.setScl == nullptr || input.setSda == nullptr ||
+      input.readScl == nullptr || input.readSda == nullptr ||
+      input.delayUs == nullptr) {
+    return Status::Error(Err::INVALID_CONFIG, "Missing E2 callbacks");
+  }
+  if (input.deviceAddress > cmd::DEVICE_ADDRESS_MAX) {
+    return Status::Error(Err::INVALID_CONFIG, "Invalid device address");
+  }
+  if (input.clockLowUs < cmd::CLOCK_LOW_MIN_US ||
+      input.clockHighUs < cmd::CLOCK_HIGH_MIN_US) {
+    return Status::Error(Err::INVALID_CONFIG, "Clock timing below spec");
+  }
+  const uint64_t effectivePeriodUs =
+      static_cast<uint64_t>(input.clockLowUs) + input.clockHighUs +
+      kDataSetupUs;
+  if (effectivePeriodUs > cmd::CLOCK_PERIOD_MAX_US) {
+    return Status::Error(
+        Err::INVALID_CONFIG, "Effective clock period exceeds 2000 us");
+  }
+  if (input.startHoldUs < 4U || input.stopHoldUs < 4U) {
+    return Status::Error(Err::INVALID_CONFIG, "Start/stop hold below spec");
+  }
+  if (input.bitTimeoutUs == 0U ||
+      input.bitTimeoutUs > cmd::BIT_TIMEOUT_MAX_US) {
+    return Status::Error(Err::INVALID_CONFIG, "Invalid bit timeout");
+  }
+  if (input.byteTimeoutUs < input.bitTimeoutUs ||
+      input.byteTimeoutUs > cmd::BYTE_TIMEOUT_MAX_US) {
+    return Status::Error(Err::INVALID_CONFIG, "Invalid byte timeout");
+  }
+  if (input.writeDelayMs > cmd::WRITE_DELAY_MAX_MS) {
+    return Status::Error(Err::INVALID_CONFIG, "writeDelayMs exceeds safe limit");
+  }
+  if (input.intervalWriteDelayMs > cmd::INTERVAL_WRITE_DELAY_MAX_MS) {
+    return Status::Error(
+        Err::INVALID_CONFIG, "intervalWriteDelayMs exceeds safe limit");
+  }
+  if (input.longDelaySliceMs > cmd::LONG_DELAY_SLICE_MAX_MS) {
+    return Status::Error(
+        Err::INVALID_CONFIG, "longDelaySliceMs exceeds safe limit");
+  }
+
+  normalized = input;
+  if (normalized.writeDelayMs < cmd::WRITE_DELAY_PROTOCOL_MIN_MS) {
+    normalized.writeDelayMs = cmd::WRITE_DELAY_PROTOCOL_MIN_MS;
+  }
+  if (normalized.intervalWriteDelayMs <
+      cmd::INTERVAL_WRITE_DELAY_PROTOCOL_MIN_MS) {
+    normalized.intervalWriteDelayMs =
+        cmd::INTERVAL_WRITE_DELAY_PROTOCOL_MIN_MS;
+  }
+  if (normalized.longDelaySliceMs == 0U) {
+    normalized.longDelaySliceMs = 1U;
+  }
+  if (normalized.offlineThreshold == 0U) {
+    normalized.offlineThreshold = 1U;
+  }
+  return Status::Ok();
+}
+
+Status EE871::_calculateOperationTimingBound(
+    const Config& normalized,
+    OperationKind kind,
+    uint16_t elementCount,
+    OperationTimingBound& out) {
+  const bool blockRead = kind == OperationKind::CUSTOM_BLOCK_READ;
+  if ((!blockRead && elementCount != 1U) ||
+      (blockRead && (elementCount == 0U || elementCount > 256U))) {
+    return Status::Error(
+        Err::INVALID_PARAM, "Invalid timing-bound element count", elementCount);
+  }
+
+  const uint64_t readUs = readTransactionBoundUs(normalized);
+  const uint64_t pointerUs = completionWriteTransactionBoundUs(
+      normalized, normalized.writeDelayMs);
+  const uint64_t customWriteUs = completionWriteTransactionBoundUs(
+      normalized, normalized.writeDelayMs);
+  uint64_t totalUs = 0;
+  Status st = Status::Ok();
+
+  switch (kind) {
+    case OperationKind::CONTROL_READ:
+      totalUs = readUs;
+      break;
+    case OperationKind::CUSTOM_POINTER_WRITE:
+      totalUs = pointerUs;
+      break;
+    case OperationKind::CUSTOM_BYTE_READ:
+      totalUs = pointerUs;
+      st = addScaledU64(totalUs, readUs, 1U);
+      break;
+    case OperationKind::CUSTOM_BLOCK_READ:
+      totalUs = pointerUs;
+      st = addScaledU64(totalUs, readUs, elementCount);
+      break;
+    case OperationKind::CUSTOM_BYTE_WRITE_VERIFY:
+      totalUs = customWriteUs;
+      st = addScaledU64(totalUs, pointerUs, 1U);
+      if (st.ok()) {
+        st = addScaledU64(totalUs, readUs, 1U);
+      }
+      break;
+    case OperationKind::INTERVAL_WRITE_VERIFY:
+      totalUs = normalWriteTransactionBoundUs(normalized);
+      st = addScaledU64(
+          totalUs,
+          completionWriteTransactionBoundUs(
+              normalized, normalized.intervalWriteDelayMs),
+          1U);
+      if (st.ok()) {
+        st = addScaledU64(totalUs, pointerUs, 1U);
+      }
+      if (st.ok()) {
+        st = addScaledU64(totalUs, readUs, 2U);
+      }
+      break;
+    case OperationKind::PART_NAME_WRITE_VERIFY: {
+      uint64_t oneElementUs = customWriteUs;
+      st = addScaledU64(oneElementUs, pointerUs, 1U);
+      if (st.ok()) {
+        st = addScaledU64(oneElementUs, readUs, 1U);
+      }
+      if (st.ok()) {
+        st = addScaledU64(
+            totalUs, oneElementUs, cmd::CUSTOM_PART_NAME_LEN);
+      }
+      break;
+    }
+    case OperationKind::RAW_CO2_READ:
+      st = addScaledU64(totalUs, readUs, 2U);
+      break;
+    case OperationKind::BUS_RESET:
+      totalUs = busResetBoundUs(normalized);
+      break;
+    default:
+      return Status::Error(
+          Err::INVALID_PARAM, "Invalid operation kind");
+  }
+  if (!st.ok()) {
+    return st;
+  }
+
+  if (!checkedAddU64(totalUs, 999ULL)) {
+    return Status::Error(Err::OUT_OF_RANGE, "Timing bound overflow");
+  }
+  const uint64_t maxBlockingMs = totalUs / 1000ULL;
+  if (maxBlockingMs > std::numeric_limits<uint32_t>::max()) {
+    return Status::Error(Err::OUT_OF_RANGE, "Timing bound exceeds uint32_t");
+  }
+
+  OperationTimingBound candidate;
+  candidate.kind = kind;
+  candidate.elementCount = elementCount;
+  candidate.maxBlockingMs = static_cast<uint32_t>(maxBlockingMs);
+  out = candidate;
+  return Status::Ok();
+}
+
+Status EE871::operationTimingBound(
+    const Config& config,
+    OperationKind kind,
+    uint16_t elementCount,
+    OperationTimingBound& out) {
+  Config normalized;
+  Status st = _validateConfig(config, normalized);
+  if (!st.ok()) {
+    return st;
+  }
+  return _calculateOperationTimingBound(
+      normalized, kind, elementCount, out);
+}
+
+Status EE871::operationTimingBound(
+    OperationKind kind,
+    uint16_t elementCount,
+    OperationTimingBound& out) const {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
+  return _calculateOperationTimingBound(
+      _config, kind, elementCount, out);
+}
 
 Status EE871::begin(const Config& config) {
   // Prevent double-init without explicit end()
@@ -202,69 +565,19 @@ Status EE871::begin(const Config& config) {
 
   _resetStoppedState();
 
-  if (config.setScl == nullptr || config.setSda == nullptr ||
-      config.readScl == nullptr || config.readSda == nullptr ||
-      config.delayUs == nullptr) {
-    return Status::Error(Err::INVALID_CONFIG, "Missing E2 callbacks");
-  }
-  if (config.deviceAddress > cmd::DEVICE_ADDRESS_MAX) {
-    return Status::Error(Err::INVALID_CONFIG, "Invalid device address");
-  }
-  if (config.clockLowUs < 100 || config.clockHighUs < 100) {
-    return Status::Error(Err::INVALID_CONFIG, "Clock timing below spec");
-  }
-  if (config.startHoldUs < 4 || config.stopHoldUs < 4) {
-    return Status::Error(Err::INVALID_CONFIG, "Start/stop hold below spec");
-  }
-  if (config.bitTimeoutUs == 0 || config.byteTimeoutUs == 0) {
-    return Status::Error(Err::INVALID_CONFIG, "Timeouts must be non-zero");
-  }
-  if (config.byteTimeoutUs < config.bitTimeoutUs) {
-    return Status::Error(Err::INVALID_CONFIG, "byteTimeoutUs must be >= bitTimeoutUs");
-  }
-  if (config.writeDelayMs > cmd::WRITE_DELAY_MAX_MS) {
-    return Status::Error(Err::INVALID_CONFIG, "writeDelayMs exceeds safe limit");
-  }
-  if (config.intervalWriteDelayMs > cmd::INTERVAL_WRITE_DELAY_MAX_MS) {
-    return Status::Error(Err::INVALID_CONFIG, "intervalWriteDelayMs exceeds safe limit");
-  }
-
-  Config normalized = config;
-  if (normalized.offlineThreshold == 0) {
-    normalized.offlineThreshold = 1;
+  Config normalized;
+  Status st = _validateConfig(config, normalized);
+  if (!st.ok()) {
+    return st;
   }
   _config = normalized;
 
   // Check bus is idle before probing
   if (!readScl(_config) || !readSda(_config)) {
-    // Attempt bus reset - clock out pulses with SDA high
-    setSda(_config, true);
-    for (uint8_t i = 0; i < cmd::BUS_RESET_CLOCKS; ++i) {
-      setScl(_config, false);
-      delayUs(_config, _config.clockLowUs, nullptr);
-      setScl(_config, true);
-      // Wait for SCL to actually rise (handle clock stretching)
-      uint32_t waited = 0;
-      while (!readScl(_config) && waited < _config.bitTimeoutUs) {
-        delayUs(_config, kPollStepUs, nullptr);
-        waited += kPollStepUs;
-      }
-      delayUs(_config, _config.clockHighUs, nullptr);
-    }
-    // Generate STOP condition to leave bus in known state
-    setScl(_config, false);
-    delayUs(_config, _config.clockLowUs, nullptr);
-    setSda(_config, false);
-    delayUs(_config, kDataSetupUs, nullptr);
-    setScl(_config, true);
-    delayUs(_config, _config.stopHoldUs, nullptr);
-    setSda(_config, true);
-    delayUs(_config, _config.stopHoldUs, nullptr);
-    // Check again
-    if (!readScl(_config) || !readSda(_config)) {
-      Status err = Status::Error(Err::BUS_STUCK, "Bus stuck after reset");
+    st = _busResetRaw();
+    if (!st.ok()) {
       _resetStoppedState();
-      return err;
+      return st;
     }
   }
 
@@ -273,7 +586,7 @@ Status EE871::begin(const Config& config) {
   const uint8_t controlLow = cmd::makeControlRead(cmd::MAIN_TYPE_LO, _config.deviceAddress);
   const uint8_t controlHigh = cmd::makeControlRead(cmd::MAIN_TYPE_HI, _config.deviceAddress);
 
-  Status st = _readControlByteRaw(controlLow, low);
+  st = _readControlByteRaw(controlLow, low);
   if (!st.ok()) {
     _resetStoppedState();
     return st;
@@ -298,8 +611,7 @@ Status EE871::begin(const Config& config) {
   _specialFeatures = 0;
 
   // Set pointer to 0x07
-  const uint8_t ptrControl = cmd::makeControlWrite(cmd::MAIN_CUSTOM_PTR, _config.deviceAddress);
-  st = _writeCommandRaw(ptrControl, 0x00, cmd::CUSTOM_OPERATING_FUNCTIONS);
+  st = _setCustomPointerRaw(cmd::CUSTOM_OPERATING_FUNCTIONS);
   if (st.ok()) {
     const uint8_t readControl = cmd::makeControlRead(cmd::MAIN_CUSTOM_PTR, _config.deviceAddress);
     // Read 0x07, 0x08, 0x09 in sequence (auto-increment)
@@ -366,6 +678,7 @@ void EE871::_resetStoppedState() {
   _consecutiveFailures = 0;
   _totalFailures = 0;
   _totalSuccess = 0;
+  _lastWriteProgress = WriteProgress{};
 }
 
 void EE871::_markPersistentConfigDirty(const Status& st) {
@@ -512,10 +825,7 @@ Status EE871::setCustomPointer(uint16_t address) {
     return Status::Error(Err::OUT_OF_RANGE, "Custom pointer > 0xFF",
                          static_cast<int32_t>(address));
   }
-  const uint8_t control = cmd::makeControlWrite(cmd::MAIN_CUSTOM_PTR, _config.deviceAddress);
-  const uint8_t addrHigh = static_cast<uint8_t>(address >> 8);
-  const uint8_t addrLow = static_cast<uint8_t>(address & 0xFF);
-  return _writeCommandTracked(control, addrHigh, addrLow);
+  return _setCustomPointerTracked(static_cast<uint8_t>(address));
 }
 
 Status EE871::customRead(uint8_t address, uint8_t& data) {
@@ -572,21 +882,47 @@ Status EE871::customWrite(uint8_t address, uint8_t value) {
   return _customWriteDirect(address, value);
 }
 
-Status EE871::_customWriteDirect(uint8_t address, uint8_t value, bool* writeAccepted) {
-  if (writeAccepted != nullptr) {
-    *writeAccepted = false;
+Status EE871::_setCustomPointerRaw(uint8_t address) {
+  const uint8_t control =
+      cmd::makeControlWrite(cmd::MAIN_CUSTOM_PTR, _config.deviceAddress);
+  return _writeCommandRaw(
+      control,
+      0x00,
+      address,
+      ClockWaitClass::WRITE_COMPLETION,
+      nullptr);
+}
+
+Status EE871::_setCustomPointerTracked(uint8_t address) {
+  return _updateHealth(_setCustomPointerRaw(address));
+}
+
+Status EE871::_customWriteDirect(
+    uint8_t address, uint8_t value, bool* writeMayHaveEffect) {
+  if (writeMayHaveEffect != nullptr) {
+    *writeMayHaveEffect = false;
   }
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
   }
 
   const uint8_t control = cmd::makeControlWrite(cmd::MAIN_CUSTOM_WRITE, _config.deviceAddress);
-  Status st = _writeCommandTracked(control, address, value, writeAccepted);
+  WriteProgress progress;
+  Status st = _writeCommandTracked(
+      control,
+      address,
+      value,
+      ClockWaitClass::WRITE_COMPLETION,
+      &progress);
+  if (writeMayHaveEffect != nullptr) {
+    *writeMayHaveEffect =
+        progress.effect == WriteEffect::INDETERMINATE ||
+        progress.effect == WriteEffect::ACKNOWLEDGED ||
+        progress.effect == WriteEffect::VERIFIED;
+  }
   if (!st.ok()) {
     return st;
   }
-
-  sleepMs(_config, _config.writeDelayMs);
 
   uint8_t verify = 0;
   st = customRead(address, verify);
@@ -594,8 +930,10 @@ Status EE871::_customWriteDirect(uint8_t address, uint8_t value, bool* writeAcce
     return st;
   }
   if (verify != value) {
-    return Status::Error(Err::E2_ERROR, "Write verify failed", verify);
+    return Status::Error(
+        Err::VERIFY_MISMATCH, "Write verification mismatch", verify);
   }
+  _lastWriteProgress.effect = WriteEffect::VERIFIED;
   return Status::Ok();
 }
 
@@ -618,41 +956,46 @@ Status EE871::writeMeasurementInterval(uint16_t intervalDeciSeconds) {
   const uint8_t low = static_cast<uint8_t>(intervalDeciSeconds & 0xFF);
   const uint8_t high = static_cast<uint8_t>(intervalDeciSeconds >> 8);
 
-  bool lowAccepted = false;
-  Status st = _writeCommandTracked(control, cmd::CUSTOM_INTERVAL_L, low, &lowAccepted);
+  WriteProgress lowProgress;
+  Status st = _writeCommandTracked(
+      control,
+      cmd::CUSTOM_INTERVAL_L,
+      low,
+      ClockWaitClass::NORMAL_BIT,
+      &lowProgress);
   if (!st.ok()) {
-    if (lowAccepted) {
+    if (lowProgress.effect == WriteEffect::INDETERMINATE ||
+        lowProgress.effect == WriteEffect::ACKNOWLEDGED) {
       _markPersistentConfigDirty(st);
     }
     return st;
   }
-  st = _writeCommandTracked(control, cmd::CUSTOM_INTERVAL_H, high);
+  st = _writeCommandTracked(
+      control,
+      cmd::CUSTOM_INTERVAL_H,
+      high,
+      ClockWaitClass::INTERVAL_COMMIT,
+      nullptr);
   if (!st.ok()) {
     _markPersistentConfigDirty(st);
     return st;
   }
 
-  sleepMs(_config, _config.intervalWriteDelayMs);
-
-  uint8_t verifyLow = 0;
-  uint8_t verifyHigh = 0;
-  st = customRead(cmd::CUSTOM_INTERVAL_L, verifyLow);
+  uint8_t verifyBytes[2] = {};
+  st = customRead(cmd::CUSTOM_INTERVAL_L, verifyBytes, 2);
   if (!st.ok()) {
     _markPersistentConfigDirty(st);
     return st;
   }
-  st = customRead(cmd::CUSTOM_INTERVAL_H, verifyHigh);
-  if (!st.ok()) {
-    _markPersistentConfigDirty(st);
-    return st;
-  }
-  const uint16_t verify = static_cast<uint16_t>(verifyLow) |
-                          (static_cast<uint16_t>(verifyHigh) << 8);
+  const uint16_t verify = static_cast<uint16_t>(verifyBytes[0]) |
+                          (static_cast<uint16_t>(verifyBytes[1]) << 8);
   if (verify != intervalDeciSeconds) {
-    Status err = Status::Error(Err::E2_ERROR, "Interval verify failed", verify);
+    Status err = Status::Error(
+        Err::VERIFY_MISMATCH, "Write verification mismatch", verify);
     _markPersistentConfigDirty(err);
     return err;
   }
+  _lastWriteProgress.effect = WriteEffect::VERIFIED;
   return Status::Ok();
 }
 
@@ -1010,36 +1353,34 @@ Status EE871::busReset() {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
   }
+  return _updateHealth(_busResetRaw());
+}
 
-  // Clock out 9+ pulses with SDA high to reset slave state machine
+Status EE871::_busResetRaw() {
   setSda(_config, true);
   for (uint8_t i = 0; i < cmd::BUS_RESET_CLOCKS; ++i) {
     setScl(_config, false);
-    delayUs(_config, _config.clockLowUs, nullptr);
+    _delayUs(_config, _config.clockLowUs);
     setScl(_config, true);
-    // Wait for clock to rise (slave might stretch)
-    uint32_t waited = 0;
-    while (!readScl(_config) && waited < _config.bitTimeoutUs) {
-      delayUs(_config, kPollStepUs, nullptr);
-      waited += kPollStepUs;
+    ByteDeadline pulseWait{0, _config.bitTimeoutUs};
+    Status st = _waitSclHigh(
+        _config, ClockWaitClass::NORMAL_BIT, pulseWait);
+    if (!st.ok()) {
+      return Status::Error(
+          Err::BUS_STUCK, "SCL stuck during reset", st.detail);
     }
-    if (waited >= _config.bitTimeoutUs) {
-      return Status::Error(Err::BUS_STUCK, "SCL stuck during reset");
-    }
-    delayUs(_config, _config.clockHighUs, nullptr);
+    _delayUs(_config, _config.clockHighUs);
   }
 
-  // Generate STOP condition
   setScl(_config, false);
-  delayUs(_config, _config.clockLowUs, nullptr);
-  setSda(_config, false);
-  delayUs(_config, kDataSetupUs, nullptr);
-  setScl(_config, true);
-  delayUs(_config, _config.stopHoldUs, nullptr);
-  setSda(_config, true);
-  delayUs(_config, _config.stopHoldUs, nullptr);
+  _delayUs(_config, _config.clockLowUs);
+  Status st = _e2Stop(
+      _config, ClockWaitClass::NORMAL_BIT, nullptr);
+  if (!st.ok()) {
+    return Status::Error(
+        Err::BUS_STUCK, "SCL stuck during reset STOP", st.detail);
+  }
 
-  // Verify bus is now idle
   if (!readScl(_config) || !readSda(_config)) {
     return Status::Error(Err::BUS_STUCK, "Bus stuck after reset");
   }
@@ -1069,55 +1410,55 @@ Status EE871::checkBusIdle() {
 }
 
 Status EE871::_readControlByteRaw(uint8_t controlByte, uint8_t& data) {
-  Status st = e2Start(_config);
+  Status st = _e2Start(_config);
   if (!st.ok()) {
     return st;
   }
 
-  uint32_t elapsedUs = 0;
-  st = writeByte(_config, controlByte, &elapsedUs);
+  auto cleanup = [this](const Status& primary) {
+    const Status cleanupStatus =
+        _e2Stop(_config, ClockWaitClass::NORMAL_BIT, nullptr);
+    return primary.ok() ? cleanupStatus : primary;
+  };
+
+  ByteDeadline controlDeadline{0, _config.byteTimeoutUs};
+  st = _writeByte(_config, controlByte, controlDeadline);
   if (!st.ok()) {
-    e2Stop(_config);
-    return st;
+    return cleanup(st);
   }
 
   bool acked = false;
-  st = readAck(_config, acked, &elapsedUs);
+  st = _readAck(
+      _config, acked, ClockWaitClass::NORMAL_BIT, controlDeadline);
   if (!st.ok()) {
-    e2Stop(_config);
-    return st;
+    return cleanup(st);
   }
   if (!acked) {
-    e2Stop(_config);
-    return Status::Error(Err::NACK, "Control byte NACK");
+    return cleanup(Status::Error(Err::NACK, "Control byte NACK"));
   }
 
-  elapsedUs = 0;
-  st = readByte(_config, data, &elapsedUs);
+  ByteDeadline dataDeadline{0, _config.byteTimeoutUs};
+  st = _readByte(_config, data, dataDeadline);
   if (!st.ok()) {
-    e2Stop(_config);
-    return st;
+    return cleanup(st);
   }
-  st = sendAck(_config, true, &elapsedUs);
+  st = _sendAck(_config, true, dataDeadline);
   if (!st.ok()) {
-    e2Stop(_config);
-    return st;
+    return cleanup(st);
   }
 
   uint8_t pec = 0;
-  elapsedUs = 0;
-  st = readByte(_config, pec, &elapsedUs);
+  ByteDeadline pecDeadline{0, _config.byteTimeoutUs};
+  st = _readByte(_config, pec, pecDeadline);
   if (!st.ok()) {
-    e2Stop(_config);
-    return st;
+    return cleanup(st);
   }
-  st = sendAck(_config, false, &elapsedUs);
+  st = _sendAck(_config, false, pecDeadline);
   if (!st.ok()) {
-    e2Stop(_config);
-    return st;
+    return cleanup(st);
   }
 
-  st = e2Stop(_config);
+  st = _e2Stop(_config, ClockWaitClass::NORMAL_BIT, nullptr);
   if (!st.ok()) {
     return st;
   }
@@ -1134,97 +1475,159 @@ Status EE871::_readControlByteTracked(uint8_t controlByte, uint8_t& data) {
   return _updateHealth(st);
 }
 
-Status EE871::_writeCommandRaw(uint8_t controlByte, uint8_t addressByte, uint8_t dataByte,
-                               bool* writeAccepted) {
-  if (writeAccepted != nullptr) {
-    *writeAccepted = false;
+Status EE871::_writeCommandRaw(
+    uint8_t controlByte,
+    uint8_t addressByte,
+    uint8_t dataByte,
+    ClockWaitClass completionClass,
+    WriteProgress* progressOut) {
+  WriteProgress progress;
+  _lastWriteProgress = progress;
+
+  Status st = _e2Start(_config);
+  if (!st.ok()) {
+    if (progressOut != nullptr) {
+      *progressOut = progress;
+    }
+    return st;
   }
 
-  Status st = e2Start(_config);
-  if (!st.ok()) {
-    return st;
-  }
+  auto publishProgress = [this, progressOut](const WriteProgress& value) {
+    _lastWriteProgress = value;
+    if (progressOut != nullptr) {
+      *progressOut = value;
+    }
+  };
+  auto cleanupNormal = [this](const Status& primary) {
+    const Status cleanupStatus =
+        _e2Stop(_config, ClockWaitClass::NORMAL_BIT, nullptr);
+    return primary.ok() ? cleanupStatus : primary;
+  };
+  auto sendPayloadByte =
+      [this, &cleanupNormal](uint8_t value, const char* nackMessage) {
+        ByteDeadline deadline{0, _config.byteTimeoutUs};
+        Status byteStatus = _writeByte(_config, value, deadline);
+        if (!byteStatus.ok()) {
+          return cleanupNormal(byteStatus);
+        }
+        bool acked = false;
+        byteStatus = _readAck(
+            _config, acked, ClockWaitClass::NORMAL_BIT, deadline);
+        if (!byteStatus.ok()) {
+          return cleanupNormal(byteStatus);
+        }
+        if (!acked) {
+          return cleanupNormal(Status::Error(Err::NACK, nackMessage));
+        }
+        return Status::Ok();
+      };
 
-  uint32_t elapsedUs = 0;
-  st = writeByte(_config, controlByte, &elapsedUs);
+  st = sendPayloadByte(controlByte, "Control byte NACK");
   if (!st.ok()) {
-    e2Stop(_config);
+    publishProgress(progress);
     return st;
   }
-  bool acked = false;
-  st = readAck(_config, acked, &elapsedUs);
+  st = sendPayloadByte(addressByte, "Address byte NACK");
   if (!st.ok()) {
-    e2Stop(_config);
+    publishProgress(progress);
     return st;
   }
-  if (!acked) {
-    e2Stop(_config);
-    return Status::Error(Err::NACK, "Control byte NACK");
-  }
-
-  elapsedUs = 0;
-  st = writeByte(_config, addressByte, &elapsedUs);
+  st = sendPayloadByte(dataByte, "Data byte NACK");
   if (!st.ok()) {
-    e2Stop(_config);
+    publishProgress(progress);
     return st;
-  }
-  st = readAck(_config, acked, &elapsedUs);
-  if (!st.ok()) {
-    e2Stop(_config);
-    return st;
-  }
-  if (!acked) {
-    e2Stop(_config);
-    return Status::Error(Err::NACK, "Address byte NACK");
-  }
-
-  elapsedUs = 0;
-  st = writeByte(_config, dataByte, &elapsedUs);
-  if (!st.ok()) {
-    e2Stop(_config);
-    return st;
-  }
-  st = readAck(_config, acked, &elapsedUs);
-  if (!st.ok()) {
-    e2Stop(_config);
-    return st;
-  }
-  if (!acked) {
-    e2Stop(_config);
-    return Status::Error(Err::NACK, "Data byte NACK");
   }
 
   const uint8_t pec = calcPecWrite(controlByte, addressByte, dataByte);
-  elapsedUs = 0;
-  st = writeByte(_config, pec, &elapsedUs);
+  ByteDeadline pecDeadline{0, _config.byteTimeoutUs};
+  st = _writeByte(_config, pec, pecDeadline);
   if (!st.ok()) {
-    e2Stop(_config);
+    st = cleanupNormal(st);
+    publishProgress(progress);
     return st;
   }
-  st = readAck(_config, acked, &elapsedUs);
+
+  progress.pecTransferred = true;
+  progress.effect = WriteEffect::INDETERMINATE;
+
+  const bool hasLongCompletion =
+      completionClass != ClockWaitClass::NORMAL_BIT;
+  uint32_t completionLimitUs = _config.byteTimeoutUs;
+  if (hasLongCompletion) {
+    const uint32_t completionMs =
+        completionClass == ClockWaitClass::INTERVAL_COMMIT
+            ? _config.intervalWriteDelayMs
+            : _config.writeDelayMs;
+    if (completionMs > std::numeric_limits<uint32_t>::max() / 1000U) {
+      st = Status::Error(
+          Err::OUT_OF_RANGE, "Completion timeout conversion overflow");
+      publishProgress(progress);
+      return st;
+    }
+    completionLimitUs = completionMs * 1000U;
+  }
+
+  ByteDeadline completionDeadline{
+      hasLongCompletion ? 0U : pecDeadline.elapsedUs,
+      completionLimitUs};
+  bool acked = false;
+  st = _readAck(
+      _config, acked, completionClass, completionDeadline);
   if (!st.ok()) {
-    e2Stop(_config);
+    const Status cleanupStatus =
+        _e2Stop(_config, completionClass, &completionDeadline);
+    (void)cleanupStatus;
+    progress.completionElapsedUs = completionDeadline.elapsedUs;
+    publishProgress(progress);
     return st;
   }
   if (!acked) {
-    e2Stop(_config);
+    progress.effect = WriteEffect::NO_EFFECT;
+    const Status cleanupStatus =
+        _e2Stop(_config, ClockWaitClass::NORMAL_BIT, nullptr);
+    progress.stopCompleted = cleanupStatus.ok();
+    publishProgress(progress);
     return Status::Error(Err::NACK, "PEC NACK");
   }
 
-  if (writeAccepted != nullptr) {
-    *writeAccepted = true;
-  }
-
-  st = e2Stop(_config);
+  progress.requestAcknowledged = true;
+  progress.effect = WriteEffect::ACKNOWLEDGED;
+  st = _e2Stop(
+      _config, completionClass, &completionDeadline);
+  progress.completionElapsedUs = completionDeadline.elapsedUs;
   if (!st.ok()) {
+    publishProgress(progress);
     return st;
   }
-  return st;
+  progress.stopCompleted = true;
+
+  if (hasLongCompletion &&
+      completionDeadline.elapsedUs < completionDeadline.limitUs) {
+    const uint32_t remainingUs =
+        completionDeadline.limitUs - completionDeadline.elapsedUs;
+    _delayLongMs(_config, remainingUs / 1000U);
+    const uint32_t remainderUs = remainingUs % 1000U;
+    if (remainderUs != 0U) {
+      _delayUs(_config, remainderUs);
+    }
+  }
+
+  publishProgress(progress);
+  return Status::Ok();
 }
 
-Status EE871::_writeCommandTracked(uint8_t controlByte, uint8_t addressByte, uint8_t dataByte,
-                                   bool* writeAccepted) {
-  Status st = _writeCommandRaw(controlByte, addressByte, dataByte, writeAccepted);
+Status EE871::_writeCommandTracked(
+    uint8_t controlByte,
+    uint8_t addressByte,
+    uint8_t dataByte,
+    ClockWaitClass completionClass,
+    WriteProgress* progress) {
+  Status st = _writeCommandRaw(
+      controlByte,
+      addressByte,
+      dataByte,
+      completionClass,
+      progress);
   return _updateHealth(st);
 }
 

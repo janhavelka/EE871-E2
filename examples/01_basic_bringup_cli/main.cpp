@@ -233,6 +233,7 @@ const char* errToStr(EE871::Err err) {
     case Err::ALREADY_INITIALIZED: return "ALREADY_INITIALIZED";
     case Err::OUT_OF_RANGE:        return "OUT_OF_RANGE";
     case Err::NOT_SUPPORTED:       return "NOT_SUPPORTED";
+    case Err::VERIFY_MISMATCH:      return "VERIFY_MISMATCH";
     default:                       return "UNKNOWN";
   }
 }

@@ -10,8 +10,19 @@
 
 namespace EE871Test {
 
+enum class StretchPhase : uint8_t {
+  NONE = 0,
+  DATA_BIT,
+  ACK_BIT,
+  FINAL_ACK,
+  STOP,
+  NEXT_START,
+};
+
 class FakeE2Transport {
 public:
+  static constexpr size_t MAX_RECORDED_TRANSACTIONS = 128;
+
   FakeE2Transport() { reset(); }
 
   void reset() {
@@ -30,7 +41,12 @@ public:
     _skipNextFalling = false;
     _customPointer = 0;
     _elapsedUs = 0;
-    _delayCalls = 0;
+    _delayUsCalls = 0;
+    _longDelaySlices = 0;
+    _yieldCount = 0;
+    _lineWrites = 0;
+    _lineReads = 0;
+    _transactionCount = 0;
     _devicePresent = true;
     _holdSclLow = false;
     _sdaStuckLow = false;
@@ -45,7 +61,25 @@ public:
     _statusByte = 0;
     _mv3 = 600;
     _mv4 = 650;
+    _stretchPhase = StretchPhase::NONE;
+    _stretchDurationUs = 0;
+    _stretchMatchesToSkip = 0;
+    _stretchOccurrences = 0;
+    _stretchSequenceCount = 0;
+    _stretchSequenceIndex = 0;
+    _activeStretchRemainingUs = 0;
+    _pointerCompletionDelayUs =
+        EE871::cmd::WRITE_DELAY_PROTOCOL_MIN_MS * 1000U;
+    _pointerCompletionRemainingUs = 0;
+    _transactionStartedDuringPointerCompletion = false;
+    _pointerReadStartedEarly = false;
 
+    for (size_t i = 0; i < MAX_RECORDED_TRANSACTIONS; ++i) {
+      _transactionMain[i] = 0;
+      _transactionAddress[i] = 0;
+      _transactionIsRead[i] = false;
+      _transactionHasAddress[i] = false;
+    }
     for (size_t i = 0; i < EE871::cmd::CUSTOM_MEMORY_SIZE; ++i) {
       _memory[i] = 0;
     }
@@ -80,27 +114,144 @@ public:
     cfg.clockHighUs = 100;
     cfg.startHoldUs = 4;
     cfg.stopHoldUs = 4;
-    cfg.bitTimeoutUs = 25;
-    cfg.byteTimeoutUs = 25;
-    cfg.writeDelayMs = 0;
-    cfg.intervalWriteDelayMs = 0;
+    cfg.bitTimeoutUs = 25000;
+    cfg.byteTimeoutUs = 35000;
+    cfg.writeDelayMs = 150;
+    cfg.intervalWriteDelayMs = 300;
     cfg.offlineThreshold = offlineThreshold;
+    cfg.delayMs = &FakeE2Transport::delayMsThunk;
+    cfg.yield = &FakeE2Transport::yieldThunk;
+    cfg.longDelaySliceMs = 1;
     return cfg;
   }
 
   void resetElapsed() {
     _elapsedUs = 0;
-    _delayCalls = 0;
+    _delayUsCalls = 0;
+    _longDelaySlices = 0;
+    _yieldCount = 0;
   }
 
-  uint32_t elapsedUs() const { return _elapsedUs; }
-  uint32_t delayCalls() const { return _delayCalls; }
+  void resetActivityCounters() {
+    _lineWrites = 0;
+    _lineReads = 0;
+    _transactionCount = 0;
+    for (size_t i = 0; i < MAX_RECORDED_TRANSACTIONS; ++i) {
+      _transactionMain[i] = 0;
+      _transactionAddress[i] = 0;
+      _transactionIsRead[i] = false;
+      _transactionHasAddress[i] = false;
+    }
+  }
+
+  uint64_t elapsedUs() const { return _elapsedUs; }
+  uint32_t delayCalls() const { return _delayUsCalls; }
+  uint32_t longDelaySlices() const { return _longDelaySlices; }
+  uint32_t yieldCount() const { return _yieldCount; }
+  uint32_t lineWrites() const { return _lineWrites; }
+  uint32_t lineReads() const { return _lineReads; }
+  uint32_t transactionCount() const { return _transactionCount; }
+
+  uint8_t transactionMain(size_t index) const {
+    return index < MAX_RECORDED_TRANSACTIONS ? _transactionMain[index] : 0;
+  }
+  uint8_t transactionAddress(size_t index) const {
+    return index < MAX_RECORDED_TRANSACTIONS ? _transactionAddress[index] : 0;
+  }
+  bool transactionIsRead(size_t index) const {
+    return index < MAX_RECORDED_TRANSACTIONS && _transactionIsRead[index];
+  }
+  bool transactionHasAddress(size_t index) const {
+    return index < MAX_RECORDED_TRANSACTIONS && _transactionHasAddress[index];
+  }
+
+  uint32_t countTransactions(uint8_t mainCommand, bool read) const {
+    const size_t count =
+        _transactionCount < MAX_RECORDED_TRANSACTIONS
+            ? _transactionCount
+            : MAX_RECORDED_TRANSACTIONS;
+    uint32_t matches = 0;
+    for (size_t i = 0; i < count; ++i) {
+      if (_transactionMain[i] == mainCommand &&
+          _transactionIsRead[i] == read) {
+        ++matches;
+      }
+    }
+    return matches;
+  }
 
   void setDevicePresent(bool present) { _devicePresent = present; }
-  void setHoldSclLow(bool hold) { _holdSclLow = hold; }
+
+  void setHoldSclLow(bool hold) {
+    const bool wasHigh = physicalSclHigh();
+    _holdSclLow = hold;
+    const bool isHigh = physicalSclHigh();
+    if (!wasHigh && isHigh) {
+      onSclRising();
+    } else if (wasHigh && !isHigh) {
+      onSclFalling();
+    }
+  }
+
   void setSdaStuckLow(bool stuck) { _sdaStuckLow = stuck; }
   void setSdaStuckHigh(bool stuck) { _sdaStuckHigh = stuck; }
   void setCorruptReadPec(bool corrupt) { _corruptReadPec = corrupt; }
+
+  void setStretch(
+      StretchPhase phase,
+      uint32_t durationUs,
+      uint16_t occurrences = 1,
+      uint16_t matchesToSkip = 0) {
+    _stretchPhase = phase;
+    _stretchDurationUs = durationUs;
+    _stretchMatchesToSkip = matchesToSkip;
+    _stretchOccurrences = occurrences;
+    _stretchSequenceCount = 0;
+    _stretchSequenceIndex = 0;
+    _activeStretchRemainingUs = 0;
+    if (phase == StretchPhase::NEXT_START &&
+        _phase == Phase::IDLE &&
+        _masterSclReleased &&
+        _masterSdaReleased &&
+        occurrences != 0U &&
+        matchesToSkip == 0U) {
+      _activeStretchRemainingUs = durationUs;
+      --_stretchOccurrences;
+    }
+  }
+
+  void setStretchSequence(
+      StretchPhase phase,
+      const uint32_t* durationsUs,
+      uint8_t count) {
+    _stretchPhase = phase;
+    _stretchDurationUs = 0;
+    _stretchMatchesToSkip = 0;
+    _stretchOccurrences = 0;
+    _stretchSequenceCount = count > MAX_STRETCH_SEQUENCE
+                                ? MAX_STRETCH_SEQUENCE
+                                : count;
+    _stretchSequenceIndex = 0;
+    _activeStretchRemainingUs = 0;
+    for (uint8_t i = 0; i < _stretchSequenceCount; ++i) {
+      _stretchSequenceUs[i] = durationsUs[i];
+    }
+  }
+
+  void clearStretch() {
+    _stretchPhase = StretchPhase::NONE;
+    _stretchDurationUs = 0;
+    _stretchMatchesToSkip = 0;
+    _stretchOccurrences = 0;
+    _stretchSequenceCount = 0;
+    _stretchSequenceIndex = 0;
+    _activeStretchRemainingUs = 0;
+  }
+
+  void setPointerCompletionDelayUs(uint32_t durationUs) {
+    _pointerCompletionDelayUs = durationUs;
+  }
+  bool pointerReadStartedEarly() const { return _pointerReadStartedEarly; }
 
   void setMemory(uint8_t address, uint8_t value) { _memory[address] = value; }
   uint8_t memory(uint8_t address) const { return _memory[address]; }
@@ -157,10 +308,75 @@ private:
     static_cast<FakeE2Transport*>(user)->delayUs(us);
   }
 
+  static void delayMsThunk(uint32_t ms, void* user) {
+    static_cast<FakeE2Transport*>(user)->delayMs(ms);
+  }
+
+  static void yieldThunk(void* user) {
+    static_cast<FakeE2Transport*>(user)->onYield();
+  }
+
+  bool physicalSclHigh() const {
+    return _masterSclReleased &&
+           !_holdSclLow &&
+           _activeStretchRemainingUs == 0U;
+  }
+
+  StretchPhase currentStretchPhase() const {
+    switch (_phase) {
+      case Phase::ACK_PEC:
+        return StretchPhase::FINAL_ACK;
+      case Phase::ACK_CONTROL:
+      case Phase::ACK_ADDRESS:
+      case Phase::ACK_DATA:
+      case Phase::MASTER_ACK_DATA:
+      case Phase::MASTER_ACK_PEC:
+        return StretchPhase::ACK_BIT;
+      case Phase::WRITE_CONTROL:
+      case Phase::WRITE_ADDRESS:
+      case Phase::WRITE_DATA:
+      case Phase::WRITE_PEC:
+      case Phase::READ_DATA:
+      case Phase::READ_PEC:
+        return StretchPhase::DATA_BIT;
+      case Phase::IDLE:
+        return _masterSdaReleased
+                   ? StretchPhase::NEXT_START
+                   : StretchPhase::STOP;
+    }
+    return StretchPhase::NONE;
+  }
+
+  bool activateConfiguredStretch() {
+    if (_stretchPhase == StretchPhase::NONE ||
+        currentStretchPhase() != _stretchPhase) {
+      return false;
+    }
+    if (_stretchMatchesToSkip != 0U) {
+      --_stretchMatchesToSkip;
+      return false;
+    }
+    if (_stretchSequenceIndex < _stretchSequenceCount) {
+      _activeStretchRemainingUs =
+          _stretchSequenceUs[_stretchSequenceIndex++];
+      return _activeStretchRemainingUs != 0U;
+    }
+    if (_stretchOccurrences == 0U) {
+      return false;
+    }
+    --_stretchOccurrences;
+    _activeStretchRemainingUs = _stretchDurationUs;
+    return _activeStretchRemainingUs != 0U;
+  }
+
   void setScl(bool level) {
-    const bool wasHigh = readScl();
+    ++_lineWrites;
+    const bool wasHigh = physicalSclHigh();
     _masterSclReleased = level;
-    const bool isHigh = readScl();
+    if (level && !wasHigh && _activeStretchRemainingUs == 0U) {
+      (void)activateConfiguredStretch();
+    }
+    const bool isHigh = physicalSclHigh();
     if (!wasHigh && isHigh) {
       onSclRising();
     } else if (wasHigh && !isHigh) {
@@ -169,8 +385,9 @@ private:
   }
 
   void setSda(bool level) {
+    ++_lineWrites;
     const bool wasReleased = _masterSdaReleased;
-    const bool sclHigh = readScl();
+    const bool sclHigh = physicalSclHigh();
     _masterSdaReleased = level;
 
     if (sclHigh && wasReleased && !level) {
@@ -180,11 +397,13 @@ private:
     }
   }
 
-  bool readScl() const {
-    return _masterSclReleased && !_holdSclLow;
+  bool readScl() {
+    ++_lineReads;
+    return physicalSclHigh();
   }
 
-  bool readSda() const {
+  bool readSda() {
+    ++_lineReads;
     if (_sdaStuckLow) {
       return false;
     }
@@ -197,12 +416,53 @@ private:
     return _masterSdaReleased;
   }
 
-  void delayUs(uint32_t us) {
+  void consumeSimulatedTime(uint32_t us) {
     _elapsedUs += us;
-    ++_delayCalls;
+    if (_pointerCompletionRemainingUs != 0U) {
+      _pointerCompletionRemainingUs =
+          us >= _pointerCompletionRemainingUs
+              ? 0U
+              : _pointerCompletionRemainingUs - us;
+    }
+
+    if (_activeStretchRemainingUs == 0U) {
+      return;
+    }
+    const bool wasHigh = physicalSclHigh();
+    _activeStretchRemainingUs =
+        us >= _activeStretchRemainingUs
+            ? 0U
+            : _activeStretchRemainingUs - us;
+    const bool isHigh = physicalSclHigh();
+    if (!wasHigh && isHigh) {
+      onSclRising();
+    }
   }
 
+  void delayUs(uint32_t us) {
+    ++_delayUsCalls;
+    consumeSimulatedTime(us);
+  }
+
+  void delayMs(uint32_t ms) {
+    ++_longDelaySlices;
+    consumeSimulatedTime(ms * 1000U);
+  }
+
+  void onYield() { ++_yieldCount; }
+
   void beginTransaction() {
+    _transactionStartedDuringPointerCompletion =
+        _pointerCompletionRemainingUs != 0U;
+    const size_t index = _transactionCount;
+    ++_transactionCount;
+    if (index < MAX_RECORDED_TRANSACTIONS) {
+      _transactionMain[index] = 0;
+      _transactionAddress[index] = 0;
+      _transactionIsRead[index] = false;
+      _transactionHasAddress[index] = false;
+    }
+
     _phase = Phase::WRITE_CONTROL;
     _bitCount = 0;
     _byte = 0;
@@ -299,30 +559,62 @@ private:
   }
 
   void captureMasterBit() {
-    _byte = static_cast<uint8_t>((_byte << 1) | (_masterSdaReleased ? 1U : 0U));
+    _byte = static_cast<uint8_t>((_byte << 1) |
+                                 (_masterSdaReleased ? 1U : 0U));
     ++_bitCount;
     if (_bitCount < 8) {
       return;
     }
 
     switch (_phase) {
-      case Phase::WRITE_CONTROL:
+      case Phase::WRITE_CONTROL: {
         _control = _byte;
+        const size_t index =
+            _transactionCount == 0U ? 0U : _transactionCount - 1U;
+        if (index < MAX_RECORDED_TRANSACTIONS) {
+          _transactionMain[index] = mainCommand();
+          _transactionIsRead[index] = controlIsRead();
+        }
+        if (_transactionStartedDuringPointerCompletion &&
+            controlIsRead() &&
+            mainCommand() == EE871::cmd::MAIN_CUSTOM_PTR) {
+          _pointerReadStartedEarly = true;
+        }
         _phase = Phase::ACK_CONTROL;
         _skipNextFalling = true;
         break;
-      case Phase::WRITE_ADDRESS:
+      }
+      case Phase::WRITE_ADDRESS: {
         _address = _byte;
+        const size_t index =
+            _transactionCount == 0U ? 0U : _transactionCount - 1U;
+        if (index < MAX_RECORDED_TRANSACTIONS) {
+          _transactionAddress[index] = _address;
+          _transactionHasAddress[index] = true;
+        }
         _phase = Phase::ACK_ADDRESS;
         _skipNextFalling = true;
         break;
-      case Phase::WRITE_DATA:
+      }
+      case Phase::WRITE_DATA: {
         _data = _byte;
+        if (mainCommand() == EE871::cmd::MAIN_CUSTOM_PTR) {
+          const size_t index =
+              _transactionCount == 0U ? 0U : _transactionCount - 1U;
+          if (index < MAX_RECORDED_TRANSACTIONS) {
+            _transactionAddress[index] = _data;
+            _transactionHasAddress[index] = true;
+          }
+        }
         _phase = Phase::ACK_DATA;
         _skipNextFalling = true;
         break;
+      }
       case Phase::WRITE_PEC:
         _pec = _byte;
+        if (mainCommand() == EE871::cmd::MAIN_CUSTOM_PTR) {
+          _pointerCompletionRemainingUs = _pointerCompletionDelayUs;
+        }
         _phase = Phase::ACK_PEC;
         _skipNextFalling = true;
         break;
@@ -360,7 +652,8 @@ private:
 
   void prepareReadResponse() {
     _responseData = readValueForControl();
-    _responsePec = static_cast<uint8_t>((_control + _responseData) & 0xFF);
+    _responsePec =
+        static_cast<uint8_t>((_control + _responseData) & 0xFF);
     if (_corruptReadPec) {
       _responsePec = static_cast<uint8_t>(_responsePec ^ 0x01);
     }
@@ -456,8 +749,13 @@ private:
   bool _slaveSda = true;
   bool _skipNextFalling = false;
   uint8_t _customPointer = 0;
-  uint32_t _elapsedUs = 0;
-  uint32_t _delayCalls = 0;
+  uint64_t _elapsedUs = 0;
+  uint32_t _delayUsCalls = 0;
+  uint32_t _longDelaySlices = 0;
+  uint32_t _yieldCount = 0;
+  uint32_t _lineWrites = 0;
+  uint32_t _lineReads = 0;
+  uint32_t _transactionCount = 0;
   bool _devicePresent = true;
   bool _holdSclLow = false;
   bool _sdaStuckLow = false;
@@ -472,6 +770,23 @@ private:
   uint8_t _statusByte = 0;
   uint16_t _mv3 = 0;
   uint16_t _mv4 = 0;
+  StretchPhase _stretchPhase = StretchPhase::NONE;
+  uint32_t _stretchDurationUs = 0;
+  uint16_t _stretchMatchesToSkip = 0;
+  uint16_t _stretchOccurrences = 0;
+  static constexpr uint8_t MAX_STRETCH_SEQUENCE = 16;
+  uint32_t _stretchSequenceUs[MAX_STRETCH_SEQUENCE] = {};
+  uint8_t _stretchSequenceCount = 0;
+  uint8_t _stretchSequenceIndex = 0;
+  uint32_t _activeStretchRemainingUs = 0;
+  uint32_t _pointerCompletionDelayUs = 0;
+  uint32_t _pointerCompletionRemainingUs = 0;
+  bool _transactionStartedDuringPointerCompletion = false;
+  bool _pointerReadStartedEarly = false;
+  uint8_t _transactionMain[MAX_RECORDED_TRANSACTIONS] = {};
+  uint8_t _transactionAddress[MAX_RECORDED_TRANSACTIONS] = {};
+  bool _transactionIsRead[MAX_RECORDED_TRANSACTIONS] = {};
+  bool _transactionHasAddress[MAX_RECORDED_TRANSACTIONS] = {};
   uint8_t _memory[EE871::cmd::CUSTOM_MEMORY_SIZE] = {};
 };
 

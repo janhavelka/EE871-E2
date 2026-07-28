@@ -7,7 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-No changes yet.
+### Added
+
+- Optional task-context `delayMs`/`yield` callbacks with bounded long-delay
+  slicing.
+- Bus-silent `operationTimingBound()` admission queries and public
+  `OperationKind`/`OperationTimingBound` types.
+- `VERIFY_MISMATCH` for completed writes whose readback differs.
+- Phase-aware native stretch injection and transaction-order instrumentation.
+
+### Changed
+
+- Centralized timing validation now enforces the E2 500..5000 Hz envelope,
+  25 ms bit limit, 35 ms byte limit, and safe long-delay slice range.
+- `0x10` and `0x50` writes use one 150 ms completion budget; the committing
+  interval high byte uses one 300 ms pair-completion budget. Configured values
+  below those protocol minima normalize upward.
+- Custom-pointer completion is ordered before every dependent `0x51` read, and
+  block reads use pointer auto-increment.
+
+### Fixed
+
+- SDA low before START is reported as `BUS_STUCK` without creating a false
+  START.
+- Legal final-ACK/STOP clock stretching no longer fails under ordinary byte
+  timing, while ordinary transfers retain their tighter limits.
+- Cleanup failures preserve an earlier, more precise transport failure.
 
 ## [1.0.0] - 2026-06-02
 

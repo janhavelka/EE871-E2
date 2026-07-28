@@ -12,11 +12,15 @@
 
 using namespace EE871;
 using EE871Test::FakeE2Transport;
+using EE871Test::StretchPhase;
 
 static_assert(!std::is_copy_constructible_v<EE871::EE871>);
 static_assert(!std::is_copy_assignable_v<EE871::EE871>);
 static_assert(!std::is_move_constructible_v<EE871::EE871>);
 static_assert(!std::is_move_assignable_v<EE871::EE871>);
+static_assert(static_cast<uint8_t>(Err::VERIFY_MISMATCH) == 15);
+static_assert(static_cast<uint8_t>(OperationKind::CONTROL_READ) == 0);
+static_assert(static_cast<uint8_t>(OperationKind::BUS_RESET) == 8);
 
 void setUp() {}
 void tearDown() {}
@@ -79,6 +83,9 @@ void test_config_defaults() {
   TEST_ASSERT_EQUAL_UINT32(150u, cfg.writeDelayMs);
   TEST_ASSERT_EQUAL_UINT32(300u, cfg.intervalWriteDelayMs);
   TEST_ASSERT_EQUAL_UINT8(5, cfg.offlineThreshold);
+  TEST_ASSERT_NULL(cfg.delayMs);
+  TEST_ASSERT_NULL(cfg.yield);
+  TEST_ASSERT_EQUAL_UINT8(1, cfg.longDelaySliceMs);
 }
 
 void test_command_table_control_bytes_and_support() {
@@ -273,13 +280,13 @@ void test_clock_stretch_timeout_is_bounded_and_tracked() {
   TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
 
   fake.resetElapsed();
-  fake.setHoldSclLow(true);
+  fake.setStretch(StretchPhase::DATA_BIT, cmd::BIT_TIMEOUT_MAX_US + 5U);
   uint8_t status = 0;
   Status st = dev.readStatus(status);
 
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::TIMEOUT),
                           static_cast<uint8_t>(st.code));
-  TEST_ASSERT_TRUE(fake.elapsedUs() <= 30U);
+  TEST_ASSERT_TRUE(fake.elapsedUs() <= 26000U);
   TEST_ASSERT_EQUAL_UINT8(1, dev.consecutiveFailures());
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::DEGRADED),
                           static_cast<uint8_t>(dev.state()));
@@ -348,9 +355,9 @@ void test_custom_write_verify_mismatch_returns_precise_error() {
 
   Status st = dev.customWrite(address, 0x5A);
 
-  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::E2_ERROR),
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::VERIFY_MISMATCH),
                           static_cast<uint8_t>(st.code));
-  TEST_ASSERT_EQUAL_STRING("Write verify failed", st.msg);
+  TEST_ASSERT_EQUAL_STRING("Write verification mismatch", st.msg);
   TEST_ASSERT_EQUAL_INT32(0x11, st.detail);
 }
 
@@ -433,9 +440,9 @@ void test_interval_verify_failure_sets_dirty_and_unrelated_read_does_not_clear()
   fake.dropNextWriteCommitToAddress(cmd::CUSTOM_INTERVAL_H);
   Status st = dev.writeMeasurementInterval(300);
 
-  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::E2_ERROR),
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::VERIFY_MISMATCH),
                           static_cast<uint8_t>(st.code));
-  TEST_ASSERT_EQUAL_STRING("Interval verify failed", st.msg);
+  TEST_ASSERT_EQUAL_STRING("Write verification mismatch", st.msg);
   TEST_ASSERT_EQUAL_INT32(0x2C, st.detail);
   assertDirtyWithOriginalError(dev, st);
 
@@ -467,9 +474,9 @@ void test_co2_offset_low_byte_verify_failure_sets_dirty() {
   fake.dropNextWriteCommitToAddress(cmd::CUSTOM_CO2_OFFSET_L);
   Status st = dev.writeCo2Offset(0x1234);
 
-  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::E2_ERROR),
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::VERIFY_MISMATCH),
                           static_cast<uint8_t>(st.code));
-  TEST_ASSERT_EQUAL_STRING("Write verify failed", st.msg);
+  TEST_ASSERT_EQUAL_STRING("Write verification mismatch", st.msg);
   assertDirtyWithOriginalError(dev, st);
 }
 
@@ -496,9 +503,9 @@ void test_co2_gain_low_byte_verify_failure_sets_dirty() {
   fake.dropNextWriteCommitToAddress(cmd::CUSTOM_CO2_GAIN_L);
   Status st = dev.writeCo2Gain(0x5678);
 
-  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::E2_ERROR),
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::VERIFY_MISMATCH),
                           static_cast<uint8_t>(st.code));
-  TEST_ASSERT_EQUAL_STRING("Write verify failed", st.msg);
+  TEST_ASSERT_EQUAL_STRING("Write verification mismatch", st.msg);
   assertDirtyWithOriginalError(dev, st);
 }
 
@@ -513,9 +520,9 @@ void test_part_name_first_byte_verify_failure_sets_dirty() {
   fake.dropNextWriteCommitToAddress(cmd::CUSTOM_PART_NAME_START);
   Status st = dev.writePartName(partName);
 
-  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::E2_ERROR),
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::VERIFY_MISMATCH),
                           static_cast<uint8_t>(st.code));
-  TEST_ASSERT_EQUAL_STRING("Write verify failed", st.msg);
+  TEST_ASSERT_EQUAL_STRING("Write verification mismatch", st.msg);
   assertDirtyWithOriginalError(dev, st);
 }
 
@@ -526,7 +533,7 @@ void test_dirty_error_preserves_first_failure() {
 
   fake.dropNextWriteCommitToAddress(cmd::CUSTOM_INTERVAL_H);
   Status first = dev.writeMeasurementInterval(300);
-  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::E2_ERROR),
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::VERIFY_MISMATCH),
                           static_cast<uint8_t>(first.code));
   assertDirtyWithOriginalError(dev, first);
 
@@ -582,6 +589,471 @@ void test_dirty_state_survives_offline() {
   assertDirtyWithOriginalError(dev, dirtyCause);
 }
 
+static Status staticControlBound(
+    const Config& config, OperationTimingBound& out) {
+  return EE871::EE871::operationTimingBound(
+      config, OperationKind::CONTROL_READ, 1, out);
+}
+
+void test_config_protocol_timing_boundaries() {
+  FakeE2Transport fake;
+  Config cfg = fake.makeConfig();
+  OperationTimingBound out;
+
+  TEST_ASSERT_TRUE(staticControlBound(cfg, out).ok());
+
+  cfg.clockLowUs = 100;
+  cfg.clockHighUs = 1890;
+  TEST_ASSERT_TRUE(staticControlBound(cfg, out).ok());
+
+  cfg.clockHighUs = 100;
+  TEST_ASSERT_TRUE(staticControlBound(cfg, out).ok());
+
+  cfg.clockHighUs = 1891;
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(Err::INVALID_CONFIG),
+      static_cast<uint8_t>(staticControlBound(cfg, out).code));
+
+  cfg = fake.makeConfig();
+  cfg.clockLowUs = 99;
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(Err::INVALID_CONFIG),
+      static_cast<uint8_t>(staticControlBound(cfg, out).code));
+  cfg = fake.makeConfig();
+  cfg.clockHighUs = 99;
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(Err::INVALID_CONFIG),
+      static_cast<uint8_t>(staticControlBound(cfg, out).code));
+
+  cfg = fake.makeConfig();
+  cfg.bitTimeoutUs = 0;
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(Err::INVALID_CONFIG),
+      static_cast<uint8_t>(staticControlBound(cfg, out).code));
+  cfg = fake.makeConfig();
+  cfg.bitTimeoutUs = cmd::BIT_TIMEOUT_MAX_US + 1U;
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(Err::INVALID_CONFIG),
+      static_cast<uint8_t>(staticControlBound(cfg, out).code));
+  cfg = fake.makeConfig();
+  cfg.byteTimeoutUs = cfg.bitTimeoutUs - 1U;
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(Err::INVALID_CONFIG),
+      static_cast<uint8_t>(staticControlBound(cfg, out).code));
+  cfg = fake.makeConfig();
+  cfg.byteTimeoutUs = cmd::BYTE_TIMEOUT_MAX_US + 1U;
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(Err::INVALID_CONFIG),
+      static_cast<uint8_t>(staticControlBound(cfg, out).code));
+}
+
+void test_config_delay_normalization_and_limits() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  Config cfg = fake.makeConfig();
+  cfg.writeDelayMs = 0;
+  cfg.intervalWriteDelayMs = 0;
+  cfg.longDelaySliceMs = 0;
+  cfg.offlineThreshold = 0;
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+  TEST_ASSERT_EQUAL_UINT32(
+      cmd::WRITE_DELAY_PROTOCOL_MIN_MS, dev.getConfig().writeDelayMs);
+  TEST_ASSERT_EQUAL_UINT32(
+      cmd::INTERVAL_WRITE_DELAY_PROTOCOL_MIN_MS,
+      dev.getConfig().intervalWriteDelayMs);
+  TEST_ASSERT_EQUAL_UINT8(1, dev.getConfig().longDelaySliceMs);
+  TEST_ASSERT_EQUAL_UINT8(1, dev.getConfig().offlineThreshold);
+
+  OperationTimingBound zeroDelays;
+  OperationTimingBound belowMinimums;
+  cfg = fake.makeConfig();
+  cfg.writeDelayMs = 0;
+  cfg.intervalWriteDelayMs = 0;
+  TEST_ASSERT_TRUE(EE871::EE871::operationTimingBound(
+      cfg, OperationKind::INTERVAL_WRITE_VERIFY, 1, zeroDelays).ok());
+  cfg.writeDelayMs = 149;
+  cfg.intervalWriteDelayMs = 299;
+  TEST_ASSERT_TRUE(EE871::EE871::operationTimingBound(
+      cfg, OperationKind::INTERVAL_WRITE_VERIFY, 1, belowMinimums).ok());
+  TEST_ASSERT_EQUAL_UINT32(
+      zeroDelays.maxBlockingMs, belowMinimums.maxBlockingMs);
+
+  cfg = fake.makeConfig();
+  cfg.writeDelayMs = cmd::WRITE_DELAY_MAX_MS;
+  cfg.intervalWriteDelayMs = cmd::INTERVAL_WRITE_DELAY_MAX_MS;
+  cfg.longDelaySliceMs = cmd::LONG_DELAY_SLICE_MAX_MS;
+  TEST_ASSERT_TRUE(EE871::EE871::operationTimingBound(
+      cfg, OperationKind::INTERVAL_WRITE_VERIFY, 1, belowMinimums).ok());
+
+  cfg.writeDelayMs = cmd::WRITE_DELAY_MAX_MS + 1U;
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(Err::INVALID_CONFIG),
+      static_cast<uint8_t>(staticControlBound(cfg, belowMinimums).code));
+  cfg = fake.makeConfig();
+  cfg.intervalWriteDelayMs = cmd::INTERVAL_WRITE_DELAY_MAX_MS + 1U;
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(Err::INVALID_CONFIG),
+      static_cast<uint8_t>(staticControlBound(cfg, belowMinimums).code));
+  cfg = fake.makeConfig();
+  cfg.longDelaySliceMs = cmd::LONG_DELAY_SLICE_MAX_MS + 1U;
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(Err::INVALID_CONFIG),
+      static_cast<uint8_t>(staticControlBound(cfg, belowMinimums).code));
+}
+
+void test_sda_low_before_start_is_bus_stuck_without_false_start() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+  fake.resetActivityCounters();
+  fake.setSdaStuckLow(true);
+
+  uint8_t status = 0;
+  const Status st = dev.readStatus(status);
+
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(Err::BUS_STUCK),
+      static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_STRING("SDA low before START", st.msg);
+  TEST_ASSERT_EQUAL_UINT32(0, fake.transactionCount());
+}
+
+void test_scl_stuck_is_precise_at_idle_reset_and_in_transaction() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+
+  fake.setHoldSclLow(true);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(Err::BUS_STUCK),
+      static_cast<uint8_t>(dev.checkBusIdle().code));
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(Err::BUS_STUCK),
+      static_cast<uint8_t>(dev.busReset().code));
+  fake.setHoldSclLow(false);
+
+  fake.setStretch(StretchPhase::DATA_BIT, 25005);
+  uint8_t status = 0;
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(Err::TIMEOUT),
+      static_cast<uint8_t>(dev.readStatus(status).code));
+}
+
+void test_bit_and_byte_deadline_boundaries() {
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    fake.setStretch(StretchPhase::DATA_BIT, 25000);
+    uint8_t status = 0;
+    TEST_ASSERT_TRUE(dev.readStatus(status).ok());
+  }
+
+  const uint32_t exactByteDurations[8] = {
+      4140, 4140, 4140, 4140, 4140, 4140, 4140, 4130};
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    fake.setStretchSequence(
+        StretchPhase::DATA_BIT, exactByteDurations, 8);
+    uint8_t status = 0;
+    TEST_ASSERT_TRUE(dev.readStatus(status).ok());
+  }
+
+  const uint32_t overByteDurations[8] = {
+      4140, 4140, 4140, 4140, 4140, 4140, 4140, 4135};
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    fake.setStretchSequence(
+        StretchPhase::DATA_BIT, overByteDurations, 8);
+    uint8_t status = 0;
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::TIMEOUT),
+        static_cast<uint8_t>(dev.readStatus(status).code));
+  }
+}
+
+void test_custom_write_completion_uses_one_total_budget() {
+  uint64_t baselineElapsed = 0;
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    fake.resetElapsed();
+    TEST_ASSERT_TRUE(
+        dev.customWrite(cmd::CUSTOM_FILTER_CO2, 0x42).ok());
+    baselineElapsed = fake.elapsedUs();
+  }
+
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    fake.resetElapsed();
+    fake.setStretch(StretchPhase::FINAL_ACK, 149700);
+    TEST_ASSERT_TRUE(
+        dev.customWrite(cmd::CUSTOM_FILTER_CO2, 0x42).ok());
+    TEST_ASSERT_EQUAL_UINT64(baselineElapsed, fake.elapsedUs());
+  }
+
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    fake.setStretch(StretchPhase::FINAL_ACK, 150000);
+    const Status st =
+        dev.customWrite(cmd::CUSTOM_FILTER_CO2, 0x42);
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::TIMEOUT),
+        static_cast<uint8_t>(st.code));
+  }
+}
+
+void test_pointer_stop_completion_and_dependent_read_ordering() {
+  uint64_t baselineElapsed = 0;
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    fake.resetElapsed();
+    TEST_ASSERT_TRUE(
+        dev.setCustomPointer(cmd::CUSTOM_FILTER_CO2).ok());
+    baselineElapsed = fake.elapsedUs();
+  }
+
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    fake.resetElapsed();
+    fake.setStretch(StretchPhase::STOP, 149700);
+    TEST_ASSERT_TRUE(
+        dev.setCustomPointer(cmd::CUSTOM_FILTER_CO2).ok());
+    TEST_ASSERT_EQUAL_UINT64(baselineElapsed, fake.elapsedUs());
+
+    uint8_t value = 0;
+    TEST_ASSERT_TRUE(
+        dev.customRead(cmd::CUSTOM_FILTER_CO2, value).ok());
+    TEST_ASSERT_FALSE(fake.pointerReadStartedEarly());
+  }
+}
+
+void test_startup_feature_reads_wait_for_pointer_completion() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+  TEST_ASSERT_FALSE(fake.pointerReadStartedEarly());
+}
+
+void test_interval_commit_completion_boundaries() {
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    fake.setStretch(
+        StretchPhase::FINAL_ACK, 299700, 1, 1);
+    TEST_ASSERT_TRUE(dev.writeMeasurementInterval(300).ok());
+  }
+
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    fake.resetActivityCounters();
+    fake.setStretch(
+        StretchPhase::FINAL_ACK, 300000, 1, 1);
+    const Status st = dev.writeMeasurementInterval(300);
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::TIMEOUT),
+        static_cast<uint8_t>(st.code));
+    TEST_ASSERT_TRUE(dev.persistentConfigDirty());
+    TEST_ASSERT_EQUAL_UINT32(
+        0, fake.countTransactions(cmd::MAIN_CUSTOM_PTR, true));
+  }
+}
+
+void test_block_custom_read_uses_one_pointer_and_auto_increment() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+  fake.setMemory(0x20, 0xA1);
+  fake.setMemory(0x21, 0xB2);
+  fake.setMemory(0x22, 0xC3);
+  fake.resetActivityCounters();
+
+  uint8_t values[3] = {};
+  TEST_ASSERT_TRUE(dev.customRead(0x20, values, 3).ok());
+  TEST_ASSERT_EQUAL_UINT8(0xA1, values[0]);
+  TEST_ASSERT_EQUAL_UINT8(0xB2, values[1]);
+  TEST_ASSERT_EQUAL_UINT8(0xC3, values[2]);
+  TEST_ASSERT_EQUAL_UINT32(
+      1, fake.countTransactions(cmd::MAIN_CUSTOM_PTR, false));
+  TEST_ASSERT_EQUAL_UINT32(
+      3, fake.countTransactions(cmd::MAIN_CUSTOM_PTR, true));
+  TEST_ASSERT_TRUE(fake.transactionHasAddress(0));
+  TEST_ASSERT_EQUAL_UINT8(0x20, fake.transactionAddress(0));
+  TEST_ASSERT_FALSE(fake.pointerReadStartedEarly());
+}
+
+void test_verify_mismatch_does_not_increment_transport_failures() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+  fake.dropWritesToAddress(cmd::CUSTOM_FILTER_CO2, true);
+  const uint32_t failuresBefore = dev.totalFailures();
+
+  const Status st = dev.customWrite(cmd::CUSTOM_FILTER_CO2, 0x5A);
+
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(Err::VERIFY_MISMATCH),
+      static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_STRING("Write verification mismatch", st.msg);
+  TEST_ASSERT_EQUAL_UINT32(failuresBefore, dev.totalFailures());
+}
+
+void test_long_wait_callbacks_are_sliced_and_bit_timing_does_not_yield() {
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    Config cfg = fake.makeConfig();
+    cfg.longDelaySliceMs = 50;
+    TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+    fake.resetElapsed();
+    TEST_ASSERT_TRUE(
+        dev.setCustomPointer(cmd::CUSTOM_FILTER_CO2).ok());
+    TEST_ASSERT_EQUAL_UINT32(3, fake.longDelaySlices());
+    TEST_ASSERT_EQUAL_UINT32(3, fake.yieldCount());
+
+    fake.resetElapsed();
+    uint8_t status = 0;
+    TEST_ASSERT_TRUE(dev.readStatus(status).ok());
+    TEST_ASSERT_EQUAL_UINT32(0, fake.yieldCount());
+  }
+
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    Config cfg = fake.makeConfig();
+    cfg.delayMs = nullptr;
+    cfg.longDelaySliceMs = 50;
+    TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+    fake.resetElapsed();
+    TEST_ASSERT_TRUE(
+        dev.setCustomPointer(cmd::CUSTOM_FILTER_CO2).ok());
+    TEST_ASSERT_EQUAL_UINT32(0, fake.longDelaySlices());
+    TEST_ASSERT_EQUAL_UINT32(3, fake.yieldCount());
+    TEST_ASSERT_TRUE(fake.delayCalls() > 3U);
+  }
+}
+
+void test_operation_timing_bounds_are_exact_for_every_kind() {
+  FakeE2Transport fake;
+  const Config cfg = fake.makeConfig();
+  struct Case {
+    OperationKind kind;
+    uint16_t count;
+    uint32_t expectedMs;
+  };
+  const Case cases[] = {
+      {OperationKind::CONTROL_READ, 1, 156},
+      {OperationKind::CUSTOM_POINTER_WRITE, 1, 316},
+      {OperationKind::CUSTOM_BYTE_READ, 1, 471},
+      {OperationKind::CUSTOM_BLOCK_READ, 3, 781},
+      {OperationKind::CUSTOM_BYTE_WRITE_VERIFY, 1, 786},
+      {OperationKind::INTERVAL_WRITE_VERIFY, 1, 1281},
+      {OperationKind::PART_NAME_WRITE_VERIFY, 1, 12566},
+      {OperationKind::RAW_CO2_READ, 1, 311},
+      {OperationKind::BUS_RESET, 1, 252},
+  };
+
+  for (const Case& item : cases) {
+    OperationTimingBound out;
+    TEST_ASSERT_TRUE(EE871::EE871::operationTimingBound(
+        cfg, item.kind, item.count, out).ok());
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(item.kind),
+        static_cast<uint8_t>(out.kind));
+    TEST_ASSERT_EQUAL_UINT16(item.count, out.elementCount);
+    TEST_ASSERT_EQUAL_UINT32(item.expectedMs, out.maxBlockingMs);
+  }
+}
+
+void test_operation_timing_queries_are_bus_silent_and_validate_counts() {
+  FakeE2Transport fake;
+  Config cfg = fake.makeConfig();
+  OperationTimingBound out{
+      OperationKind::BUS_RESET, 99, 0xA5A5A5A5U};
+  const uint32_t readsBefore = fake.lineReads();
+  const uint32_t writesBefore = fake.lineWrites();
+
+  TEST_ASSERT_TRUE(EE871::EE871::operationTimingBound(
+      cfg, OperationKind::CONTROL_READ, 1, out).ok());
+  TEST_ASSERT_EQUAL_UINT32(readsBefore, fake.lineReads());
+  TEST_ASSERT_EQUAL_UINT32(writesBefore, fake.lineWrites());
+
+  cfg.clockLowUs = 99;
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(Err::INVALID_CONFIG),
+      static_cast<uint8_t>(EE871::EE871::operationTimingBound(
+          cfg, OperationKind::CONTROL_READ, 1, out).code));
+  TEST_ASSERT_EQUAL_UINT32(readsBefore, fake.lineReads());
+  TEST_ASSERT_EQUAL_UINT32(writesBefore, fake.lineWrites());
+
+  cfg = fake.makeConfig();
+  const OperationTimingBound sentinel{
+      OperationKind::BUS_RESET, 99, 0xA5A5A5A5U};
+  out = sentinel;
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(Err::INVALID_PARAM),
+      static_cast<uint8_t>(EE871::EE871::operationTimingBound(
+          cfg, OperationKind::CONTROL_READ, 2, out).code));
+  TEST_ASSERT_EQUAL_UINT32(sentinel.maxBlockingMs, out.maxBlockingMs);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(Err::INVALID_PARAM),
+      static_cast<uint8_t>(EE871::EE871::operationTimingBound(
+          cfg, OperationKind::CUSTOM_BLOCK_READ, 0, out).code));
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(Err::INVALID_PARAM),
+      static_cast<uint8_t>(EE871::EE871::operationTimingBound(
+          cfg, OperationKind::CUSTOM_BLOCK_READ, 257, out).code));
+  TEST_ASSERT_EQUAL_UINT32(readsBefore, fake.lineReads());
+  TEST_ASSERT_EQUAL_UINT32(writesBefore, fake.lineWrites());
+
+  EE871::EE871 dev;
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(Err::NOT_INITIALIZED),
+      static_cast<uint8_t>(dev.operationTimingBound(
+          OperationKind::CONTROL_READ, 1, out).code));
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+  fake.resetActivityCounters();
+  TEST_ASSERT_TRUE(dev.operationTimingBound(
+      OperationKind::CONTROL_READ, 1, out).ok());
+  TEST_ASSERT_EQUAL_UINT32(0, fake.lineReads());
+  TEST_ASSERT_EQUAL_UINT32(0, fake.lineWrites());
+}
+
+void test_largest_valid_timing_bound_is_exact_and_does_not_wrap() {
+  FakeE2Transport fake;
+  Config cfg = fake.makeConfig();
+  cfg.clockLowUs = 100;
+  cfg.clockHighUs = 1890;
+  cfg.startHoldUs = 65535;
+  cfg.stopHoldUs = 65535;
+  cfg.bitTimeoutUs = cmd::BIT_TIMEOUT_MAX_US;
+  cfg.byteTimeoutUs = cmd::BYTE_TIMEOUT_MAX_US;
+  cfg.writeDelayMs = cmd::WRITE_DELAY_MAX_MS;
+  cfg.intervalWriteDelayMs = cmd::INTERVAL_WRITE_DELAY_MAX_MS;
+  cfg.longDelaySliceMs = cmd::LONG_DELAY_SLICE_MAX_MS;
+  OperationTimingBound out;
+
+  TEST_ASSERT_TRUE(EE871::EE871::operationTimingBound(
+      cfg, OperationKind::CUSTOM_BLOCK_READ, 256, out).ok());
+  TEST_ASSERT_EQUAL_UINT32(112113, out.maxBlockingMs);
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_status_ok);
@@ -615,6 +1087,21 @@ int main() {
   RUN_TEST(test_dirty_error_preserves_first_failure);
   RUN_TEST(test_resync_persistent_config_clears_only_when_coherent);
   RUN_TEST(test_dirty_state_survives_offline);
+  RUN_TEST(test_config_protocol_timing_boundaries);
+  RUN_TEST(test_config_delay_normalization_and_limits);
+  RUN_TEST(test_sda_low_before_start_is_bus_stuck_without_false_start);
+  RUN_TEST(test_scl_stuck_is_precise_at_idle_reset_and_in_transaction);
+  RUN_TEST(test_bit_and_byte_deadline_boundaries);
+  RUN_TEST(test_custom_write_completion_uses_one_total_budget);
+  RUN_TEST(test_pointer_stop_completion_and_dependent_read_ordering);
+  RUN_TEST(test_startup_feature_reads_wait_for_pointer_completion);
+  RUN_TEST(test_interval_commit_completion_boundaries);
+  RUN_TEST(test_block_custom_read_uses_one_pointer_and_auto_increment);
+  RUN_TEST(test_verify_mismatch_does_not_increment_transport_failures);
+  RUN_TEST(test_long_wait_callbacks_are_sliced_and_bit_timing_does_not_yield);
+  RUN_TEST(test_operation_timing_bounds_are_exact_for_every_kind);
+  RUN_TEST(test_operation_timing_queries_are_bus_silent_and_validate_counts);
+  RUN_TEST(test_largest_valid_timing_bound_is_exact_and_does_not_wrap);
   return UNITY_END();
 }
 

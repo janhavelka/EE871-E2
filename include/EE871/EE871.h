@@ -20,6 +20,29 @@ enum class DriverState : uint8_t {
   OFFLINE    ///< consecutiveFailures >= offlineThreshold
 };
 
+/// @brief Public operation classes used for conservative blocking admission.
+///
+/// Values describe library/device operations only. They do not imply an RTOS,
+/// queue, scheduler, or product command.
+enum class OperationKind : uint8_t {
+  CONTROL_READ = 0,             ///< One control-byte addressed read transaction.
+  CUSTOM_POINTER_WRITE = 1,     ///< One 0x50 pointer write and completion window.
+  CUSTOM_BYTE_READ = 2,         ///< Pointer write followed by one 0x51 read.
+  CUSTOM_BLOCK_READ = 3,        ///< Pointer write followed by elementCount 0x51 reads.
+  CUSTOM_BYTE_WRITE_VERIFY = 4, ///< 0x10 write, completion, pointer write, and readback.
+  INTERVAL_WRITE_VERIFY = 5,    ///< Staged interval pair commit and two-byte readback.
+  PART_NAME_WRITE_VERIFY = 6,   ///< Complete fixed 16-byte part-name write/readback sequence.
+  RAW_CO2_READ = 7,             ///< Low-byte then high-byte raw MV3/MV4 read.
+  BUS_RESET = 8                 ///< Nine reset clocks, bounded line waits, and STOP.
+};
+
+/// @brief Conservative blocking-time result for one operation class.
+struct OperationTimingBound {
+  OperationKind kind{OperationKind::CONTROL_READ}; ///< Operation represented by this result.
+  uint16_t elementCount{1}; ///< Block element count; one for fixed-size operations.
+  uint32_t maxBlockingMs{0}; ///< Conservative maximum while callbacks honor their contract.
+};
+
 /// @brief Snapshot of current configuration, cached feature flags, and driver health.
 ///
 /// Snapshot access does not touch the E2 bus. The persistent dirty fields mirror
@@ -173,6 +196,36 @@ public:
   /// Return current configuration, feature-cache, and health state by value.
   /// @return Current settings snapshot.
   SettingsSnapshot getSettings() const;
+
+  /// Calculate a conservative blocking bound from the active normalized config.
+  ///
+  /// This query is cache-only and performs no E2 line reads or writes.
+  /// @param kind Operation class to calculate.
+  /// @param elementCount One for fixed-size operations; 1..256 for CUSTOM_BLOCK_READ.
+  /// @param[out] out Published only on success.
+  /// @return NOT_INITIALIZED before begin(), INVALID_PARAM for an invalid count,
+  /// or Status::Ok() with a conservative bound.
+  Status operationTimingBound(
+      OperationKind kind,
+      uint16_t elementCount,
+      OperationTimingBound& out) const;
+
+  /// Calculate a conservative blocking bound from a supplied configuration.
+  ///
+  /// The supplied configuration is validated and normalized exactly as for
+  /// begin(). This pure query performs no E2 I/O and does not mutate a driver.
+  /// Callback runtime beyond the requested delay is outside the calculated
+  /// bound; callbacks must remain bounded and honor requested minimum delays.
+  /// @param config Configuration to validate and normalize.
+  /// @param kind Operation class to calculate.
+  /// @param elementCount One for fixed-size operations; 1..256 for CUSTOM_BLOCK_READ.
+  /// @param[out] out Published only on success.
+  /// @return INVALID_CONFIG, INVALID_PARAM, OUT_OF_RANGE, or Status::Ok().
+  static Status operationTimingBound(
+      const Config& config,
+      OperationKind kind,
+      uint16_t elementCount,
+      OperationTimingBound& out);
 
   // =========================================================================
   // Health Tracking
@@ -554,18 +607,91 @@ public:
   Status checkBusIdle();
 
 private:
+  enum class ClockWaitClass : uint8_t {
+    NORMAL_BIT = 0,
+    WRITE_COMPLETION = 1,
+    INTERVAL_COMMIT = 2,
+  };
+
+  struct ByteDeadline {
+    uint32_t elapsedUs{0};
+    uint32_t limitUs{0};
+  };
+
+  enum class WriteEffect : uint8_t {
+    NONE = 0,
+    NO_EFFECT = 1,
+    ACKNOWLEDGED = 2,
+    INDETERMINATE = 3,
+    VERIFIED = 4,
+  };
+
+  struct WriteProgress {
+    bool pecTransferred{false};
+    bool requestAcknowledged{false};
+    bool stopCompleted{false};
+    uint32_t completionElapsedUs{0};
+    WriteEffect effect{WriteEffect::NONE};
+  };
+
   // =========================================================================
   // Tracked/Raw Transport Wrappers
   // =========================================================================
+
+  static Status _validateConfig(const Config& input, Config& normalized);
+  static Status _calculateOperationTimingBound(
+      const Config& normalized,
+      OperationKind kind,
+      uint16_t elementCount,
+      OperationTimingBound& out);
+  static void _delayUs(
+      const Config& config, uint32_t us, ByteDeadline* deadline = nullptr);
+  static Status _delayWithinDeadline(
+      const Config& config,
+      uint32_t us,
+      ClockWaitClass waitClass,
+      ByteDeadline& deadline);
+  static void _delayLongMs(const Config& config, uint32_t totalMs);
+  static Status _waitSclHigh(
+      const Config& config,
+      ClockWaitClass waitClass,
+      ByteDeadline& deadline);
+  static Status _e2Start(const Config& config);
+  static Status _e2Stop(
+      const Config& config,
+      ClockWaitClass waitClass,
+      ByteDeadline* deadline = nullptr);
+  static Status _writeBit(
+      const Config& config, bool bit, ByteDeadline& deadline);
+  static Status _readBit(
+      const Config& config, bool& bit, ByteDeadline& deadline);
+  static Status _writeByte(
+      const Config& config, uint8_t value, ByteDeadline& deadline);
+  static Status _readByte(
+      const Config& config, uint8_t& value, ByteDeadline& deadline);
+  static Status _readAck(
+      const Config& config,
+      bool& acked,
+      ClockWaitClass waitClass,
+      ByteDeadline& deadline);
+  static Status _sendAck(
+      const Config& config, bool ack, ByteDeadline& deadline);
+
+  Status _busResetRaw();
+  Status _setCustomPointerRaw(uint8_t address);
+  Status _setCustomPointerTracked(uint8_t address);
 
   Status _readControlByteRaw(uint8_t controlByte, uint8_t& data);
   Status _readControlByteTracked(uint8_t controlByte, uint8_t& data);
 
   Status _writeCommandRaw(uint8_t controlByte, uint8_t addressByte, uint8_t dataByte,
-                          bool* writeAccepted = nullptr);
+                          ClockWaitClass completionClass,
+                          WriteProgress* progress = nullptr);
   Status _writeCommandTracked(uint8_t controlByte, uint8_t addressByte, uint8_t dataByte,
-                              bool* writeAccepted = nullptr);
-  Status _customWriteDirect(uint8_t address, uint8_t value, bool* writeAccepted = nullptr);
+                              ClockWaitClass completionClass,
+                              WriteProgress* progress = nullptr);
+  Status _customWriteDirect(uint8_t address, uint8_t value,
+                            bool* writeMayHaveEffect = nullptr);
 
   // =========================================================================
   // Health Management
@@ -602,6 +728,7 @@ private:
   uint32_t _totalSuccess = 0;
   bool _persistentConfigDirty = false;
   Status _persistentConfigDirtyError = Status::Ok();
+  WriteProgress _lastWriteProgress{};
 };
 
 } // namespace EE871
