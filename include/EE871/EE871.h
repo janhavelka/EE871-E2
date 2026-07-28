@@ -594,7 +594,9 @@ public:
   /// Reset bus state by clocking with SDA high.
   ///
   /// Use after timeout/stuck bus conditions. This touches E2 lines, is blocking
-  /// within configured timing bounds, and is not ISR-safe.
+  /// within configured timing bounds, and is not ISR-safe. This diagnostic
+  /// operation is health-neutral; use recover() for an explicit tracked
+  /// recovery attempt.
   /// @return Ok if bus lines are free after reset.
   Status busReset();
 

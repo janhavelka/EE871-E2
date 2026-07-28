@@ -85,8 +85,12 @@ struct Config {
   uint32_t bitTimeoutUs = 25000;  ///< Clock-stretch timeout per bit, must be > 0.
   uint32_t byteTimeoutUs = 35000; ///< Clock-stretch timeout per byte, must be >= bitTimeoutUs.
 
-  uint32_t writeDelayMs = 150;    ///< Flash write delay for 0x10/0x50, max 5000 ms.
-  uint32_t intervalWriteDelayMs = 300; ///< Flash delay for 0xC6/0xC7 pair, max 5000 ms.
+  /// Total 0x10/0x50 completion window; recommended 150 ms, max 5000 ms.
+  /// Values below 150 ms normalize to 150 ms.
+  uint32_t writeDelayMs = 150;
+  /// Total 0xC6/0xC7 commit window; recommended 300 ms, max 5000 ms.
+  /// Values below 300 ms normalize to 300 ms.
+  uint32_t intervalWriteDelayMs = 300;
 
   // === Health Tracking ===
   uint8_t offlineThreshold = 5;   ///< Consecutive failures before OFFLINE; zero normalizes to 1 in begin().

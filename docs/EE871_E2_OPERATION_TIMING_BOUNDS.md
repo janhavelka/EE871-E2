@@ -91,7 +91,7 @@ Fixed-size operations reject counts other than one. `CUSTOM_BLOCK_READ`
 rejects zero and values above 256. Rejected queries do not modify the output
 object and do not touch E2 lines.
 
-## Default Example
+## Minimum-Hold Reference Example
 
 For 100 us clock phases, 4 us START/STOP holds, 25/35 ms bit/byte deadlines,
 and 150/300 ms completion windows, the published bounds are:

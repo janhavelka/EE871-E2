@@ -202,6 +202,22 @@ Status EE871::_e2Stop(
     const Config& config,
     ClockWaitClass waitClass,
     ByteDeadline* suppliedDeadline) {
+  if (waitClass == ClockWaitClass::NORMAL_BIT) {
+    setSda(config, false);
+    _delayUs(config, kDataSetupUs);
+    setScl(config, true);
+    ByteDeadline sclDeadline{0, config.bitTimeoutUs};
+    Status st = _waitSclHigh(
+        config, ClockWaitClass::NORMAL_BIT, sclDeadline);
+    if (!st.ok()) {
+      return st;
+    }
+    _delayUs(config, config.stopHoldUs);
+    setSda(config, true);
+    _delayUs(config, config.stopHoldUs);
+    return Status::Ok();
+  }
+
   ByteDeadline normalDeadline{0, config.bitTimeoutUs};
   ByteDeadline& deadline =
       suppliedDeadline != nullptr ? *suppliedDeadline : normalDeadline;
@@ -1353,7 +1369,7 @@ Status EE871::busReset() {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
   }
-  return _updateHealth(_busResetRaw());
+  return _busResetRaw();
 }
 
 Status EE871::_busResetRaw() {
@@ -1458,16 +1474,17 @@ Status EE871::_readControlByteRaw(uint8_t controlByte, uint8_t& data) {
     return cleanup(st);
   }
 
-  st = _e2Stop(_config, ClockWaitClass::NORMAL_BIT, nullptr);
-  if (!st.ok()) {
-    return st;
-  }
-
   const uint8_t expected = calcPecRead(controlByte, data);
-  if (pec != expected) {
-    return Status::Error(Err::PEC_MISMATCH, "PEC mismatch", pec);
+  const Status pecStatus =
+      pec == expected
+          ? Status::Ok()
+          : Status::Error(Err::PEC_MISMATCH, "PEC mismatch", pec);
+  const Status stopStatus =
+      _e2Stop(_config, ClockWaitClass::NORMAL_BIT, nullptr);
+  if (!pecStatus.ok()) {
+    return pecStatus;
   }
-  return Status::Ok();
+  return stopStatus;
 }
 
 Status EE871::_readControlByteTracked(uint8_t controlByte, uint8_t& data) {
@@ -1583,8 +1600,10 @@ Status EE871::_writeCommandRaw(
   }
   if (!acked) {
     progress.effect = WriteEffect::NO_EFFECT;
-    const Status cleanupStatus =
-        _e2Stop(_config, ClockWaitClass::NORMAL_BIT, nullptr);
+    const Status cleanupStatus = hasLongCompletion
+        ? _e2Stop(_config, completionClass, &completionDeadline)
+        : _e2Stop(_config, ClockWaitClass::NORMAL_BIT, nullptr);
+    progress.completionElapsedUs = completionDeadline.elapsedUs;
     progress.stopCompleted = cleanupStatus.ok();
     publishProgress(progress);
     return Status::Error(Err::NACK, "PEC NACK");

@@ -42,7 +42,12 @@ public:
     _customPointer = 0;
     _elapsedUs = 0;
     _delayUsCalls = 0;
+    _lastDelayUs = 0;
+    _longDelayUsCalls = 0;
+    _longDelayUsTotalUs = 0;
     _longDelaySlices = 0;
+    _delayMsTotalMs = 0;
+    _maxDelayMsSliceMs = 0;
     _yieldCount = 0;
     _lineWrites = 0;
     _lineReads = 0;
@@ -52,6 +57,8 @@ public:
     _sdaStuckLow = false;
     _sdaStuckHigh = false;
     _corruptReadPec = false;
+    _nackNextFinalAck = false;
+    _finalAckAccepted = true;
     _failNextWriteEnabled = false;
     _failNextWriteAddress = 0;
     _dropWriteEnabled = false;
@@ -71,14 +78,23 @@ public:
     _pointerCompletionDelayUs =
         EE871::cmd::WRITE_DELAY_PROTOCOL_MIN_MS * 1000U;
     _pointerCompletionRemainingUs = 0;
+    _pointerCompletionDelaysUntilStart = 0;
     _transactionStartedDuringPointerCompletion = false;
     _pointerReadStartedEarly = false;
+    _intervalCompletionDelayUs =
+        EE871::cmd::INTERVAL_WRITE_DELAY_PROTOCOL_MIN_MS * 1000U;
+    _intervalCompletionRemainingUs = 0;
+    _intervalCompletionDelaysUntilStart = 0;
+    _intervalTransactionStartedEarly = false;
 
     for (size_t i = 0; i < MAX_RECORDED_TRANSACTIONS; ++i) {
       _transactionMain[i] = 0;
       _transactionAddress[i] = 0;
       _transactionIsRead[i] = false;
       _transactionHasAddress[i] = false;
+    }
+    for (size_t i = 0; i < MAX_RECORDED_LONG_DELAYS; ++i) {
+      _longDelayUsDurations[i] = 0;
     }
     for (size_t i = 0; i < EE871::cmd::CUSTOM_MEMORY_SIZE; ++i) {
       _memory[i] = 0;
@@ -103,6 +119,15 @@ public:
   }
 
   EE871::Config makeConfig(uint8_t offlineThreshold = 5) {
+    EE871::Config cfg = makeDefaultTimingConfig();
+    cfg.startHoldUs = 4;
+    cfg.stopHoldUs = 4;
+    cfg.offlineThreshold = offlineThreshold;
+    cfg.longDelaySliceMs = 1;
+    return cfg;
+  }
+
+  EE871::Config makeDefaultTimingConfig() {
     EE871::Config cfg;
     cfg.setScl = &FakeE2Transport::setSclThunk;
     cfg.setSda = &FakeE2Transport::setSdaThunk;
@@ -110,26 +135,24 @@ public:
     cfg.readSda = &FakeE2Transport::readSdaThunk;
     cfg.delayUs = &FakeE2Transport::delayUsThunk;
     cfg.busUser = this;
-    cfg.clockLowUs = 100;
-    cfg.clockHighUs = 100;
-    cfg.startHoldUs = 4;
-    cfg.stopHoldUs = 4;
-    cfg.bitTimeoutUs = 25000;
-    cfg.byteTimeoutUs = 35000;
-    cfg.writeDelayMs = 150;
-    cfg.intervalWriteDelayMs = 300;
-    cfg.offlineThreshold = offlineThreshold;
     cfg.delayMs = &FakeE2Transport::delayMsThunk;
     cfg.yield = &FakeE2Transport::yieldThunk;
-    cfg.longDelaySliceMs = 1;
     return cfg;
   }
 
   void resetElapsed() {
     _elapsedUs = 0;
     _delayUsCalls = 0;
+    _lastDelayUs = 0;
+    _longDelayUsCalls = 0;
+    _longDelayUsTotalUs = 0;
     _longDelaySlices = 0;
+    _delayMsTotalMs = 0;
+    _maxDelayMsSliceMs = 0;
     _yieldCount = 0;
+    for (size_t i = 0; i < MAX_RECORDED_LONG_DELAYS; ++i) {
+      _longDelayUsDurations[i] = 0;
+    }
   }
 
   void resetActivityCounters() {
@@ -146,11 +169,24 @@ public:
 
   uint64_t elapsedUs() const { return _elapsedUs; }
   uint32_t delayCalls() const { return _delayUsCalls; }
+  uint32_t lastDelayUs() const { return _lastDelayUs; }
+  uint32_t longDelayUsCalls() const { return _longDelayUsCalls; }
+  uint64_t longDelayUsTotalUs() const { return _longDelayUsTotalUs; }
+  uint32_t longDelayUsDuration(size_t index) const {
+    return index < MAX_RECORDED_LONG_DELAYS
+               ? _longDelayUsDurations[index]
+               : 0U;
+  }
   uint32_t longDelaySlices() const { return _longDelaySlices; }
+  uint32_t delayMsTotalMs() const { return _delayMsTotalMs; }
+  uint32_t maxDelayMsSliceMs() const { return _maxDelayMsSliceMs; }
   uint32_t yieldCount() const { return _yieldCount; }
   uint32_t lineWrites() const { return _lineWrites; }
   uint32_t lineReads() const { return _lineReads; }
   uint32_t transactionCount() const { return _transactionCount; }
+  bool busLinesIdle() const {
+    return physicalSclHigh() && _masterSdaReleased && !_sdaStuckLow;
+  }
 
   uint8_t transactionMain(size_t index) const {
     return index < MAX_RECORDED_TRANSACTIONS ? _transactionMain[index] : 0;
@@ -196,6 +232,7 @@ public:
   void setSdaStuckLow(bool stuck) { _sdaStuckLow = stuck; }
   void setSdaStuckHigh(bool stuck) { _sdaStuckHigh = stuck; }
   void setCorruptReadPec(bool corrupt) { _corruptReadPec = corrupt; }
+  void nackNextFinalAck() { _nackNextFinalAck = true; }
 
   void setStretch(
       StretchPhase phase,
@@ -252,6 +289,9 @@ public:
     _pointerCompletionDelayUs = durationUs;
   }
   bool pointerReadStartedEarly() const { return _pointerReadStartedEarly; }
+  bool intervalTransactionStartedEarly() const {
+    return _intervalTransactionStartedEarly;
+  }
 
   void setMemory(uint8_t address, uint8_t value) { _memory[address] = value; }
   uint8_t memory(uint8_t address) const { return _memory[address]; }
@@ -424,6 +464,12 @@ private:
               ? 0U
               : _pointerCompletionRemainingUs - us;
     }
+    if (_intervalCompletionRemainingUs != 0U) {
+      _intervalCompletionRemainingUs =
+          us >= _intervalCompletionRemainingUs
+              ? 0U
+              : _intervalCompletionRemainingUs - us;
+    }
 
     if (_activeStretchRemainingUs == 0U) {
       return;
@@ -441,11 +487,36 @@ private:
 
   void delayUs(uint32_t us) {
     ++_delayUsCalls;
+    _lastDelayUs = us;
+    const bool startPointerCompletion =
+        _pointerCompletionDelaysUntilStart != 0U &&
+        --_pointerCompletionDelaysUntilStart == 0U;
+    const bool startIntervalCompletion =
+        _intervalCompletionDelaysUntilStart != 0U &&
+        --_intervalCompletionDelaysUntilStart == 0U;
     consumeSimulatedTime(us);
+    if (startPointerCompletion) {
+      _pointerCompletionRemainingUs = _pointerCompletionDelayUs;
+    }
+    if (startIntervalCompletion) {
+      _intervalCompletionRemainingUs = _intervalCompletionDelayUs;
+    }
+    if (us >= 1000U) {
+      const size_t index = _longDelayUsCalls;
+      if (index < MAX_RECORDED_LONG_DELAYS) {
+        _longDelayUsDurations[index] = us;
+      }
+      ++_longDelayUsCalls;
+      _longDelayUsTotalUs += us;
+    }
   }
 
   void delayMs(uint32_t ms) {
     ++_longDelaySlices;
+    _delayMsTotalMs += ms;
+    if (ms > _maxDelayMsSliceMs) {
+      _maxDelayMsSliceMs = ms;
+    }
     consumeSimulatedTime(ms * 1000U);
   }
 
@@ -454,6 +525,9 @@ private:
   void beginTransaction() {
     _transactionStartedDuringPointerCompletion =
         _pointerCompletionRemainingUs != 0U;
+    if (_intervalCompletionRemainingUs != 0U) {
+      _intervalTransactionStartedEarly = true;
+    }
     const size_t index = _transactionCount;
     ++_transactionCount;
     if (index < MAX_RECORDED_TRANSACTIONS) {
@@ -473,6 +547,7 @@ private:
     _responseData = 0;
     _responsePec = 0;
     _slaveSda = true;
+    _finalAckAccepted = true;
   }
 
   void onSclRising() {
@@ -580,6 +655,15 @@ private:
             mainCommand() == EE871::cmd::MAIN_CUSTOM_PTR) {
           _pointerReadStartedEarly = true;
         }
+        if (controlIsRead() &&
+            mainCommand() == EE871::cmd::MAIN_CUSTOM_PTR) {
+          const size_t index =
+              _transactionCount == 0U ? 0U : _transactionCount - 1U;
+          if (index < MAX_RECORDED_TRANSACTIONS) {
+            _transactionAddress[index] = _customPointer;
+            _transactionHasAddress[index] = true;
+          }
+        }
         _phase = Phase::ACK_CONTROL;
         _skipNextFalling = true;
         break;
@@ -613,7 +697,11 @@ private:
       case Phase::WRITE_PEC:
         _pec = _byte;
         if (mainCommand() == EE871::cmd::MAIN_CUSTOM_PTR) {
-          _pointerCompletionRemainingUs = _pointerCompletionDelayUs;
+          _pointerCompletionDelaysUntilStart = 2;
+        } else if (
+            mainCommand() == EE871::cmd::MAIN_CUSTOM_WRITE &&
+            _address == EE871::cmd::CUSTOM_INTERVAL_H) {
+          _intervalCompletionDelaysUntilStart = 2;
         }
         _phase = Phase::ACK_PEC;
         _skipNextFalling = true;
@@ -627,6 +715,11 @@ private:
 
   bool ackForCurrentPhase() {
     if (!_devicePresent) {
+      return false;
+    }
+    if (_phase == Phase::ACK_PEC && _nackNextFinalAck) {
+      _nackNextFinalAck = false;
+      _finalAckAccepted = false;
       return false;
     }
     if (_phase == Phase::ACK_ADDRESS &&
@@ -703,7 +796,7 @@ private:
   }
 
   void applyWriteIfValid() {
-    if (!_devicePresent) {
+    if (!_devicePresent || !_finalAckAccepted) {
       return;
     }
     const uint8_t expected =
@@ -751,7 +844,14 @@ private:
   uint8_t _customPointer = 0;
   uint64_t _elapsedUs = 0;
   uint32_t _delayUsCalls = 0;
+  uint32_t _lastDelayUs = 0;
+  static constexpr size_t MAX_RECORDED_LONG_DELAYS = 16;
+  uint32_t _longDelayUsDurations[MAX_RECORDED_LONG_DELAYS] = {};
+  uint32_t _longDelayUsCalls = 0;
+  uint64_t _longDelayUsTotalUs = 0;
   uint32_t _longDelaySlices = 0;
+  uint32_t _delayMsTotalMs = 0;
+  uint32_t _maxDelayMsSliceMs = 0;
   uint32_t _yieldCount = 0;
   uint32_t _lineWrites = 0;
   uint32_t _lineReads = 0;
@@ -761,6 +861,8 @@ private:
   bool _sdaStuckLow = false;
   bool _sdaStuckHigh = false;
   bool _corruptReadPec = false;
+  bool _nackNextFinalAck = false;
+  bool _finalAckAccepted = true;
   bool _failNextWriteEnabled = false;
   uint8_t _failNextWriteAddress = 0;
   bool _dropWriteEnabled = false;
@@ -781,8 +883,13 @@ private:
   uint32_t _activeStretchRemainingUs = 0;
   uint32_t _pointerCompletionDelayUs = 0;
   uint32_t _pointerCompletionRemainingUs = 0;
+  uint8_t _pointerCompletionDelaysUntilStart = 0;
   bool _transactionStartedDuringPointerCompletion = false;
   bool _pointerReadStartedEarly = false;
+  uint32_t _intervalCompletionDelayUs = 0;
+  uint32_t _intervalCompletionRemainingUs = 0;
+  uint8_t _intervalCompletionDelaysUntilStart = 0;
+  bool _intervalTransactionStartedEarly = false;
   uint8_t _transactionMain[MAX_RECORDED_TRANSACTIONS] = {};
   uint8_t _transactionAddress[MAX_RECORDED_TRANSACTIONS] = {};
   bool _transactionIsRead[MAX_RECORDED_TRANSACTIONS] = {};

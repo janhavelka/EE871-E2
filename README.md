@@ -24,7 +24,7 @@ case.
 
 Recorded evidence:
 
-- Native tests: 31 passing.
+- Native tests: 51 passing in the current Prompt 01 audit run.
 - Arduino PlatformIO builds: `ex_bringup_s3` and `ex_bringup_s2` pass locally
   in the latest hardening/readiness runs.
 - ESP32-S3 safe default HIL: PASS on `COM17`.

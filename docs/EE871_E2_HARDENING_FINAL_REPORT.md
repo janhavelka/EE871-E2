@@ -861,16 +861,19 @@ synchronous or framework-neutral architecture:
   owner-admission bounds.
 
 The native callback-boundary fake now injects exact stretch durations by
-protocol phase and records transaction ordering. Native coverage is 46 tests,
+protocol phase and records transaction ordering. Native coverage is 51 tests,
 including exact 25/35 ms boundaries, near-limit 150/300 ms completion,
 completion overruns, callback slicing, all operation-bound formulas, and
-largest-valid-input arithmetic.
+largest-valid-input arithmetic. The post-publication audit also covers valid
+STOP holds above the bit timeout, PEC-versus-cleanup precedence, final-PEC NACK
+cleanup, health-neutral diagnostic reset, exact fallback delay slices, and
+interval stage/commit identity.
 
 Software validation on 2026-07-28:
 
 - core timing guard: PASS;
 - generated version check: PASS, version remains `1.0.0`;
-- native tests: PASS, 46/46;
+- native tests: PASS, 51/51;
 - Arduino ESP32-S3 and ESP32-S2 example builds: PASS;
 - pure ESP-IDF build: not run because `idf.py` is unavailable;
 - HIL and physical fault-jig validation: not run.

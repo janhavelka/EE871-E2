@@ -57,8 +57,28 @@ Public additions:
 
 The native fake now supports phase-specific exact SCL stretch duration,
 stuck-SDA START faults, line/transaction/delay/yield counts, transaction command
-and custom-address records, wrong readback, and pointer-completion ordering
-evidence.
+and effective custom-read address records, wrong readback, pointer/interval
+completion ordering, and forced final-PEC NACK evidence.
+
+## Post-Publication Audit Corrections
+
+The audit of published Prompt 01 commit `d6100b0` found and corrected four
+in-scope edge cases:
+
+- ordinary STOP applies `bitTimeoutUs` only while polling SCL high; configured
+  START/STOP holds are fixed timing outside that stretch deadline;
+- a known `PEC_MISMATCH` remains primary if bounded cleanup STOP also fails;
+- final-PEC NACK cleanup uses the existing 150/300 ms completion deadline,
+  keeps `NACK` primary, and leaves the bus released when cleanup succeeds;
+- public diagnostic `busReset()` is raw and health-neutral, while `recover()`
+  remains the explicit tracked recovery path.
+
+The fake timer now starts at the same completed-PEC boundary as production.
+Interval tests prove `0xC6` ordinary staging before the `0xC7` commit, wait the
+remaining commit window before verification, and exercise ordinary deadline
+failure on the staged transaction. Delay tests verify exact 50/50/49 ms
+fallback slices plus the microsecond remainder and prove stretch polling never
+calls the task-context yield callback.
 
 ## Timing Formulas
 
@@ -107,7 +127,7 @@ Exact derivation, normalization, count rules, and callback assumptions are in
 | `python scripts/generate_version.py check` | PASS |
 | `python tools/check_cli_contract.py` | PASS |
 | `python tools/check_idf_example_contract.py` | PASS |
-| `python -m platformio test -e native` | PASS, 46/46 |
+| `python -m platformio test -e native` | PASS, 51/51 |
 | `python -m platformio run -e ex_bringup_s3` | PASS |
 | `python -m platformio run -e ex_bringup_s2` | PASS |
 | `doxygen Doxyfile` | PASS with Doxygen 1.15.0 |

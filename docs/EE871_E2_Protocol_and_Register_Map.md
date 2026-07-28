@@ -408,7 +408,8 @@ Steps:
    - AddressByte = 0x00 (pointer high for 8-bit addresses)
    - DataByte = A (pointer low)
    - PEC = (CB + Addr + Data) & 0xFF
-   - STOP
+   - Final ACK and STOP share one total 150 ms completion window that starts
+     after PEC; delay only the unused remainder of that window
 2) Read with ControlByte 0x51:
    - START
    - ControlByte = 0x51 with bus address (read)
@@ -425,8 +426,11 @@ For reading multi-byte blocks (like 0xA0..0xAF), do step (1) once, then repeat (
 3) AddressByte = A
 4) DataByte = value
 5) PEC = (CB + Addr + Data) & 0xFF
-6) STOP
-7) **Wait** for flash write completion (up to 150 ms; up to 300 ms for the 0xC6/0xC7 pair)
+6) Complete final ACK and STOP within one total completion window that starts
+   after PEC: 150 ms for ordinary writes, or 300 ms for the committing `0xC7`
+   byte of the interval pair
+7) Delay only the unused remainder of that same window; do not add a second
+   full post-STOP delay
 8) Read back to verify.
 
 ---
@@ -635,8 +639,12 @@ Minimum API to implement:
 - Timeouts for clock stretching:
   - <= 25 ms per bit, <= 35 ms per byte
 - Always verify PEC for every read/write transaction
-- After any write (0x10/0x50), read back to verify
-- After 0x10 writes, allow up to 150 ms (up to 300 ms for the 0xC6/0xC7 pair)
+- After persistent `0x10` writes, read back to verify
+- For `0x10` and pointer-setting `0x50` transactions, finish the one selected
+  completion window before starting a dependent transaction; only persistent
+  `0x10` writes require value readback
+- Use a 150 ms total completion window for ordinary writes and a 300 ms window
+  only for the committing `0xC7` byte of the interval pair
 
 ---
 

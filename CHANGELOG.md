@@ -33,6 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Legal final-ACK/STOP clock stretching no longer fails under ordinary byte
   timing, while ordinary transfers retain their tighter limits.
 - Cleanup failures preserve an earlier, more precise transport failure.
+- Ordinary STOP timing applies `bitTimeoutUs` only to SCL-high polling, so
+  valid configured STOP hold times do not create false timeouts.
+- Public diagnostic `busReset()` remains health-neutral; tracked recovery stays
+  explicit through `recover()`.
+- Final-PEC NACK cleanup uses the same write-completion budget and preserves
+  `NACK` as the primary result.
 
 ## [1.0.0] - 2026-06-02
 
