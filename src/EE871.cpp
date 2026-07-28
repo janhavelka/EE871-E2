@@ -90,6 +90,21 @@ static uint8_t calcPecWrite(uint8_t controlByte, uint8_t addressByte, uint8_t da
   return static_cast<uint8_t>((controlByte + addressByte + dataByte) & 0xFF);
 }
 
+constexpr Co2SensorError co2SensorErrorFromCode(uint8_t code) {
+  switch (code) {
+    case cmd::CO2_ERROR_SUPPLY_VOLTAGE_LOW:
+      return Co2SensorError::SUPPLY_VOLTAGE_LOW;
+    case cmd::CO2_ERROR_SENSOR_COUNTS_LOW:
+      return Co2SensorError::SENSOR_COUNTS_LOW;
+    case cmd::CO2_ERROR_SENSOR_COUNTS_HIGH:
+      return Co2SensorError::SENSOR_COUNTS_HIGH;
+    case cmd::CO2_ERROR_SUPPLY_VOLTAGE_BREAKDOWN:
+      return Co2SensorError::SUPPLY_VOLTAGE_BREAKDOWN_AT_PEAK;
+    default:
+      return Co2SensorError::UNKNOWN;
+  }
+}
+
 } // namespace
 
 void EE871::_delayUs(
@@ -542,6 +557,11 @@ Status EE871::_calculateOperationTimingBound(
       }
       break;
     case OperationKind::PROBE_IDENTITY:
+      st = addScaledU64(totalUs, readUs, 4U);
+      break;
+    case OperationKind::CHECKED_CO2_AVERAGE:
+    case OperationKind::CHECKED_CO2_FAST:
+      totalUs = pointerUs;
       st = addScaledU64(totalUs, readUs, 4U);
       break;
     default:
@@ -1270,6 +1290,69 @@ Status EE871::readCo2Fast(uint16_t& ppm) {
 
 Status EE871::readCo2Average(uint16_t& ppm) {
   return readU16(cmd::MAIN_MV4_LO, cmd::MAIN_MV4_HI, ppm);
+}
+
+Status EE871::readCo2AverageSample(Co2ReadResult& out) {
+  return _readCo2Sample(Co2ValueKind::AVERAGE, out);
+}
+
+Status EE871::readCo2FastSample(Co2ReadResult& out) {
+  return _readCo2Sample(Co2ValueKind::FAST, out);
+}
+
+Status EE871::_readCo2Sample(
+    Co2ValueKind kind, Co2ReadResult& out) {
+  out = Co2ReadResult{};
+  out.kind = kind;
+
+  uint16_t ppm = 0;
+  out.valueReadAttempted = true;
+  out.valueReadStatus =
+      kind == Co2ValueKind::AVERAGE
+          ? readCo2Average(ppm)
+          : readCo2Fast(ppm);
+  if (!out.valueReadStatus.ok()) {
+    return out.valueReadStatus;
+  }
+  out.ppm = ppm;
+
+  uint8_t status = 0;
+  out.statusReadAttempted = true;
+  out.statusReadStatus = readStatus(status);
+  if (!out.statusReadStatus.ok()) {
+    return out.statusReadStatus;
+  }
+  out.statusByte = status;
+  out.statusValid = true;
+  out.co2Error =
+      (status & cmd::STATUS_CO2_ERROR_MASK) != 0U;
+
+  if (out.co2Error) {
+    out.sensorError = Co2SensorError::UNKNOWN;
+    if (hasErrorCode()) {
+      uint8_t code = 0;
+      out.errorCodeReadAttempted = true;
+      out.errorCodeReadStatus = readErrorCode(code);
+      if (!out.errorCodeReadStatus.ok()) {
+        return out.errorCodeReadStatus;
+      }
+      out.errorCode = code;
+      out.errorCodeValid = true;
+      out.sensorError = co2SensorErrorFromCode(code);
+    }
+    return Status::Error(
+        Err::CO2_SENSOR_ERROR,
+        "CO2 sensor status error",
+        out.errorCodeValid ? out.errorCode : out.statusByte);
+  }
+
+  if (ppm > cmd::CO2_PPM_MAX) {
+    return Status::Error(
+        Err::OUT_OF_RANGE, "CO2 ppm out of range", ppm);
+  }
+
+  out.ppmValid = true;
+  return Status::Ok();
 }
 
 // ============================================================================

@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for strict or optional-device startup with cache-only diagnostics.
 - `Err::OFFLINE` and lifecycle timing kinds for begin, probe, and complete
   recovery admission bounds.
+- Checked MV3/MV4 procedures with `Co2ReadResult`, `Co2ValueKind`,
+  `Co2SensorError`, append-only `CO2_SENSOR_ERROR`, and per-step attempt/status
+  evidence.
+- Broad checked CO2 range constants, cache-only calibration capability
+  helpers, and checked-sample timing kinds 13 and 14.
 
 ### Changed
 
@@ -35,6 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Optional startup accepts only definite absence/NACK and enters a latched
   `OFFLINE` state. Normal transfers are bus-silent while offline, raw `probe()`
   is non-mutating, and explicit `recover()` is the sole route back to `READY`.
+- Raw MV3/MV4/status/error-code APIs remain unchanged. Checked procedures read
+  value before side-effecting status, capability-gate detailed error reads,
+  and keep sensor/range outcomes separate from E2 transport health.
 
 ### Fixed
 

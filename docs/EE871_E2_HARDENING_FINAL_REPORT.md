@@ -944,3 +944,48 @@ Post-publication audit correction:
   counters;
 - obsolete example-side identity remapping was removed and lifecycle/diagnostic
   documentation was aligned with the implemented contracts.
+
+## 2026-07-28 Checked CO2 Sample Follow-up
+
+Branch: `feature/ee871-hardening-series`
+
+Prompt 03 adds reusable checked sample semantics without changing the raw
+MV3/MV4 APIs or introducing firmware policy:
+
+- `readCo2AverageSample()` and `readCo2FastSample()` share one procedure that
+  reads the selected value first, status second, and optional custom error code
+  `0xC1` only when cached capabilities advertise it;
+- `Co2ReadResult` preserves raw value/status/error detail, validity, exact
+  per-step status, and mandatory attempted flags;
+- documented error codes map to `Co2SensorError`; unknown codes, missing detail
+  capability, and failed detail acquisition remain distinguishable;
+- `Err::CO2_SENSOR_ERROR = 17` and checked `OUT_OF_RANGE` are sensor-domain
+  terminal results and do not falsify E2 transport failure counters;
+- the broad checked range is 0..50,000 ppm while raw MV3/MV4 continue to return
+  the complete unsigned value unchanged;
+- cache-only `hasCo2OffsetGain()` and `hasCo2AdjustmentPoints()` expose
+  capability bytes 0x03/0x04 without changing persistent calibration guards;
+- operation kinds 13 and 14 reserve two value reads, status, and the worst-case
+  completed pointer plus error-code read, yielding 936 ms minimum-hold
+  reference bounds.
+
+The callback-boundary fake now has direct MV3/MV4/status/error-code setters and
+an explicit control-read counter while reusing its existing ordered transaction
+record. Native tests prove MV-before-status ordering, every deterministic
+transfer-failure step, recognized and unknown error mapping, capability gating,
+range edges, health separation, offline line silence, cache-only helpers, raw
+API source compatibility, and conservative timing.
+
+Warm-up, trigger readiness, freshness, cadence, retry policy, cached samples,
+firmware schemas, tasks, queues, pins, and product integration remain outside
+the library. Persistent calibration guards, repository examples, version and
+release work remain deferred to Prompt 04.
+
+Software validation on 2026-07-28:
+
+- core timing, generated-version, CLI, and IDF example contract checks: PASS;
+- native tests: PASS, 75/75;
+- Arduino ESP32-S3 and ESP32-S2 example builds: PASS;
+- Doxygen and diff checks: PASS;
+- pure ESP-IDF build: not run because `idf.py` is unavailable;
+- HIL, physical sensor, waveform, network, and long-run validation: not run.

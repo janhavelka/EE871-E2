@@ -28,7 +28,8 @@ enum class Err : uint8_t {
   OUT_OF_RANGE,              ///< Value out of valid range
   NOT_SUPPORTED,             ///< Feature not supported by this device/firmware
   VERIFY_MISMATCH = 15,      ///< Transport completed but write readback did not match
-  OFFLINE = 16               ///< Driver is latched offline; explicit recovery is required
+  OFFLINE = 16,              ///< Driver is latched offline; explicit recovery is required
+  CO2_SENSOR_ERROR = 17      ///< Status reports a CO2 sensor-domain measurement error
 };
 
 /// @brief Status structure returned by all fallible operations.

@@ -154,7 +154,9 @@ Rules:
   - Group = 0x0367 (read low via 0x11, high via 0x41).
   - Subgroup = 0x09 (read via 0x21).
   - Available measurements = 0x08 (read via 0x31, bit3 = CO2).
-- Status byte (0x71) bit3 indicates CO2 error; reading status triggers a new measurement.
+- Status byte (0x71) bit3 indicates CO2 error. It applies to the last measured
+  values and can trigger a new measurement/reset interval timing under the
+  documented conditions.
 - Measurement values:
   - MV3 (fast response) low/high via 0xC1 / 0xD1.
   - MV4 (averaged) low/high via 0xE1 / 0xF1.

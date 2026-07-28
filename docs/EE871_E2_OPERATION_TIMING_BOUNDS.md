@@ -63,6 +63,8 @@ ACK/STOP/quiet terms: it is one total budget beginning after the PEC byte.
 | `BEGIN_ALLOW_ABSENT` | 1 | `RESET + 4*READ + COMPLETION_WRITE(WD) + 7*READ` |
 | `PROBE_IDENTITY` | 1 | `4*READ` |
 | `RECOVER_IDENTITY_AND_CAPABILITIES` | 1 | `RESET + 4*READ + COMPLETION_WRITE(WD) + 7*READ` |
+| `CHECKED_CO2_AVERAGE` | 1 | `4*READ + COMPLETION_WRITE(WD)` |
+| `CHECKED_CO2_FAST` | 1 | `4*READ + COMPLETION_WRITE(WD)` |
 
 The pointer component is intentionally included before each custom-memory
 readback. A block read sets the pointer once and then performs
@@ -78,6 +80,10 @@ completed pointer write plus seven auto-incrementing reads for capabilities
 `0x03..0x09`. `BEGIN_ALLOW_ABSENT` intentionally uses the same conservative
 bound as strict begin even though a definite early absence returns sooner.
 `PROBE_IDENTITY` does not load or publish capabilities.
+Each checked CO2 bound reserves two value reads, one status read, and the
+worst-case capability-gated error-code pointer plus data read. The query is
+cache-only; it conservatively includes the detailed-code branch regardless of
+the current cached capability value.
 
 ## Validation And Normalization
 
@@ -122,6 +128,7 @@ and 150/300 ms completion windows, the published bounds are:
 | Strict or optional begin | 2274 ms |
 | Full identity probe | 621 ms |
 | Identity-and-capability recovery | 2274 ms |
+| Checked average or fast CO2 sample | 936 ms |
 
 Multi-byte convenience helpers can therefore have substantially larger
 admission bounds than one E2 transaction. Persistent writes remain explicit

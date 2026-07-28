@@ -13,6 +13,7 @@ examples, and HIL validation evidence.
 - **Managed synchronous** - blocking transfers with spec-compliant limits
 - **Validated discovery** - full identity and seven capability bytes publish atomically
 - **Optional-device lifecycle** - narrow absent-at-start policy with explicit recovery
+- **Checked CO2 samples** - ordered MV3/MV4, status, error, and range evidence
 - **Feature guards** - optional EE871 registers are checked from cached capability flags
 - **Dirty/resync diagnostics** - persistent multi-byte write failures are visible
 - **HIL evidence tooling** - serial runner emits transcript, JSON, and Markdown reports
@@ -26,7 +27,7 @@ case.
 
 Recorded evidence:
 
-- Native tests: 65 passing in the current lifecycle/identity audit run.
+- Native tests: 75 passing in the current checked-sample audit run.
 - Arduino PlatformIO builds: `ex_bringup_s3` and `ex_bringup_s2` pass locally
   in the latest hardening/readiness runs.
 - ESP32-S3 safe default HIL: PASS on `COM17`.
@@ -153,6 +154,43 @@ void loop() {
   delay(1000);
 }
 ```
+
+The quick start above deliberately demonstrates a raw MV4 read. It does not
+apply status, range, warm-up, freshness, or cadence policy.
+
+## Checked CO2 Samples
+
+`readCo2Average()` and `readCo2Fast()` remain source-compatible raw MV4/MV3
+value reads. They read low then high bytes and return the unsigned value
+without reading status or applying the checked range.
+
+For a validated sensor procedure, use `readCo2AverageSample()` or
+`readCo2FastSample()`. Both share one value-first procedure:
+
+1. read the requested raw MV4 or MV3 value;
+2. read status for that last value;
+3. when status reports a CO2 error and cached capabilities advertise it, read
+   detailed error code `0xC1`;
+4. otherwise validate the raw value against the broad library range
+   `cmd::CO2_PPM_MIN..cmd::CO2_PPM_MAX` (0..50,000 ppm).
+
+`Co2ReadResult` retains raw ppm, status, detailed error code, exact per-step
+`Status` values, and explicit attempted/valid flags. A default OK step status
+does not mean the step ran; check its attempted flag. Documented codes map to
+`Co2SensorError`, while an unrecognized code—or a status error without
+detailed-code support—maps to `UNKNOWN`.
+
+`CO2_SENSOR_ERROR` and checked `OUT_OF_RANGE` are sensor-domain results. They
+do not create E2 transport failures or degrade a transport-healthy driver.
+Failures while reading the value, status, pointer, or error code retain their
+precise transport/protocol status and existing health behavior.
+
+Reading status can start/trigger the next measurement and reset interval timing
+under the device's documented conditions. This is why checked procedures read
+the measured value first and status second. Power-up warm-up, readiness after
+a trigger, freshness, plausibility, sampling cadence, and retry policy remain
+application-owned. The 50,000 ppm guard is a broad library limit; applications
+must still respect the range of their specific EE871 variant.
 
 ## Health Monitoring
 
@@ -298,7 +336,10 @@ on the same `EE871` instance recursively.
   `checkBusIdle`, `persistentConfigDirty`, `persistentConfigDirtyError`
 - Admission: static and instance `operationTimingBound`
 - Identification: `readGroup`, `readSubgroup`, `readFirmwareVersion`, `readE2SpecVersion`
-- Measurements: `readStatus`, `readCo2Fast`, `readCo2Average`, `readErrorCode`
+- Measurements: raw `readCo2Fast`/`readCo2Average`, checked
+  `readCo2FastSample`/`readCo2AverageSample`, `readStatus`, `readErrorCode`
+- Cached CO2 capabilities: `hasCo2OffsetGain`, `hasCo2AdjustmentPoints`,
+  `hasErrorCode`
 - Custom memory/config: `customRead`, `customWrite`, `writeMeasurementInterval`, bus address, filter, operating mode, auto-adjust, calibration helpers
 - Low-level command helpers: `cmd::makeControlRead`,
   `cmd::makeControlWrite`, `cmd::isReadMainCommandSupported`, and

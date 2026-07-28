@@ -162,7 +162,8 @@ Notes:
 - `0x3?` Available physical measurements (base **0x31**)
 - `0x4?` Sensor type (group H-byte)  (base **0x41**)
 - `0x5?` Read from internal custom address (base **0x51**)  <- reads data at internal pointer
-- `0x7?` Status byte (base **0x71**) <- also triggers measurement (see Sec. 8)
+- `0x7?` Status byte (base **0x71**) <- can trigger measurement under the
+  conditions in Sec. 8
 - `0x8?`...`0xF?` Measurement value bytes:
   - 0x81 / 0x91 = MV1 low/high
   - 0xA1 / 0xB1 = MV2 low/high
@@ -215,7 +216,10 @@ Status byte bit meanings match "Available physical measurements".
   - bit3 = 0 -> last CO2 measurement OK
   - bit3 = 1 -> error during last measurement; read error code from custom memory (see Sec. 7.4.5)
 
-**Important behavior:** reading the status byte **starts a new measurement** in the slave (see Sec. 8).
+**Important behavior:** reading the status byte can start a new measurement
+and reset interval timing under the conditions in Sec. 8. The status describes
+the last measured values, so a checked procedure reads the selected value
+first and status second.
 
 ### 6.4 Measurement values for EE871 CO2
 From CO2 E2 addendum:
@@ -227,6 +231,19 @@ Read any 16-bit measured value as:
 1) read LOW byte (control byte for low)  
 2) read HIGH byte (control byte for high)  
 This "captures" the paired bytes consistently in the slave.
+
+The library keeps four distinct procedures:
+
+- `readCo2Fast()`: raw MV3, with no status or range policy;
+- `readCo2Average()`: raw MV4, with no status or range policy;
+- `readCo2FastSample()`: checked MV3 followed by status and optional error
+  detail;
+- `readCo2AverageSample()`: checked MV4 followed by status and optional error
+  detail.
+
+Checked results retain raw ppm and step-level evidence even when validity
+fails. Their broad library guard is 0..50,000 ppm; the physical range of a
+specific EE871 variant may be narrower and remains an application constraint.
 
 ---
 
@@ -248,6 +265,8 @@ Key bytes:
 - **0x00** Firmware main version
 - **0x01** Firmware sub version
 - **0x02** E2 spec version used by device
+- **0x03 bit3** CO2 custom offset/gain adjustment supported
+- **0x04 bit3** CO2 adjustment points supported
 - **0x07** Operating functions supported bits (see Sec. 7.4.1)
 - **0x08** Operating mode supported bits (see Sec. 7.4.2)
 - **0x09** Special features supported bits (see Sec. 7.4.3)
@@ -364,6 +383,25 @@ CO2 error list (addendum):
 - 200: Sensor Counts Low (possible damage of electronic or sensor-cell)
 - 201: Sensor Counts High (possible damage of electronic or sensor-cell)
 - 202: Supply Voltage Breakdown at current peak for measurement (supply internal resistance too high)
+
+The checked library sequence is:
+
+```text
+read selected MV3/MV4 low then high
+read status for that value
+if CO2 error and 0x07 bit7 is cached: set pointer to 0xC1 and read error code
+```
+
+Codes 1, 200, 201, and 202 map to distinct `Co2SensorError` values. Any other
+code, including zero while the status error bit is set, maps to `UNKNOWN` and
+the raw code remains available. Without error-code capability, the detailed
+step is not attempted and status still returns `CO2_SENSOR_ERROR` with
+`UNKNOWN` sensor detail.
+
+`CO2_SENSOR_ERROR` and checked range failure are sensor-domain outcomes after
+successful bus traffic. They do not count as E2 transport failures. A failed
+value, status, pointer, or detailed-code transfer instead returns its original
+precise transport/protocol status.
 
 ---
 

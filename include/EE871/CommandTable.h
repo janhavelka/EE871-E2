@@ -101,6 +101,8 @@ static constexpr uint8_t AVAILABLE_MEAS_MASK = 0x08; ///< Available-measurements
 
 static constexpr uint8_t STATUS_CO2_ERROR_BIT = 3;   ///< CO2 error bit index in the status byte.
 static constexpr uint8_t STATUS_CO2_ERROR_MASK = 0x08; ///< CO2 error bit mask in the status byte.
+static constexpr uint16_t CO2_PPM_MIN = 0;     ///< Symmetric checked lower bound; uint16_t cannot be below it.
+static constexpr uint16_t CO2_PPM_MAX = 50000; ///< Broad library checked-value maximum in ppm.
 
 // ============================================================================
 // Custom Memory Map (0x00..0xFF)

@@ -20,6 +20,7 @@ static_assert(!std::is_move_constructible_v<EE871::EE871>);
 static_assert(!std::is_move_assignable_v<EE871::EE871>);
 static_assert(static_cast<uint8_t>(Err::VERIFY_MISMATCH) == 15);
 static_assert(static_cast<uint8_t>(Err::OFFLINE) == 16);
+static_assert(static_cast<uint8_t>(Err::CO2_SENSOR_ERROR) == 17);
 static_assert(static_cast<uint8_t>(BeginPolicy::REQUIRE_PRESENT) == 0);
 static_assert(static_cast<uint8_t>(BeginPolicy::ALLOW_ABSENT) == 1);
 static_assert(static_cast<uint8_t>(OperationKind::CONTROL_READ) == 0);
@@ -30,6 +31,43 @@ static_assert(static_cast<uint8_t>(OperationKind::PROBE_IDENTITY) == 11);
 static_assert(
     static_cast<uint8_t>(
         OperationKind::RECOVER_IDENTITY_AND_CAPABILITIES) == 12);
+static_assert(
+    static_cast<uint8_t>(OperationKind::CHECKED_CO2_AVERAGE) == 13);
+static_assert(
+    static_cast<uint8_t>(OperationKind::CHECKED_CO2_FAST) == 14);
+static_assert(static_cast<uint8_t>(Co2ValueKind::FAST) == 0);
+static_assert(static_cast<uint8_t>(Co2ValueKind::AVERAGE) == 1);
+static_assert(static_cast<uint8_t>(Co2SensorError::NONE) == 0);
+static_assert(
+    static_cast<uint8_t>(Co2SensorError::SUPPLY_VOLTAGE_LOW) == 1);
+static_assert(
+    static_cast<uint8_t>(Co2SensorError::SENSOR_COUNTS_LOW) == 200);
+static_assert(
+    static_cast<uint8_t>(Co2SensorError::SENSOR_COUNTS_HIGH) == 201);
+static_assert(
+    static_cast<uint8_t>(
+        Co2SensorError::SUPPLY_VOLTAGE_BREAKDOWN_AT_PEAK) == 202);
+static_assert(static_cast<uint8_t>(Co2SensorError::UNKNOWN) == 255);
+static_assert(cmd::STATUS_CO2_ERROR_MASK == 0x08);
+static_assert(cmd::CO2_PPM_MIN == 0);
+static_assert(cmd::CO2_PPM_MAX == 50000);
+
+using RawCo2ReadMethod =
+    Status (EE871::EE871::*)(uint16_t&);
+using RawByteReadMethod =
+    Status (EE871::EE871::*)(uint8_t&);
+static_assert(std::is_same_v<
+              decltype(&EE871::EE871::readCo2Fast),
+              RawCo2ReadMethod>);
+static_assert(std::is_same_v<
+              decltype(&EE871::EE871::readCo2Average),
+              RawCo2ReadMethod>);
+static_assert(std::is_same_v<
+              decltype(&EE871::EE871::readStatus),
+              RawByteReadMethod>);
+static_assert(std::is_same_v<
+              decltype(&EE871::EE871::readErrorCode),
+              RawByteReadMethod>);
 
 void setUp() {}
 void tearDown() {}
@@ -84,6 +122,43 @@ static void assertCapabilitiesInvalid(
   TEST_ASSERT_EQUAL_UINT8(0, capabilities.operatingFunctions);
   TEST_ASSERT_EQUAL_UINT8(0, capabilities.operatingModeSupport);
   TEST_ASSERT_EQUAL_UINT8(0, capabilities.specialFeatures);
+}
+
+static void poisonCo2Result(Co2ReadResult& out) {
+  out.kind = Co2ValueKind::FAST;
+  out.ppm = 12345;
+  out.ppmValid = true;
+  out.statusByte = 0xFF;
+  out.statusValid = true;
+  out.co2Error = true;
+  out.errorCode = 201;
+  out.errorCodeValid = true;
+  out.sensorError = Co2SensorError::SENSOR_COUNTS_HIGH;
+  out.valueReadAttempted = true;
+  out.statusReadAttempted = true;
+  out.errorCodeReadAttempted = true;
+  out.valueReadStatus =
+      Status::Error(Err::TIMEOUT, "poison value", 1);
+  out.statusReadStatus =
+      Status::Error(Err::NACK, "poison status", 2);
+  out.errorCodeReadStatus =
+      Status::Error(Err::PEC_MISMATCH, "poison error", 3);
+}
+
+static void assertUnattemptedStatusAndErrorEvidence(
+    const Co2ReadResult& out) {
+  TEST_ASSERT_FALSE(out.statusReadAttempted);
+  TEST_ASSERT_FALSE(out.statusValid);
+  TEST_ASSERT_TRUE(out.statusReadStatus.ok());
+  TEST_ASSERT_EQUAL_UINT8(0, out.statusByte);
+  TEST_ASSERT_FALSE(out.co2Error);
+  TEST_ASSERT_FALSE(out.errorCodeReadAttempted);
+  TEST_ASSERT_FALSE(out.errorCodeValid);
+  TEST_ASSERT_TRUE(out.errorCodeReadStatus.ok());
+  TEST_ASSERT_EQUAL_UINT8(0, out.errorCode);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(Co2SensorError::NONE),
+      static_cast<uint8_t>(out.sensorError));
 }
 
 void test_status_ok() {
@@ -644,6 +719,544 @@ void test_identity_capability_and_settings_access_is_bus_silent() {
   TEST_ASSERT_EQUAL_UINT32(0, fake.lineWrites());
   TEST_ASSERT_EQUAL_UINT32(0, fake.transactionCount());
   TEST_ASSERT_EQUAL_UINT64(0, fake.elapsedUs());
+}
+
+void test_checked_sample_public_contract_defaults() {
+  Co2ReadResult out;
+
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(Co2ValueKind::AVERAGE),
+      static_cast<uint8_t>(out.kind));
+  TEST_ASSERT_EQUAL_UINT16(0, out.ppm);
+  TEST_ASSERT_FALSE(out.ppmValid);
+  TEST_ASSERT_EQUAL_UINT8(0, out.statusByte);
+  TEST_ASSERT_FALSE(out.statusValid);
+  TEST_ASSERT_FALSE(out.co2Error);
+  TEST_ASSERT_EQUAL_UINT8(0, out.errorCode);
+  TEST_ASSERT_FALSE(out.errorCodeValid);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(Co2SensorError::NONE),
+      static_cast<uint8_t>(out.sensorError));
+  TEST_ASSERT_FALSE(out.valueReadAttempted);
+  TEST_ASSERT_FALSE(out.statusReadAttempted);
+  TEST_ASSERT_FALSE(out.errorCodeReadAttempted);
+  TEST_ASSERT_TRUE(out.valueReadStatus.ok());
+  TEST_ASSERT_TRUE(out.statusReadStatus.ok());
+  TEST_ASSERT_TRUE(out.errorCodeReadStatus.ok());
+
+  RawCo2ReadMethod fast = &EE871::EE871::readCo2Fast;
+  RawCo2ReadMethod average = &EE871::EE871::readCo2Average;
+  RawByteReadMethod status = &EE871::EE871::readStatus;
+  RawByteReadMethod errorCode = &EE871::EE871::readErrorCode;
+  TEST_ASSERT_TRUE(fast != nullptr);
+  TEST_ASSERT_TRUE(average != nullptr);
+  TEST_ASSERT_TRUE(status != nullptr);
+  TEST_ASSERT_TRUE(errorCode != nullptr);
+}
+
+void test_checked_average_and_fast_success_order_and_evidence() {
+  struct Case {
+    Co2ValueKind kind;
+    uint16_t ppm;
+    uint8_t lowMain;
+    uint8_t highMain;
+  };
+  const Case cases[] = {
+      {Co2ValueKind::AVERAGE, 1234, cmd::MAIN_MV4_LO, cmd::MAIN_MV4_HI},
+      {Co2ValueKind::FAST, 4321, cmd::MAIN_MV3_LO, cmd::MAIN_MV3_HI},
+  };
+
+  for (const Case& item : cases) {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    fake.setCo2AveragePpm(item.ppm);
+    fake.setCo2FastPpm(item.ppm);
+    fake.setStatusByte(0xA0);
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    fake.resetActivityCounters();
+
+    Co2ReadResult out;
+    const Status st =
+        item.kind == Co2ValueKind::AVERAGE
+            ? dev.readCo2AverageSample(out)
+            : dev.readCo2FastSample(out);
+
+    TEST_ASSERT_TRUE(st.ok());
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(item.kind),
+        static_cast<uint8_t>(out.kind));
+    TEST_ASSERT_EQUAL_UINT16(item.ppm, out.ppm);
+    TEST_ASSERT_TRUE(out.ppmValid);
+    TEST_ASSERT_EQUAL_UINT8(0xA0, out.statusByte);
+    TEST_ASSERT_TRUE(out.statusValid);
+    TEST_ASSERT_FALSE(out.co2Error);
+    TEST_ASSERT_EQUAL_UINT8(0, out.errorCode);
+    TEST_ASSERT_FALSE(out.errorCodeValid);
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Co2SensorError::NONE),
+        static_cast<uint8_t>(out.sensorError));
+    TEST_ASSERT_TRUE(out.valueReadAttempted);
+    TEST_ASSERT_TRUE(out.statusReadAttempted);
+    TEST_ASSERT_FALSE(out.errorCodeReadAttempted);
+    TEST_ASSERT_TRUE(out.valueReadStatus.ok());
+    TEST_ASSERT_TRUE(out.statusReadStatus.ok());
+    TEST_ASSERT_TRUE(out.errorCodeReadStatus.ok());
+
+    TEST_ASSERT_EQUAL_UINT32(3, fake.transactionCount());
+    TEST_ASSERT_EQUAL_UINT8(item.lowMain, fake.transactionMain(0));
+    TEST_ASSERT_TRUE(fake.transactionIsRead(0));
+    TEST_ASSERT_EQUAL_UINT8(item.highMain, fake.transactionMain(1));
+    TEST_ASSERT_TRUE(fake.transactionIsRead(1));
+    TEST_ASSERT_EQUAL_UINT8(cmd::MAIN_STATUS, fake.transactionMain(2));
+    TEST_ASSERT_TRUE(fake.transactionIsRead(2));
+    TEST_ASSERT_EQUAL_UINT32(1, fake.controlReadCount(item.lowMain));
+    TEST_ASSERT_EQUAL_UINT32(1, fake.controlReadCount(item.highMain));
+    TEST_ASSERT_EQUAL_UINT32(
+        1, fake.controlReadCount(cmd::MAIN_STATUS));
+    TEST_ASSERT_EQUAL_UINT32(3, dev.totalSuccess());
+    TEST_ASSERT_EQUAL_UINT32(0, dev.totalFailures());
+  }
+}
+
+void test_checked_value_and_status_failure_evidence() {
+  for (uint32_t failIndex = 0; failIndex < 2; ++failIndex) {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    fake.setCo2AveragePpm(2345);
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    fake.resetActivityCounters();
+    fake.failAtTransferIndex(failIndex);
+    Co2ReadResult out;
+    poisonCo2Result(out);
+
+    const Status st = dev.readCo2AverageSample(out);
+
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::NACK),
+        static_cast<uint8_t>(st.code));
+    assertSameStatus(st, out.valueReadStatus);
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Co2ValueKind::AVERAGE),
+        static_cast<uint8_t>(out.kind));
+    TEST_ASSERT_TRUE(out.valueReadAttempted);
+    TEST_ASSERT_FALSE(out.ppmValid);
+    TEST_ASSERT_EQUAL_UINT16(0, out.ppm);
+    assertUnattemptedStatusAndErrorEvidence(out);
+    TEST_ASSERT_EQUAL_UINT32(failIndex + 1U, fake.transactionCount());
+    TEST_ASSERT_EQUAL_UINT32(
+        0, fake.controlReadCount(cmd::MAIN_STATUS));
+  }
+
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    fake.setCo2AveragePpm(2345);
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    fake.resetActivityCounters();
+    fake.failAtTransferIndex(2);
+    Co2ReadResult out;
+    poisonCo2Result(out);
+
+    const Status st = dev.readCo2AverageSample(out);
+
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::NACK),
+        static_cast<uint8_t>(st.code));
+    TEST_ASSERT_TRUE(out.valueReadAttempted);
+    TEST_ASSERT_TRUE(out.valueReadStatus.ok());
+    TEST_ASSERT_EQUAL_UINT16(2345, out.ppm);
+    TEST_ASSERT_FALSE(out.ppmValid);
+    TEST_ASSERT_TRUE(out.statusReadAttempted);
+    assertSameStatus(st, out.statusReadStatus);
+    TEST_ASSERT_FALSE(out.statusValid);
+    TEST_ASSERT_EQUAL_UINT8(0, out.statusByte);
+    TEST_ASSERT_FALSE(out.co2Error);
+    TEST_ASSERT_FALSE(out.errorCodeReadAttempted);
+    TEST_ASSERT_FALSE(out.errorCodeValid);
+    TEST_ASSERT_TRUE(out.errorCodeReadStatus.ok());
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Co2SensorError::NONE),
+        static_cast<uint8_t>(out.sensorError));
+    TEST_ASSERT_EQUAL_UINT32(3, fake.transactionCount());
+    TEST_ASSERT_EQUAL_UINT32(
+        1, fake.controlReadCount(cmd::MAIN_STATUS));
+    TEST_ASSERT_EQUAL_UINT32(
+        0, fake.controlReadCount(cmd::MAIN_CUSTOM_PTR));
+  }
+}
+
+void test_checked_sensor_error_mapping_and_order() {
+  struct Case {
+    uint8_t code;
+    Co2SensorError expected;
+  };
+  const Case cases[] = {
+      {1, Co2SensorError::SUPPLY_VOLTAGE_LOW},
+      {200, Co2SensorError::SENSOR_COUNTS_LOW},
+      {201, Co2SensorError::SENSOR_COUNTS_HIGH},
+      {202, Co2SensorError::SUPPLY_VOLTAGE_BREAKDOWN_AT_PEAK},
+      {0, Co2SensorError::UNKNOWN},
+      {77, Co2SensorError::UNKNOWN},
+  };
+
+  for (const Case& item : cases) {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    fake.setCo2AveragePpm(900);
+    fake.setStatusByte(cmd::STATUS_CO2_ERROR_MASK);
+    fake.setErrorCode(item.code);
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    fake.resetActivityCounters();
+
+    Co2ReadResult out;
+    const Status st = dev.readCo2AverageSample(out);
+
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::CO2_SENSOR_ERROR),
+        static_cast<uint8_t>(st.code));
+    TEST_ASSERT_EQUAL_STRING("CO2 sensor status error", st.msg);
+    TEST_ASSERT_EQUAL_INT32(item.code, st.detail);
+    TEST_ASSERT_EQUAL_UINT16(900, out.ppm);
+    TEST_ASSERT_FALSE(out.ppmValid);
+    TEST_ASSERT_TRUE(out.valueReadAttempted);
+    TEST_ASSERT_TRUE(out.valueReadStatus.ok());
+    TEST_ASSERT_TRUE(out.statusReadAttempted);
+    TEST_ASSERT_TRUE(out.statusReadStatus.ok());
+    TEST_ASSERT_TRUE(out.statusValid);
+    TEST_ASSERT_EQUAL_UINT8(
+        cmd::STATUS_CO2_ERROR_MASK, out.statusByte);
+    TEST_ASSERT_TRUE(out.co2Error);
+    TEST_ASSERT_TRUE(out.errorCodeReadAttempted);
+    TEST_ASSERT_TRUE(out.errorCodeReadStatus.ok());
+    TEST_ASSERT_TRUE(out.errorCodeValid);
+    TEST_ASSERT_EQUAL_UINT8(item.code, out.errorCode);
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(item.expected),
+        static_cast<uint8_t>(out.sensorError));
+
+    TEST_ASSERT_EQUAL_UINT32(5, fake.transactionCount());
+    TEST_ASSERT_EQUAL_UINT8(cmd::MAIN_MV4_LO, fake.transactionMain(0));
+    TEST_ASSERT_EQUAL_UINT8(cmd::MAIN_MV4_HI, fake.transactionMain(1));
+    TEST_ASSERT_EQUAL_UINT8(cmd::MAIN_STATUS, fake.transactionMain(2));
+    TEST_ASSERT_EQUAL_UINT8(cmd::MAIN_CUSTOM_PTR, fake.transactionMain(3));
+    TEST_ASSERT_FALSE(fake.transactionIsRead(3));
+    TEST_ASSERT_TRUE(fake.transactionHasAddress(3));
+    TEST_ASSERT_EQUAL_UINT8(
+        cmd::CUSTOM_ERROR_CODE, fake.transactionAddress(3));
+    TEST_ASSERT_EQUAL_UINT8(cmd::MAIN_CUSTOM_PTR, fake.transactionMain(4));
+    TEST_ASSERT_TRUE(fake.transactionIsRead(4));
+    TEST_ASSERT_TRUE(fake.transactionHasAddress(4));
+    TEST_ASSERT_EQUAL_UINT8(
+        cmd::CUSTOM_ERROR_CODE, fake.transactionAddress(4));
+    TEST_ASSERT_FALSE(fake.pointerReadStartedEarly());
+  }
+}
+
+void test_checked_sensor_error_capability_gate() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  fake.setCapabilities(
+      cmd::FEATURE_CO2_CUSTOM_ADJUSTMENT,
+      cmd::FEATURE_CO2_ADJUSTMENT_POINT,
+      cmd::FEATURE_CUSTOM_ADJUSTMENT_TIME_GENERAL,
+      cmd::FEATURE_CO2_ADJUSTMENT_TIME,
+      cmd::FEATURE_SERIAL_NUMBER,
+      cmd::MODE_SUPPORT_LOW_POWER,
+      cmd::SPECIAL_FEATURE_AUTO_ADJUST);
+  fake.setCo2FastPpm(800);
+  fake.setStatusByte(0x18);
+  fake.setErrorCode(200);
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+  TEST_ASSERT_FALSE(dev.hasErrorCode());
+  fake.resetActivityCounters();
+
+  Co2ReadResult out;
+  const Status st = dev.readCo2FastSample(out);
+
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(Err::CO2_SENSOR_ERROR),
+      static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_INT32(0x18, st.detail);
+  TEST_ASSERT_TRUE(out.statusValid);
+  TEST_ASSERT_TRUE(out.co2Error);
+  TEST_ASSERT_FALSE(out.ppmValid);
+  TEST_ASSERT_FALSE(out.errorCodeReadAttempted);
+  TEST_ASSERT_FALSE(out.errorCodeValid);
+  TEST_ASSERT_TRUE(out.errorCodeReadStatus.ok());
+  TEST_ASSERT_EQUAL_UINT8(0, out.errorCode);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(Co2SensorError::UNKNOWN),
+      static_cast<uint8_t>(out.sensorError));
+  TEST_ASSERT_EQUAL_UINT32(3, fake.transactionCount());
+  TEST_ASSERT_EQUAL_UINT32(
+      0, fake.countTransactions(cmd::MAIN_CUSTOM_PTR, false));
+  TEST_ASSERT_EQUAL_UINT32(
+      0, fake.controlReadCount(cmd::MAIN_CUSTOM_PTR));
+}
+
+void test_checked_error_code_transfer_failures_are_precise() {
+  for (uint32_t failIndex = 3; failIndex <= 4; ++failIndex) {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    fake.setCo2AveragePpm(777);
+    fake.setStatusByte(cmd::STATUS_CO2_ERROR_MASK);
+    fake.setErrorCode(202);
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    fake.resetActivityCounters();
+    fake.failAtTransferIndex(failIndex);
+    const uint32_t failuresBefore = dev.totalFailures();
+
+    Co2ReadResult out;
+    const Status st = dev.readCo2AverageSample(out);
+
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::NACK),
+        static_cast<uint8_t>(st.code));
+    TEST_ASSERT_TRUE(out.valueReadStatus.ok());
+    TEST_ASSERT_TRUE(out.statusReadStatus.ok());
+    TEST_ASSERT_TRUE(out.statusValid);
+    TEST_ASSERT_TRUE(out.co2Error);
+    TEST_ASSERT_EQUAL_UINT16(777, out.ppm);
+    TEST_ASSERT_FALSE(out.ppmValid);
+    TEST_ASSERT_TRUE(out.errorCodeReadAttempted);
+    assertSameStatus(st, out.errorCodeReadStatus);
+    TEST_ASSERT_FALSE(out.errorCodeValid);
+    TEST_ASSERT_EQUAL_UINT8(0, out.errorCode);
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Co2SensorError::UNKNOWN),
+        static_cast<uint8_t>(out.sensorError));
+    TEST_ASSERT_EQUAL_UINT32(failIndex + 1U, fake.transactionCount());
+    TEST_ASSERT_EQUAL_UINT32(
+        failIndex == 3U ? 0U : 1U,
+        fake.controlReadCount(cmd::MAIN_CUSTOM_PTR));
+    TEST_ASSERT_EQUAL_UINT32(failuresBefore + 1U, dev.totalFailures());
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(DriverState::DEGRADED),
+        static_cast<uint8_t>(dev.state()));
+  }
+}
+
+void test_checked_range_raw_compatibility_and_health_domains() {
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    fake.setCo2AveragePpm(cmd::CO2_PPM_MAX);
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+
+    Co2ReadResult out;
+    TEST_ASSERT_TRUE(dev.readCo2AverageSample(out).ok());
+    TEST_ASSERT_TRUE(out.ppmValid);
+    TEST_ASSERT_EQUAL_UINT16(cmd::CO2_PPM_MAX, out.ppm);
+  }
+
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    fake.setCo2AveragePpm(
+        static_cast<uint16_t>(cmd::CO2_PPM_MAX + 1U));
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    const uint32_t failuresBefore = dev.totalFailures();
+    const uint32_t successesBefore = dev.totalSuccess();
+
+    Co2ReadResult out;
+    const Status st = dev.readCo2AverageSample(out);
+
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::OUT_OF_RANGE),
+        static_cast<uint8_t>(st.code));
+    TEST_ASSERT_EQUAL_STRING("CO2 ppm out of range", st.msg);
+    TEST_ASSERT_EQUAL_INT32(cmd::CO2_PPM_MAX + 1U, st.detail);
+    TEST_ASSERT_EQUAL_UINT16(cmd::CO2_PPM_MAX + 1U, out.ppm);
+    TEST_ASSERT_FALSE(out.ppmValid);
+    TEST_ASSERT_TRUE(out.statusValid);
+    TEST_ASSERT_FALSE(out.co2Error);
+    TEST_ASSERT_EQUAL_UINT32(failuresBefore, dev.totalFailures());
+    TEST_ASSERT_EQUAL_UINT32(successesBefore + 3U, dev.totalSuccess());
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(DriverState::READY),
+        static_cast<uint8_t>(dev.state()));
+  }
+
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    const uint16_t rawPpm =
+        static_cast<uint16_t>(cmd::CO2_PPM_MAX + 1U);
+    fake.setCo2AveragePpm(rawPpm);
+    fake.setCo2FastPpm(rawPpm);
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+
+    uint16_t average = 0;
+    uint16_t fast = 0;
+    TEST_ASSERT_TRUE(dev.readCo2Average(average).ok());
+    TEST_ASSERT_TRUE(dev.readCo2Fast(fast).ok());
+    TEST_ASSERT_EQUAL_UINT16(rawPpm, average);
+    TEST_ASSERT_EQUAL_UINT16(rawPpm, fast);
+  }
+
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    fake.setStatusByte(cmd::STATUS_CO2_ERROR_MASK);
+    fake.setErrorCode(1);
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    const uint32_t failuresBefore = dev.totalFailures();
+    const uint32_t successesBefore = dev.totalSuccess();
+
+    Co2ReadResult out;
+    const Status st = dev.readCo2FastSample(out);
+
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::CO2_SENSOR_ERROR),
+        static_cast<uint8_t>(st.code));
+    TEST_ASSERT_EQUAL_UINT32(failuresBefore, dev.totalFailures());
+    TEST_ASSERT_EQUAL_UINT32(successesBefore + 5U, dev.totalSuccess());
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(DriverState::READY),
+        static_cast<uint8_t>(dev.state()));
+  }
+}
+
+void test_checked_methods_are_bus_silent_while_offline() {
+  const Co2ValueKind kinds[] = {
+      Co2ValueKind::AVERAGE,
+      Co2ValueKind::FAST,
+  };
+
+  for (Co2ValueKind kind : kinds) {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    fake.setDevicePresent(false);
+    TEST_ASSERT_TRUE(beginAllowAbsent(dev, fake, 3).ok());
+    fake.setDevicePresent(true);
+    fake.resetActivityCounters();
+    fake.resetElapsed();
+    const uint32_t failuresBefore = dev.totalFailures();
+    const uint32_t successesBefore = dev.totalSuccess();
+    Co2ReadResult out;
+    poisonCo2Result(out);
+
+    const Status st =
+        kind == Co2ValueKind::AVERAGE
+            ? dev.readCo2AverageSample(out)
+            : dev.readCo2FastSample(out);
+
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::OFFLINE),
+        static_cast<uint8_t>(st.code));
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(kind),
+        static_cast<uint8_t>(out.kind));
+    TEST_ASSERT_TRUE(out.valueReadAttempted);
+    assertSameStatus(st, out.valueReadStatus);
+    TEST_ASSERT_FALSE(out.ppmValid);
+    TEST_ASSERT_EQUAL_UINT16(0, out.ppm);
+    assertUnattemptedStatusAndErrorEvidence(out);
+    TEST_ASSERT_EQUAL_UINT32(0, fake.lineReads());
+    TEST_ASSERT_EQUAL_UINT32(0, fake.lineWrites());
+    TEST_ASSERT_EQUAL_UINT32(0, fake.transactionCount());
+    TEST_ASSERT_EQUAL_UINT64(0, fake.elapsedUs());
+    TEST_ASSERT_EQUAL_UINT32(failuresBefore, dev.totalFailures());
+    TEST_ASSERT_EQUAL_UINT32(successesBefore, dev.totalSuccess());
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(DriverState::OFFLINE),
+        static_cast<uint8_t>(dev.state()));
+  }
+}
+
+void test_co2_calibration_capability_helpers_are_bus_silent() {
+  struct Case {
+    uint8_t offsetGain;
+    uint8_t points;
+    bool expectOffsetGain;
+    bool expectPoints;
+  };
+  const Case cases[] = {
+      {cmd::FEATURE_CO2_CUSTOM_ADJUSTMENT, 0, true, false},
+      {0, cmd::FEATURE_CO2_ADJUSTMENT_POINT, false, true},
+  };
+
+  for (const Case& item : cases) {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    fake.setCapabilities(
+        item.offsetGain,
+        item.points,
+        0,
+        0,
+        0,
+        0,
+        0);
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    fake.resetActivityCounters();
+    fake.resetElapsed();
+
+    TEST_ASSERT_EQUAL(
+        item.expectOffsetGain, dev.hasCo2OffsetGain());
+    TEST_ASSERT_EQUAL(
+        item.expectPoints, dev.hasCo2AdjustmentPoints());
+    TEST_ASSERT_EQUAL_UINT32(0, fake.lineReads());
+    TEST_ASSERT_EQUAL_UINT32(0, fake.lineWrites());
+    TEST_ASSERT_EQUAL_UINT32(0, fake.transactionCount());
+    TEST_ASSERT_EQUAL_UINT64(0, fake.elapsedUs());
+  }
+}
+
+void test_checked_timing_bounds_are_bus_silent_and_conservative() {
+  const OperationKind kinds[] = {
+      OperationKind::CHECKED_CO2_AVERAGE,
+      OperationKind::CHECKED_CO2_FAST,
+  };
+
+  {
+    FakeE2Transport fake;
+    const Config cfg = fake.makeConfig();
+    for (OperationKind kind : kinds) {
+      OperationTimingBound bound;
+      fake.resetActivityCounters();
+      fake.resetElapsed();
+      TEST_ASSERT_TRUE(EE871::EE871::operationTimingBound(
+          cfg, kind, 1, bound).ok());
+      TEST_ASSERT_EQUAL_UINT8(
+          static_cast<uint8_t>(kind),
+          static_cast<uint8_t>(bound.kind));
+      TEST_ASSERT_EQUAL_UINT16(1, bound.elementCount);
+      TEST_ASSERT_EQUAL_UINT32(936, bound.maxBlockingMs);
+      TEST_ASSERT_EQUAL_UINT32(0, fake.lineReads());
+      TEST_ASSERT_EQUAL_UINT32(0, fake.lineWrites());
+      TEST_ASSERT_EQUAL_UINT64(0, fake.elapsedUs());
+    }
+  }
+
+  for (OperationKind kind : kinds) {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    fake.setStatusByte(cmd::STATUS_CO2_ERROR_MASK);
+    fake.setErrorCode(202);
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    fake.resetActivityCounters();
+    fake.resetElapsed();
+    fake.setStretch(StretchPhase::DATA_BIT, 4135, 128);
+    OperationTimingBound bound;
+    TEST_ASSERT_TRUE(dev.operationTimingBound(kind, 1, bound).ok());
+    TEST_ASSERT_EQUAL_UINT32(0, fake.lineReads());
+    TEST_ASSERT_EQUAL_UINT32(0, fake.lineWrites());
+
+    Co2ReadResult out;
+    const Status st =
+        kind == OperationKind::CHECKED_CO2_AVERAGE
+            ? dev.readCo2AverageSample(out)
+            : dev.readCo2FastSample(out);
+
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::CO2_SENSOR_ERROR),
+        static_cast<uint8_t>(st.code));
+    TEST_ASSERT_EQUAL_UINT32(5, fake.transactionCount());
+    TEST_ASSERT_FALSE(fake.pointerReadStartedEarly());
+    TEST_ASSERT_TRUE(
+        fake.elapsedUs() <=
+        static_cast<uint64_t>(bound.maxBlockingMs) * 1000U);
+  }
 }
 
 void test_clock_stretch_timeout_is_bounded_and_tracked() {
@@ -1827,6 +2440,8 @@ void test_operation_timing_bounds_are_exact_for_every_kind() {
       {OperationKind::BEGIN_ALLOW_ABSENT, 1, 2274},
       {OperationKind::PROBE_IDENTITY, 1, 621},
       {OperationKind::RECOVER_IDENTITY_AND_CAPABILITIES, 1, 2274},
+      {OperationKind::CHECKED_CO2_AVERAGE, 1, 936},
+      {OperationKind::CHECKED_CO2_FAST, 1, 936},
   };
 
   for (const Case& item : cases) {
@@ -1990,6 +2605,16 @@ int main() {
   RUN_TEST(test_all_lifecycle_identity_paths_fail_closed);
   RUN_TEST(test_begin_capability_load_is_complete_ordered_and_atomic);
   RUN_TEST(test_identity_capability_and_settings_access_is_bus_silent);
+  RUN_TEST(test_checked_sample_public_contract_defaults);
+  RUN_TEST(test_checked_average_and_fast_success_order_and_evidence);
+  RUN_TEST(test_checked_value_and_status_failure_evidence);
+  RUN_TEST(test_checked_sensor_error_mapping_and_order);
+  RUN_TEST(test_checked_sensor_error_capability_gate);
+  RUN_TEST(test_checked_error_code_transfer_failures_are_precise);
+  RUN_TEST(test_checked_range_raw_compatibility_and_health_domains);
+  RUN_TEST(test_checked_methods_are_bus_silent_while_offline);
+  RUN_TEST(test_co2_calibration_capability_helpers_are_bus_silent);
+  RUN_TEST(test_checked_timing_bounds_are_bus_silent_and_conservative);
   RUN_TEST(test_clock_stretch_timeout_is_bounded_and_tracked);
   RUN_TEST(test_pec_mismatch_probe_is_raw_but_tracked_read_updates_health);
   RUN_TEST(test_device_absent_probe_has_no_health_side_effect_tracked_read_fails);

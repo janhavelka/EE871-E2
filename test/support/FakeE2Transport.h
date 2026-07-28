@@ -230,6 +230,10 @@ public:
     return matches;
   }
 
+  uint32_t controlReadCount(uint8_t mainCommandNibble) const {
+    return countTransactions(mainCommandNibble, true);
+  }
+
   void setDevicePresent(bool present) { _devicePresent = present; }
   void setIdentity(
       uint16_t group,
@@ -243,6 +247,12 @@ public:
   void setSubgroup(uint8_t subgroup) { _subgroup = subgroup; }
   void setAvailableMeasurements(uint8_t bits) {
     _availableMeasurements = bits;
+  }
+  void setCo2FastPpm(uint16_t ppm) { _mv3 = ppm; }
+  void setCo2AveragePpm(uint16_t ppm) { _mv4 = ppm; }
+  void setStatusByte(uint8_t status) { _statusByte = status; }
+  void setErrorCode(uint8_t code) {
+    _memory[EE871::cmd::CUSTOM_ERROR_CODE] = code;
   }
   void setCapabilities(
       uint8_t customAdjustmentSupport,

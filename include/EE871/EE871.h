@@ -37,7 +37,9 @@ enum class OperationKind : uint8_t {
   BEGIN_REQUIRE_PRESENT = 9,    ///< Strict startup with reset, full identity, and capabilities.
   BEGIN_ALLOW_ABSENT = 10,      ///< Optional startup; conservative bound matches strict startup.
   PROBE_IDENTITY = 11,          ///< Raw diagnostic validation of full EE871 CO2 identity.
-  RECOVER_IDENTITY_AND_CAPABILITIES = 12 ///< Tracked reset, identity, and capability reload.
+  RECOVER_IDENTITY_AND_CAPABILITIES = 12, ///< Tracked reset, identity, and capability reload.
+  CHECKED_CO2_AVERAGE = 13,     ///< MV4, status, and worst-case error-code procedure.
+  CHECKED_CO2_FAST = 14         ///< MV3, status, and worst-case error-code procedure.
 };
 
 /// @brief Conservative blocking-time result for one operation class.
@@ -66,6 +68,49 @@ struct CapabilitySnapshot {
   uint8_t operatingModeSupport{0};         ///< Custom byte 0x08.
   uint8_t specialFeatures{0};              ///< Custom byte 0x09.
   bool valid{false};                       ///< True only after all seven bytes load.
+};
+
+/// @brief EE871 CO2 measured-value source selected by a checked read.
+enum class Co2ValueKind : uint8_t {
+  FAST = 0,    ///< Fast, unaveraged MV3 value.
+  AVERAGE = 1, ///< Averaged MV4 value.
+};
+
+/// @brief Normalized EE871 CO2 sensor-domain error.
+enum class Co2SensorError : uint8_t {
+  NONE = 0,                              ///< Status reports no CO2 error.
+  SUPPLY_VOLTAGE_LOW = 1,                ///< Error code 1.
+  SENSOR_COUNTS_LOW = 200,               ///< Error code 200.
+  SENSOR_COUNTS_HIGH = 201,              ///< Error code 201.
+  SUPPLY_VOLTAGE_BREAKDOWN_AT_PEAK = 202, ///< Error code 202.
+  UNKNOWN = 255,                         ///< Status error with no recognized detail.
+};
+
+/// @brief Per-step evidence from a checked CO2 value/status procedure.
+///
+/// Attempted flags distinguish an unattempted step from a successful step:
+/// default Status::Ok() alone does not prove that a bus operation ran.
+struct Co2ReadResult {
+  Co2ValueKind kind{Co2ValueKind::AVERAGE}; ///< Requested MV3/MV4 value kind.
+
+  uint16_t ppm{0};       ///< Raw ppm retained even when checked validity fails.
+  bool ppmValid{false};  ///< True only after clean status and range validation.
+
+  uint8_t statusByte{0};   ///< Raw status byte when statusValid is true.
+  bool statusValid{false}; ///< True after a successful status transfer.
+  bool co2Error{false};    ///< CO2 status bit derived from a valid status byte.
+
+  uint8_t errorCode{0};      ///< Raw custom-memory 0xC1 code when valid.
+  bool errorCodeValid{false}; ///< True after a successful supported code read.
+  Co2SensorError sensorError{Co2SensorError::NONE}; ///< NONE for clean status; UNKNOWN for unclassified status error.
+
+  bool valueReadAttempted{false};     ///< True once the MV3/MV4 read is started.
+  bool statusReadAttempted{false};    ///< True once the status read is started.
+  bool errorCodeReadAttempted{false}; ///< True once a supported code read starts.
+
+  Status valueReadStatus{Status::Ok()};     ///< Exact raw value-read result.
+  Status statusReadStatus{Status::Ok()};    ///< Exact status-read result.
+  Status errorCodeReadStatus{Status::Ok()}; ///< Exact error-code-read result.
 };
 
 /// @brief Snapshot of current configuration, cached feature flags, and driver health.
@@ -469,6 +514,22 @@ public:
   /// @return true when cached feature flags advertise error-code support.
   bool hasErrorCode() const { return (_operatingFunctions & cmd::FEATURE_ERROR_CODE) != 0; }
 
+  /// Check if CO2 offset/gain adjustment is supported.
+  /// @return true when cached custom byte 0x03 advertises CO2 adjustment;
+  /// performs no E2 I/O.
+  bool hasCo2OffsetGain() const {
+    return (_capabilities.customAdjustmentSupport &
+            cmd::FEATURE_CO2_CUSTOM_ADJUSTMENT) != 0;
+  }
+
+  /// Check if CO2 adjustment points are supported.
+  /// @return true when cached custom byte 0x04 advertises CO2 points;
+  /// performs no E2 I/O.
+  bool hasCo2AdjustmentPoints() const {
+    return (_capabilities.adjustmentPointSupport &
+            cmd::FEATURE_CO2_ADJUSTMENT_POINT) != 0;
+  }
+
   /// Check if low power mode is supported.
   /// @return true when cached mode flags advertise low-power mode.
   bool hasLowPowerMode() const { return (_operatingModeSupport & cmd::MODE_SUPPORT_LOW_POWER) != 0; }
@@ -618,7 +679,11 @@ public:
   // Status / Measurements
   // =========================================================================
 
-  /// Read status byte; this can trigger a new measurement on EE871.
+  /// Read the status for the last measured values.
+  ///
+  /// Under documented device conditions, reading status can start/trigger the
+  /// next measurement and reset interval timing. Applications own warm-up,
+  /// trigger readiness, freshness, and cadence policy.
   /// @param[out] status Status byte.
   /// @return Status::Ok() when the status byte and PEC verify.
   Status readStatus(uint8_t& status);
@@ -635,15 +700,45 @@ public:
   /// @return Status::Ok() when the byte is read.
   Status readErrorCode(uint8_t& code);
 
-  /// Read CO2 fast response value from MV3.
+  /// Read the raw CO2 fast-response value from MV3.
+  ///
+  /// This API applies no status or range policy and does not read status.
   /// @param[out] ppm CO2 concentration in ppm.
   /// @return Status::Ok() when MV3 low/high reads succeed.
   Status readCo2Fast(uint16_t& ppm);
 
-  /// Read CO2 averaged value from MV4.
+  /// Read the raw CO2 averaged value from MV4.
+  ///
+  /// This API applies no status or range policy and does not read status.
   /// @param[out] ppm CO2 concentration in ppm.
   /// @return Status::Ok() when MV4 low/high reads succeed.
   Status readCo2Average(uint16_t& ppm);
+
+  /// Read and validate an averaged MV4 CO2 sample.
+  ///
+  /// Reads MV4 first and status second so status applies to that last value.
+  /// The status read can start/trigger the next measurement and reset interval
+  /// timing under documented conditions. A reported CO2 error optionally
+  /// reads custom error code 0xC1 when cached capabilities advertise it.
+  /// Applications retain ownership of warm-up, freshness, trigger readiness,
+  /// and cadence policy.
+  /// @param[out] out Replaced with complete per-step evidence.
+  /// @return Exact transport/protocol failure, CO2_SENSOR_ERROR,
+  /// OUT_OF_RANGE, or Status::Ok().
+  Status readCo2AverageSample(Co2ReadResult& out);
+
+  /// Read and validate a fast MV3 CO2 sample.
+  ///
+  /// Reads MV3 first and status second so status applies to that last value.
+  /// The status read can start/trigger the next measurement and reset interval
+  /// timing under documented conditions. A reported CO2 error optionally
+  /// reads custom error code 0xC1 when cached capabilities advertise it.
+  /// Applications retain ownership of warm-up, freshness, trigger readiness,
+  /// and cadence policy.
+  /// @param[out] out Replaced with complete per-step evidence.
+  /// @return Exact transport/protocol failure, CO2_SENSOR_ERROR,
+  /// OUT_OF_RANGE, or Status::Ok().
+  Status readCo2FastSample(Co2ReadResult& out);
 
   // =========================================================================
   // Bus Safety
@@ -774,6 +869,7 @@ private:
   void _clearIdentityAndCapabilities();
   void _latchSemanticOffline(const Status& cause);
   bool _normalOperationAllowed(Status& status) const;
+  Status _readCo2Sample(Co2ValueKind kind, Co2ReadResult& out);
 
   // =========================================================================
   // Health Management
