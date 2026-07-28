@@ -66,6 +66,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   capability support before bus I/O, including offset/gain calibration.
 - Version tooling synchronizes the generated header, ESP-IDF component
   metadata, and Doxygen project number from `library.json`.
+- Version tooling is library-local and no longer carries dormant
+  TunnelMonitor dependency-header generation.
 
 ### Fixed
 
@@ -88,6 +90,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a later successful begin on the same object.
 - Interval writes no longer attempt invalid low-byte equality verification
   before the deferred pair commit.
+- Multi-byte verification observes every target element before returning the
+  first mismatch, so deferred interval verification always compares both
+  bytes.
+- Mutation effect classification preserves final ACK/NACK evidence sampled
+  before a later completion-deadline failure.
+- Unresolved mutation admission retains
+  `PERSISTENT_STATE_UNCERTAIN` precedence while the driver is offline, and
+  operating-mode resync remains capability-gated before bus I/O.
+- Raw signed interval-factor and CO2-offset decoding is deterministic under
+  C++17, and invalid typed mutation arguments retain precise range errors even
+  when the corresponding optional capability is absent.
 
 ## [1.0.0] - 2026-06-02
 

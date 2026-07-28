@@ -47,6 +47,25 @@ implementation began from the clean baseline commit above; concurrent Prompt
 - Bumped version metadata to 1.1.0 through repository tooling. The generator
   now synchronizes `Version.h`, `idf_component.yml`, and `Doxyfile` from
   `library.json`.
+- Removed dormant TunnelMonitor-specific dependency-header generation from the
+  general library version tool.
+
+### Post-publication audit corrections
+
+- Mutation admission now preserves the exact uncertainty status even when the
+  driver is also offline.
+- Final-ACK progress records an ACK or NACK sampled before a later deadline
+  failure, so effect classification does not discard definite evidence.
+- Multi-byte verification observes every requested element before returning
+  the first mismatch; interval verification therefore always reads both bytes
+  after the deferred pair commit.
+- Operating-mode resync uses the same cache-only capability guard as its typed
+  read/write APIs.
+- Raw signed interval-factor and CO2-offset decoding is deterministic under
+  C++17, and parameter validation precedes optional-capability rejection.
+- Native coverage now includes these cases, unsupported no-target resync,
+  allowed diagnostics during unresolved state, and near-byte-budget operation
+  timing.
 
 ## Mutation Effect Table
 
@@ -89,11 +108,36 @@ enum class MutationEffect : uint8_t {
   RESYNCHRONIZED = 5,
   OPERATOR_ACKNOWLEDGED = 6,
 };
+
+struct MutationDiagnostic {
+  bool unresolved{false};
+  MutationTarget target{MutationTarget::NONE};
+  MutationEffect effect{MutationEffect::NONE};
+  uint8_t firstAddress{0};
+  uint8_t lastAddress{0};
+  uint16_t elementsRequested{0};
+  uint16_t elementsAcknowledged{0};
+  uint16_t elementsObserved{0};
+  uint16_t elementsMatched{0};
+  uint8_t attemptedValue{0};
+  uint8_t preObservedValue{0};
+  bool preObservedValueValid{false};
+  uint8_t observedValue{0};
+  bool observedValueValid{false};
+  Status cause{Status::Ok()};
+};
+
+MutationDiagnostic mutationDiagnostic() const;
+Status acknowledgeAutoAdjustUncertainty();
 ```
 
-`MutationDiagnostic`, `mutationDiagnostic()`,
-`acknowledgeAutoAdjustUncertainty()`, and
-`SettingsSnapshot::mutation` were added. `Err` appends:
+`SettingsSnapshot` appends:
+
+```cpp
+MutationDiagnostic mutation{};
+```
+
+`Err` appends:
 
 ```cpp
 PERSISTENT_STATE_UNCERTAIN = 18
@@ -109,7 +153,7 @@ BUS_ADDRESS_CHANGE = 18
 ```
 
 The full `MutationDiagnostic` field contract is documented in the public
-header and 1.1.0 release notes.
+header and this handoff.
 
 ## Timing Completion
 
@@ -154,9 +198,10 @@ rewritten.
 | `python tools/check_cli_contract.py` | PASS |
 | `python tools/check_idf_example_contract.py` | PASS |
 | `python scripts/generate_version.py check` | PASS at version 1.1.0 |
-| `python -m platformio test -e native` | PASS, 91/91 in 1.543 s on the final candidate |
-| `python -m platformio run -e ex_bringup_s3` | PASS, 14.106 s |
-| `python -m platformio run -e ex_bringup_s2` | PASS, 13.422 s |
+| `python -m platformio test -e native` | PASS, 91/91 in 1.912 s after corrective audit |
+| `python -m platformio run -e ex_bringup_s3` | PASS, 15.098 s |
+| `python -m platformio run -e ex_bringup_s2` | PASS, 14.942 s |
+| `doxygen Doxyfile` | PASS |
 | `git diff --check` | PASS; line-ending conversion warnings only |
 | Pure ESP-IDF S3/S2 builds | NOT RUN; `idf.py` unavailable on `PATH` |
 
@@ -204,7 +249,8 @@ All new physical cases remain `NOT RUN` in the hardware matrix. Historical
 ESP32-S3 evidence remains associated with its original 0.3.0/1.0.0-era
 artifacts and is not recast as 1.1.0 evidence.
 
-No tag, hosted release, or immutable remote dependency was created. Committing
-and synchronizing the authorized series branch does not create that release.
+The authorized source-candidate branch was committed and synchronized. No tag,
+hosted release, or immutable remote dependency was created; synchronizing the
+branch does not create that release.
 Pure ESP-IDF local validation must be reported truthfully according to actual
 `idf.py` availability.

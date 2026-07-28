@@ -11,6 +11,22 @@ namespace {
 static constexpr uint32_t kPollStepUs = 5;
 static constexpr uint32_t kDataSetupUs = 10;
 
+constexpr int8_t signedByteFromRaw(uint8_t raw) {
+  const int16_t decoded =
+      raw <= 0x7FU
+          ? static_cast<int16_t>(raw)
+          : static_cast<int16_t>(raw) - 0x100;
+  return static_cast<int8_t>(decoded);
+}
+
+constexpr int16_t signedWordFromRaw(uint16_t raw) {
+  const int32_t decoded =
+      raw <= 0x7FFFU
+          ? static_cast<int32_t>(raw)
+          : static_cast<int32_t>(raw) - 0x10000L;
+  return static_cast<int16_t>(decoded);
+}
+
 inline void setScl(const Config& cfg, bool level) {
   cfg.setScl(level, cfg.busUser);
 }
@@ -393,7 +409,11 @@ Status EE871::_readAck(
     const Config& config,
     bool& acked,
     ClockWaitClass waitClass,
-    ByteDeadline& deadline) {
+    ByteDeadline& deadline,
+    bool* observed) {
+  if (observed != nullptr) {
+    *observed = false;
+  }
   setSda(config, true);
   Status st = _delayWithinDeadline(
       config, kDataSetupUs, waitClass, deadline);
@@ -411,6 +431,9 @@ Status EE871::_readAck(
     return st;
   }
   acked = !readSda(config);
+  if (observed != nullptr) {
+    *observed = true;
+  }
   st = _delayWithinDeadline(
       config, config.clockHighUs - sampleDelay, waitClass, deadline);
   if (!st.ok()) {
@@ -849,14 +872,14 @@ Status EE871::_mutationAdmissionGuard() const {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
   }
-  Status guard;
-  if (!_normalOperationAllowed(guard)) {
-    return guard;
-  }
   if (_mutationDiagnostic.unresolved) {
     return Status::Error(
         Err::PERSISTENT_STATE_UNCERTAIN,
         "Persistent state unresolved; call resyncPersistentConfig()");
+  }
+  Status guard;
+  if (!_normalOperationAllowed(guard)) {
+    return guard;
   }
   return Status::Ok();
 }
@@ -908,6 +931,9 @@ void EE871::_classifyMutationEffect(
       _mutationDiagnostic.elementsAcknowledged != 0U) {
     _mutationDiagnostic.effect = MutationEffect::ACKNOWLEDGED;
     _mutationDiagnostic.unresolved = true;
+  } else if (progress.finalAckObserved) {
+    _mutationDiagnostic.effect = MutationEffect::NO_EFFECT;
+    _mutationDiagnostic.unresolved = false;
   } else if (progress.pecTransferred && status.code != Err::NACK) {
     _mutationDiagnostic.effect = MutationEffect::INDETERMINATE;
     _mutationDiagnostic.unresolved = true;
@@ -979,6 +1005,7 @@ Status EE871::_observeMutationBytes(
     return st;
   }
 
+  Status firstMismatch = Status::Ok();
   for (uint8_t i = 0; i < elementCount; ++i) {
     uint8_t observed = 0;
     st = readControlByte(cmd::MAIN_CUSTOM_PTR, observed);
@@ -997,18 +1024,24 @@ Status EE871::_observeMutationBytes(
     _mutationDiagnostic.observedValue = observed;
     _mutationDiagnostic.observedValueValid = true;
     if (observed != expected[i]) {
-      Status mismatch = Status::Error(
-          Err::VERIFY_MISMATCH,
-          "Write verification mismatch",
-          observed);
-      if (_mutationDiagnostic.cause.ok()) {
-        _mutationDiagnostic.cause = mismatch;
+      if (firstMismatch.ok()) {
+        firstMismatch = Status::Error(
+            Err::VERIFY_MISMATCH,
+            "Write verification mismatch",
+            observed);
       }
-      _mutationDiagnostic.effect = MutationEffect::ACKNOWLEDGED;
-      _mutationDiagnostic.unresolved = true;
-      return mismatch;
+      if (_mutationDiagnostic.cause.ok()) {
+        _mutationDiagnostic.cause = firstMismatch;
+      }
+    } else {
+      ++_mutationDiagnostic.elementsMatched;
     }
-    ++_mutationDiagnostic.elementsMatched;
+  }
+
+  if (!firstMismatch.ok()) {
+    _mutationDiagnostic.effect = MutationEffect::ACKNOWLEDGED;
+    _mutationDiagnostic.unresolved = true;
+    return firstMismatch;
   }
 
   if (resolveOnSuccess) {
@@ -1316,12 +1349,17 @@ Status EE871::_resyncUnresolvedMutation() {
             Err::NOT_SUPPORTED, "CO2 offset/gain not supported");
       }
       break;
+    case MutationTarget::OPERATING_MODE:
+      if (!hasLowPowerMode() && !hasE2Priority()) {
+        return Status::Error(
+            Err::NOT_SUPPORTED, "Operating mode not supported");
+      }
+      break;
     case MutationTarget::NONE:
       return Status::Error(
           Err::PERSISTENT_STATE_UNCERTAIN,
           "Persistent mutation target unavailable");
     case MutationTarget::RAW_CUSTOM_BYTE:
-    case MutationTarget::OPERATING_MODE:
       break;
   }
 
@@ -1609,7 +1647,7 @@ Status EE871::customWrite(uint8_t address, uint8_t value) {
           address);
     case CustomWriteRoute::INTERVAL_FACTOR:
       return _writeCo2IntervalFactorDirect(
-          static_cast<int8_t>(value));
+          signedByteFromRaw(value));
     case CustomWriteRoute::FILTER:
       return _writeCo2FilterDirect(value);
     case CustomWriteRoute::OPERATING_MODE:
@@ -1665,15 +1703,14 @@ Status EE871::_writeMeasurementIntervalDirect(
   if (!guard.ok()) {
     return guard;
   }
-  if (!hasGlobalInterval()) {
-    return Status::Error(Err::NOT_SUPPORTED, "Global interval not supported");
-  }
-
   // Validate range: 15.0s - 3600.0s (150 - 36000 deciseconds)
   if (intervalDeciSeconds < cmd::INTERVAL_MIN_DECISEC ||
       intervalDeciSeconds > cmd::INTERVAL_MAX_DECISEC) {
     return Status::Error(Err::OUT_OF_RANGE, "Interval must be 150-36000 (15-3600s)",
                          intervalDeciSeconds);
+  }
+  if (!hasGlobalInterval()) {
+    return Status::Error(Err::NOT_SUPPORTED, "Global interval not supported");
   }
 
   const uint8_t values[2] = {
@@ -1943,11 +1980,11 @@ Status EE871::_writeBusAddressDirect(uint8_t address) {
   if (!guard.ok()) {
     return guard;
   }
-  if (!hasAddressConfig()) {
-    return Status::Error(Err::NOT_SUPPORTED, "Address config not supported");
-  }
   if (address > cmd::BUS_ADDRESS_MAX) {
     return Status::Error(Err::OUT_OF_RANGE, "Address must be 0-7", address);
+  }
+  if (!hasAddressConfig()) {
+    return Status::Error(Err::NOT_SUPPORTED, "Address config not supported");
   }
   Status st = _beginMutation(
       MutationTarget::BUS_ADDRESS,
@@ -2019,7 +2056,7 @@ Status EE871::readCo2IntervalFactor(int8_t& factor) {
   if (!st.ok()) {
     return st;
   }
-  factor = static_cast<int8_t>(raw);
+  factor = signedByteFromRaw(raw);
   return Status::Ok();
 }
 
@@ -2103,12 +2140,12 @@ Status EE871::_writeOperatingModeDirect(uint8_t mode) {
   if (!guard.ok()) {
     return guard;
   }
-  if (!hasLowPowerMode() && !hasE2Priority()) {
-    return Status::Error(Err::NOT_SUPPORTED, "Operating mode not supported");
-  }
   // Only bits 0 and 1 are valid.
   if (mode > 0x03) {
     return Status::Error(Err::OUT_OF_RANGE, "Invalid mode bits", mode);
+  }
+  if (!hasLowPowerMode() && !hasE2Priority()) {
+    return Status::Error(Err::NOT_SUPPORTED, "Operating mode not supported");
   }
   // Check if requested mode bits are supported
   if ((mode & cmd::OPERATING_MODE_MEASUREMODE_MASK) && !hasLowPowerMode()) {
@@ -2244,9 +2281,10 @@ Status EE871::readCo2Offset(int16_t& offset) {
   if (!st.ok()) {
     return st;
   }
-  offset = static_cast<int16_t>(
+  const uint16_t raw =
       static_cast<uint16_t>(values[0]) |
-      (static_cast<uint16_t>(values[1]) << 8));
+      (static_cast<uint16_t>(values[1]) << 8);
+  offset = signedWordFromRaw(raw);
   return Status::Ok();
 }
 
@@ -2576,8 +2614,15 @@ Status EE871::_writeCommandRaw(
       hasLongCompletion ? 0U : pecDeadline.elapsedUs,
       completionLimitUs};
   bool acked = false;
+  bool finalAckObserved = false;
   st = _readAck(
-      _config, acked, completionClass, completionDeadline);
+      _config,
+      acked,
+      completionClass,
+      completionDeadline,
+      &finalAckObserved);
+  progress.finalAckObserved = finalAckObserved;
+  progress.requestAcknowledged = finalAckObserved && acked;
   if (!st.ok()) {
     const Status cleanupStatus =
         _e2Stop(_config, completionClass, &completionDeadline);
@@ -2596,7 +2641,6 @@ Status EE871::_writeCommandRaw(
     return Status::Error(Err::NACK, "PEC NACK");
   }
 
-  progress.requestAcknowledged = true;
   st = _e2Stop(
       _config, completionClass, &completionDeadline);
   progress.completionElapsedUs = completionDeadline.elapsedUs;

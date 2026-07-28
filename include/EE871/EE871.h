@@ -135,7 +135,7 @@ enum class MutationTarget : uint8_t {
 /// @brief Best evidence retained for the most recently admitted mutation.
 enum class MutationEffect : uint8_t {
   NONE = 0,                  ///< No effectful request was admitted.
-  NO_EFFECT = 1,             ///< The device definitely rejected the request.
+  NO_EFFECT = 1,             ///< The request was definitely rejected or never completed.
   ACKNOWLEDGED = 2,          ///< Accepted, but final target state was not proved.
   INDETERMINATE = 3,         ///< Complete PEC sent; acceptance was ambiguous.
   VERIFIED = 4,              ///< Target-specific observation matched the request.
@@ -992,6 +992,7 @@ private:
 
   struct MutationProgress {
     bool pecTransferred{false};
+    bool finalAckObserved{false};
     bool requestAcknowledged{false};
     bool stopCompleted{false};
     uint32_t completionElapsedUs{0};
@@ -1044,7 +1045,8 @@ private:
       const Config& config,
       bool& acked,
       ClockWaitClass waitClass,
-      ByteDeadline& deadline);
+      ByteDeadline& deadline,
+      bool* observed = nullptr);
   static Status _sendAck(
       const Config& config, bool ack, ByteDeadline& deadline);
 

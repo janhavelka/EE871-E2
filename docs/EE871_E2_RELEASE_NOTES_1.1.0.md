@@ -123,6 +123,13 @@ outside the library.
   capabilities before bus I/O, including calibration offset/gain.
 - Raw custom writes cannot bypass typed pair, address, calibration,
   auto-adjust, or read-only-address safety.
+- Multi-byte verification reads every requested target element before
+  reporting the first mismatch. A sampled final ACK or NACK remains definite
+  mutation evidence even if the remainder of that bounded phase times out.
+- Signed custom-memory values use explicit two's-complement decoding, and
+  typed mutation arguments are validated before optional-capability checks.
+- The release/version tool is product-neutral and contains no
+  TunnelMonitor-specific dependency generation.
 
 ## Timing And Examples
 
@@ -206,10 +213,11 @@ firmware version and provenance in the hardware matrix.
   source; record unavailable `idf.py` honestly.
 - [x] Review the hardware matrix; leave unexecuted physical cases `NOT RUN`.
 - [x] Review the Prompt 04 handoff and P0/P1 closure audit.
-- [ ] Confirm the working tree and intended release commit.
-- [ ] Commit and push the source candidate on the already authorized series branch.
+- [x] Confirm the working tree and intended release commit.
+- [x] Commit and push the source candidate on the already authorized series branch.
 - [ ] Obtain separate authorization to create/publish a tag or hosted release.
 - [ ] Create and publish immutable tag `v1.1.0`.
 - [ ] Verify downstream firmware pins that immutable tag or commit.
 
-The checklist is intentionally incomplete until those actions actually occur.
+The checklist remains intentionally incomplete until the separately authorized
+immutable tag, hosted release, and downstream pin verification occur.

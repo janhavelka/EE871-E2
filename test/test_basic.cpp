@@ -175,6 +175,10 @@ static void assertNoBusActivity(const FakeE2Transport& fake) {
   TEST_ASSERT_EQUAL_UINT32(0, fake.lineWrites());
 }
 
+static void applyNearByteBudgetStretch(FakeE2Transport& fake) {
+  fake.setStretch(StretchPhase::DATA_BIT, 4135U, 4096U);
+}
+
 static void assertWithinTimingBound(
     EE871::EE871& dev,
     FakeE2Transport& fake,
@@ -1964,6 +1968,14 @@ void test_dirty_state_survives_offline() {
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::OFFLINE),
                           static_cast<uint8_t>(dev.state()));
   assertDirtyWithOriginalError(dev, dirtyCause);
+
+  fake.resetActivityCounters();
+  st = dev.writeCo2Filter(1);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(Err::PERSISTENT_STATE_UNCERTAIN),
+      static_cast<uint8_t>(st.code));
+  assertNoBusActivity(fake);
+  assertDirtyWithOriginalError(dev, dirtyCause);
 }
 
 void test_mutation_contract_defaults_and_single_byte_effect_phases() {
@@ -2034,6 +2046,58 @@ void test_mutation_contract_defaults_and_single_byte_effect_phases() {
         0,
         0,
         0);
+  }
+
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    fake.resetActivityCounters();
+    fake.setStretch(
+        StretchPhase::FINAL_ACK,
+        cmd::WRITE_DELAY_PROTOCOL_MIN_MS * 1000U - 100U);
+    const Status st = dev.customWrite(0x20, 0x5A);
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::TIMEOUT),
+        static_cast<uint8_t>(st.code));
+    assertMutationHeader(
+        dev,
+        MutationTarget::RAW_CUSTOM_BYTE,
+        MutationEffect::ACKNOWLEDGED,
+        true,
+        0x20,
+        0x20,
+        1,
+        1,
+        0,
+        0);
+  }
+
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    fake.resetActivityCounters();
+    fake.nackNextFinalAck();
+    fake.setStretch(
+        StretchPhase::FINAL_ACK,
+        cmd::WRITE_DELAY_PROTOCOL_MIN_MS * 1000U - 100U);
+    const Status st = dev.customWrite(0x20, 0x5A);
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::TIMEOUT),
+        static_cast<uint8_t>(st.code));
+    assertMutationHeader(
+        dev,
+        MutationTarget::RAW_CUSTOM_BYTE,
+        MutationEffect::NO_EFFECT,
+        false,
+        0x20,
+        0x20,
+        1,
+        0,
+        0,
+        0);
+    TEST_ASSERT_EQUAL_UINT8(0, fake.memory(0x20));
   }
 
   {
@@ -2324,6 +2388,9 @@ void test_typed_mutations_share_exact_target_evidence() {
         2,
         2,
         2);
+    int16_t observed = 0;
+    TEST_ASSERT_TRUE(dev.readCo2Offset(observed).ok());
+    TEST_ASSERT_EQUAL_INT16(-321, observed);
   }
 
   {
@@ -2543,6 +2610,12 @@ void test_unresolved_mutation_blocks_mutations_but_allows_reads() {
   TEST_ASSERT_TRUE(dev.customRead(0x21, raw).ok());
   TEST_ASSERT_TRUE(dev.readCo2FastSample(checked).ok());
   TEST_ASSERT_TRUE(fake.transactionCount() > 0U);
+  TEST_ASSERT_TRUE(dev.mutationDiagnostic().unresolved);
+  assertSameStatus(retained.cause, dev.mutationDiagnostic().cause);
+
+  TEST_ASSERT_TRUE(dev.probe().ok());
+  TEST_ASSERT_TRUE(dev.checkBusIdle().ok());
+  TEST_ASSERT_TRUE(dev.busReset().ok());
   TEST_ASSERT_TRUE(dev.mutationDiagnostic().unresolved);
   assertSameStatus(retained.cause, dev.mutationDiagnostic().cause);
 }
@@ -3157,6 +3230,73 @@ void test_typed_capability_guards_are_bus_silent() {
   TEST_ASSERT_EQUAL_UINT16(987, upper);
   assertNoBusActivity(fake);
   TEST_ASSERT_FALSE(dev.mutationDiagnostic().unresolved);
+
+  TEST_ASSERT_TRUE(dev.resyncPersistentConfig().ok());
+  assertNoBusActivity(fake);
+
+  const Status invalidStatuses[] = {
+      dev.writeBusAddress(cmd::BUS_ADDRESS_MAX + 1U),
+      dev.writeMeasurementInterval(cmd::INTERVAL_MIN_DECISEC - 1U),
+      dev.writeOperatingMode(0x04),
+  };
+  for (const Status& status : invalidStatuses) {
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::OUT_OF_RANGE),
+        static_cast<uint8_t>(status.code));
+  }
+  assertNoBusActivity(fake);
+
+  {
+    FakeE2Transport partialFake;
+    partialFake.setCapabilities(
+        0,
+        0,
+        0,
+        0,
+        cmd::FEATURE_FILTER_CONFIG,
+        0,
+        0);
+    EE871::EE871 partialDev;
+    TEST_ASSERT_TRUE(beginFakeDevice(partialDev, partialFake).ok());
+    partialFake.setMemory(cmd::CUSTOM_FILTER_CO2, 3);
+    partialFake.resetActivityCounters();
+
+    TEST_ASSERT_TRUE(partialDev.resyncPersistentConfig().ok());
+    TEST_ASSERT_EQUAL_UINT32(2, partialFake.transactionCount());
+    TEST_ASSERT_EQUAL_UINT32(
+        1,
+        partialFake.countTransactions(cmd::MAIN_CUSTOM_PTR, false));
+    TEST_ASSERT_EQUAL_UINT32(
+        1,
+        partialFake.countTransactions(cmd::MAIN_CUSTOM_PTR, true));
+    TEST_ASSERT_EQUAL_UINT8(
+        cmd::CUSTOM_FILTER_CO2, partialFake.transactionAddress(0));
+  }
+
+  {
+    FakeE2Transport modeFake;
+    EE871::EE871 modeDev;
+    TEST_ASSERT_TRUE(beginFakeDevice(modeDev, modeFake).ok());
+    modeFake.dropNextWriteCommitToAddress(
+        cmd::CUSTOM_OPERATING_MODE);
+    const Status first = modeDev.writeOperatingMode(3);
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::VERIFY_MISMATCH),
+        static_cast<uint8_t>(first.code));
+    const Status cause = modeDev.mutationDiagnostic().cause;
+
+    modeDev.end();
+    modeFake.setCapabilities(0, 0, 0, 0, 0, 0, 0);
+    TEST_ASSERT_TRUE(beginFakeDevice(modeDev, modeFake).ok());
+    modeFake.resetActivityCounters();
+    const Status resync = modeDev.resyncPersistentConfig();
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::NOT_SUPPORTED),
+        static_cast<uint8_t>(resync.code));
+    assertNoBusActivity(modeFake);
+    TEST_ASSERT_TRUE(modeDev.mutationDiagnostic().unresolved);
+    assertSameStatus(cause, modeDev.mutationDiagnostic().cause);
+  }
 }
 
 void test_raw_custom_write_protected_address_dispatch_is_exhaustive() {
@@ -3264,6 +3404,17 @@ void test_raw_custom_write_protected_address_dispatch_is_exhaustive() {
         1);
     TEST_ASSERT_EQUAL_UINT8(
         0xFE, fake.memory(cmd::CUSTOM_CO2_INTERVAL_FACTOR));
+    int8_t factor = 0;
+    TEST_ASSERT_TRUE(dev.readCo2IntervalFactor(factor).ok());
+    TEST_ASSERT_EQUAL_INT8(-2, factor);
+
+    fake.setMemory(cmd::CUSTOM_CO2_INTERVAL_FACTOR, 0x80);
+    TEST_ASSERT_TRUE(dev.readCo2IntervalFactor(factor).ok());
+    TEST_ASSERT_EQUAL_INT8(-128, factor);
+
+    fake.setMemory(cmd::CUSTOM_CO2_INTERVAL_FACTOR, 0xFF);
+    TEST_ASSERT_TRUE(dev.readCo2IntervalFactor(factor).ok());
+    TEST_ASSERT_EQUAL_INT8(-1, factor);
   }
 
   {
@@ -3359,6 +3510,44 @@ void test_interval_pair_uses_one_deferred_commit_then_reads_both() {
   TEST_ASSERT_FALSE(fake.intervalTransactionStartedEarly());
   assertWithinTimingBound(
       dev, fake, OperationKind::INTERVAL_WRITE_VERIFY);
+
+  {
+    FakeE2Transport mismatchFake;
+    EE871::EE871 mismatchDev;
+    TEST_ASSERT_TRUE(
+        beginFakeDevice(mismatchDev, mismatchFake).ok());
+    mismatchFake.resetActivityCounters();
+    mismatchFake.dropNextWriteCommitToAddress(
+        cmd::CUSTOM_INTERVAL_L);
+
+    const Status mismatch =
+        mismatchDev.writeMeasurementInterval(300);
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Err::VERIFY_MISMATCH),
+        static_cast<uint8_t>(mismatch.code));
+    TEST_ASSERT_EQUAL_INT32(
+        cmd::INTERVAL_MIN_DECISEC & 0xFFU, mismatch.detail);
+    assertMutationHeader(
+        mismatchDev,
+        MutationTarget::GLOBAL_INTERVAL,
+        MutationEffect::ACKNOWLEDGED,
+        true,
+        cmd::CUSTOM_INTERVAL_L,
+        cmd::CUSTOM_INTERVAL_H,
+        2,
+        2,
+        2,
+        1);
+    TEST_ASSERT_EQUAL_UINT32(5, mismatchFake.transactionCount());
+    TEST_ASSERT_EQUAL_UINT32(
+        1,
+        mismatchFake.countTransactions(
+            cmd::MAIN_CUSTOM_PTR, false));
+    TEST_ASSERT_EQUAL_UINT32(
+        2,
+        mismatchFake.countTransactions(
+            cmd::MAIN_CUSTOM_PTR, true));
+  }
 }
 
 void test_new_mutation_timing_kinds_cover_worst_case_fake_time() {
@@ -3367,6 +3556,7 @@ void test_new_mutation_timing_kinds_cover_worst_case_fake_time() {
     EE871::EE871 dev;
     TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
     uint8_t partName[cmd::CUSTOM_PART_NAME_LEN] = {};
+    applyNearByteBudgetStretch(fake);
     fake.resetElapsed();
     TEST_ASSERT_TRUE(dev.writePartName(partName).ok());
     assertWithinTimingBound(
@@ -3385,6 +3575,7 @@ void test_new_mutation_timing_kinds_cover_worst_case_fake_time() {
     FakeE2Transport fake;
     EE871::EE871 dev;
     TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    applyNearByteBudgetStretch(fake);
     fake.resetElapsed();
     TEST_ASSERT_TRUE(dev.customWrite(0x20, 0x5A).ok());
     assertWithinTimingBound(
@@ -3395,6 +3586,18 @@ void test_new_mutation_timing_kinds_cover_worst_case_fake_time() {
     FakeE2Transport fake;
     EE871::EE871 dev;
     TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    applyNearByteBudgetStretch(fake);
+    fake.resetElapsed();
+    TEST_ASSERT_TRUE(dev.writeMeasurementInterval(300).ok());
+    assertWithinTimingBound(
+        dev, fake, OperationKind::INTERVAL_WRITE_VERIFY);
+  }
+
+  {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    applyNearByteBudgetStretch(fake);
     fake.resetElapsed();
     TEST_ASSERT_TRUE(dev.startAutoAdjust().ok());
     assertWithinTimingBound(
@@ -3405,6 +3608,7 @@ void test_new_mutation_timing_kinds_cover_worst_case_fake_time() {
     FakeE2Transport fake;
     EE871::EE871 dev;
     TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    applyNearByteBudgetStretch(fake);
     fake.resetElapsed();
     const Status st = dev.writeBusAddress(2);
     TEST_ASSERT_EQUAL_UINT8(
@@ -3418,6 +3622,7 @@ void test_new_mutation_timing_kinds_cover_worst_case_fake_time() {
     FakeE2Transport fake;
     EE871::EE871 dev;
     TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    applyNearByteBudgetStretch(fake);
     fake.resetElapsed();
     TEST_ASSERT_TRUE(dev.resyncPersistentConfig().ok());
     assertWithinTimingBound(
@@ -3434,12 +3639,14 @@ void test_new_mutation_timing_kinds_cover_worst_case_fake_time() {
         OperationKind::BEGIN_REQUIRE_PRESENT,
         1,
         beginBound).ok());
+    applyNearByteBudgetStretch(fake);
     fake.resetElapsed();
     TEST_ASSERT_TRUE(dev.begin(cfg).ok());
     TEST_ASSERT_TRUE(
         fake.elapsedUs() <=
         static_cast<uint64_t>(beginBound.maxBlockingMs) * 1000U);
 
+    applyNearByteBudgetStretch(fake);
     fake.resetElapsed();
     TEST_ASSERT_TRUE(dev.recover().ok());
     assertWithinTimingBound(
@@ -3454,6 +3661,7 @@ void test_new_mutation_timing_kinds_cover_worst_case_fake_time() {
     TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
     fake.setStatusByte(cmd::STATUS_CO2_ERROR_MASK);
     fake.setErrorCode(cmd::CO2_ERROR_SENSOR_COUNTS_LOW);
+    applyNearByteBudgetStretch(fake);
     fake.resetElapsed();
     Co2ReadResult result;
     TEST_ASSERT_EQUAL_UINT8(
