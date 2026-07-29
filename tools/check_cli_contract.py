@@ -34,6 +34,7 @@ MANDATORY_COMMANDS = [
     "co2avg",
     "samplefast",
     "sampleavg",
+    "partnamehex",
 ]
 
 REQUIRED_FRAGMENTS = [
@@ -65,6 +66,10 @@ REQUIRED_FRAGMENTS = [
     "Error-code step message:",
     "Sensor error:",
     "may trigger next measurement",
+    "addr rebegin <0-7>",
+    "No retained unresolved BUS_ADDRESS candidate",
+    "partnamehex <32-hex>",
+    "parsePartNameHex",
 ]
 
 REQUIRED_PATTERNS = {
@@ -87,6 +92,11 @@ REQUIRED_PATTERNS = {
     "CO2 sensor error formatter": r"co2SensorErrorToStr\s*\(",
     "Arduino delayMs callback": r"deviceCfg\.delayMs\s*=\s*transport::delayMs\s*;",
     "Arduino yield callback": r"deviceCfg\.yield\s*=\s*transport::yieldTask\s*;",
+    "address candidate rebegin": r'trimmed\.startsWith\(\s*"addr rebegin "\s*\)[\s\S]*?device\.end\(\)[\s\S]*?device\.begin\(deviceCfg\)[\s\S]*?resyncPersistentConfig\(\)',
+    "strict signed parser": r"bool\s+parseIntToken\s*\(",
+    "unsigned parser rejects negative tokens": r"bool\s+parseU8Token[\s\S]*?token\[0\]\s*==\s*'-'[\s\S]*?bool\s+parseU16Token[\s\S]*?token\[0\]\s*==\s*'-'",
+    "selftest address capability gate": r"hasAddressConfig\(\)[\s\S]*?readBusAddress",
+    "selftest interval capability gate": r"hasGlobalInterval\(\)[\s\S]*?readMeasurementInterval",
 }
 
 
@@ -197,6 +207,10 @@ def main() -> int:
     ):
         if fragment not in transport_text:
             fail(f"Arduino transport missing long-wait mapping: {fragment!r}")
+
+    persistent_dispatch = text[text.find('trimmed == "partname"'):text.find('trimmed == "calpoints"')]
+    if ".toInt()" in persistent_dispatch:
+        fail("persistent CLI commands must not use String::toInt fallback parsing")
 
     if re.search(r"\bcfg\b", text) is None and re.search(r"\bsettings\b", text) is None:
         fail("either 'cfg' or 'settings' command must be present")

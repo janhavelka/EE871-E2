@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Complete Prompt 04 safe HIL coverage for raw/checked samples, status,
+  feature/cache consistency, bus levels, mixed stress, recovery, and resync.
+- Structured checked-sample, full mutation-diagnostic, typed-setting, and
+  complete 256-byte custom-memory parsers/validators.
+- Atomic per-step HIL checkpoints, pre-transmission destructive-command
+  journaling, and forensic custom-memory baseline JSON/hex artifacts.
+- Separately authorized runner plans for reversible configuration, calibration,
+  same-object bus-address candidate reconciliation/restoration, one-shot
+  auto-adjust observation, sensor-only power-cycle, and distinct SDA/SCL
+  stuck-line faults.
+- Exact `partnamehex` read/write and `addr rebegin` maintenance commands in the
+  Arduino and native ESP-IDF diagnostic examples.
+
+### Changed
+
+- Persistent runner tests now use typed test/readback/diagnostic, complete
+  post-test image, restore, and final-image sequences; raw memory is never
+  replayed.
+- Hazardous live plans require structured board, target, sensor, fixture,
+  operator, and electrical-authority metadata and cannot be combined in one
+  run. Calibration and ordinary configuration mutations are separate runs.
+- Example self-tests capability-skip optional settings, and feature commands
+  report the final precise status across all three feature reads.
+
+### Fixed
+
+- Diagnostic CLI persistent numeric input now rejects malformed and
+  out-of-range values instead of converting them to zero or wrapping before a
+  typed write.
+- A failed/uncertain destructive HIL step, stale dirty observation, missing
+  baseline, or failed verification now blocks every later write in that run.
+- Address, auto-adjust, and physical fault phases now require each preceding
+  diagnostic/operator transition to pass; skipped or mistyped physical steps
+  abort instead of advancing.
+- Checked-sample validation now rejects MV-kind, status-bit, error-detail, and
+  sensor-enum contradictions, and compares adjacent transport health counters.
+- Mutation validation now checks exact target register ranges and detects
+  transient writes outside the selected target before restoration.
+- Typed writes now require a baseline that the same typed API can restore;
+  serial/parser exceptions emit final FAIL artifacts while preserving
+  destructive in-flight uncertainty.
+
 ## [1.1.0] - 2026-07-28
 
 ### Added

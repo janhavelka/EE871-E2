@@ -1,7 +1,7 @@
 # EE871-E2 Hardware Validation Matrix
 
 Created: 2026-06-01
-Last updated: 2026-07-28
+Last updated: 2026-07-29
 Current branch: `feature/ee871-hardening-series`
 
 This matrix started as a hardware validation plan and now also records completed
@@ -18,9 +18,10 @@ readiness.
 
 Current evidence summary:
 
-- ESP32-S3 Arduino diagnostic CLI on `COM17`: safe default HIL PASS, extended
-  safe HIL PASS, manual dirty/resync PASS, persistent interval
-  write/readback/restore PASS.
+- ESP32-S3 Arduino diagnostic CLI on `COM17`: safe default HIL PASS, historical
+  extended-safe HIL PASS, manual dirty/resync PASS, and the legacy persistent
+  interval write/readback/restore procedure PASS. The expanded complete-safe
+  and full-image persistent procedures have not been run.
 - Physical unplug/replug recovery: PASS as an operator-confirmed manual test on
   2026-06-02. No automated HIL transcript artifact is recorded for this step.
 - ESP32-S2 hardware HIL: not recorded.
@@ -57,7 +58,7 @@ drv
 dirty
 ```
 
-Manual expanded safe sequence:
+Complete Prompt 04 safe sequence:
 
 ```text
 version
@@ -71,15 +72,18 @@ status
 read
 co2fast
 co2avg
+drv
 samplefast
+drv
 sampleavg
+drv
 features
 caps
 fw
 e2spec
 selftest
 dirty
-stress_mix 20
+stress_mix 100
 dirty
 recover
 resync
@@ -113,10 +117,10 @@ Notes:
   python tools/ee871_hil_runner.py --port COMx
   ```
 
-- Extended safe repeatability can be captured with:
+- The complete safe sequence plus extended repeatability is automated with:
 
   ```bash
-  python tools/ee871_hil_runner.py --port COMx --include-extended
+  python tools/ee871_hil_runner.py --port COMx --complete-safe
   ```
 
 Persistent-write commands are bench-only:
@@ -130,6 +134,8 @@ gain
 gain <0..65535>
 partname
 partname <text>
+partnamehex
+partnamehex <32-hex>
 addr
 addr <0-7>
 factor
@@ -164,24 +170,40 @@ Warnings before persistent writes:
   later not-running status may require the narrow operator acknowledgement.
 - Induce or observe dirty state through the fake/native tests or dedicated test
   firmware unless deliberately running the bench persistent-write matrix below.
+- The runner records all 256 custom-memory bytes and typed semantic baselines
+  before a write, journals the exact destructive command before transmission,
+  captures another complete image after each test mutation and before restore,
+  checkpoints evidence after every command, and never replays the raw image.
 - The HIL runner requires both `--include-persistent-writes` and
   `--confirm-persistent-writes` before it sends persistent write commands. It
-  rewrites the parsed current measurement interval by default, or writes
-  `--maintenance-interval <deciseconds>` when provided. CO2 offset/gain writes
-  require explicit values.
+  tests one adjacent valid interval by default, verifies exact mutation
+  evidence, and restores the immutable recorded baseline only from a fresh
+  verified-clean state.
+- Factor, filter, mode, and exact part-name tests require explicit values.
+  Offset/gain additionally require the separate calibration opt-in and exact
+  confirmation. A mode test is blocked if the recorded mode is outside the
+  typed restore range `0..3`; the historical `0x55` baseline below is therefore
+  evidence to skip mode mutation on that sensor.
+- A failed, missing, or uncertain destructive/verification step latches the
+  run and prevents all later writes, including automatic restoration. Inspect
+  the checkpoint, resync read-only, and authorize recovery separately.
 
 Example:
 
 ```bash
-python tools/ee871_hil_runner.py --port COMx --include-persistent-writes --confirm-persistent-writes
+python tools/ee871_hil_runner.py --port COMx --include-persistent-writes --confirm-persistent-writes --board BOARD --target-name TARGET --operator OPERATOR --sensor-id SENSOR --fixture-id FIXTURE --electrical-authority PROCEDURE
 ```
 
+Address change, auto-adjust, sensor power-cycle, and stuck-line plans are
+separate exact opt-ins. See
+[EE871_E2_HIL_RUNNER.md](EE871_E2_HIL_RUNNER.md) for required metadata,
+confirmations, same-object address reconciliation, and fixture requirements.
 Operator fault flows remain review-required evidence:
 
 ```bash
-python tools/ee871_hil_runner.py --port COMx --include-unplug-replug
-python tools/ee871_hil_runner.py --port COMx --include-stuck-line
-python tools/ee871_hil_runner.py --port COMx --include-power-cycle
+python tools/ee871_hil_runner.py --port COMx --include-unplug-replug --board BOARD --target-name TARGET --operator OPERATOR --sensor-id SENSOR --fixture-id FIXTURE --electrical-authority PROCEDURE
+python tools/ee871_hil_runner.py --port COMx --include-stuck-line --confirm-stuck-line --board BOARD --target-name TARGET --operator OPERATOR --sensor-id SENSOR --fixture-id FIXTURE --electrical-authority PROCEDURE
+python tools/ee871_hil_runner.py --port COMx --include-power-cycle --confirm-power-cycle --board BOARD --target-name TARGET --operator OPERATOR --sensor-id SENSOR --fixture-id FIXTURE --electrical-authority PROCEDURE --power-procedure POWER_PROCEDURE
 ```
 
 ## Current Evidence Status
@@ -198,7 +220,9 @@ CLI on `COM17`.
   above when citing these transcripts; the final release-polish pass did not
   add a new hardware transcript.
 - Safe default HIL: PASS, 10 PASS / 0 FAIL / 0 SKIP / 0 review.
-- Extended safe HIL: PASS, 33 PASS / 0 FAIL / 0 SKIP / 0 review.
+- Historical legacy extended-safe HIL: PASS, 33 PASS / 0 FAIL / 0 SKIP / 0
+  review. This predates the current expanded `--complete-safe` checked-sample
+  and `stress_mix 100` plan and is not evidence that those new rows ran.
 - Manual resync check: PASS, `dirty`, `resync`, `dirty`.
 - Safe `read`: OK, CO2 averaged value `567 ppm` in the safe-default run.
 - `selftest`: PASS, `pass=27 fail=0 skip=0`.
@@ -281,7 +305,7 @@ Stuck-line fault/jig tests were not run.
 
 | ID | Board | Framework/example | Target | Sensor | Pull-ups/level shift | Status | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| B-S3-A | ESP32-S3 dev board | `examples/01_basic_bringup_cli` | `ex_bringup_s3` | EE871-E2 bench sensor | External pull-ups, level shifter as required | PASS | 2026-06-01 on `COM17`; safe default and extended safe HIL PASS; persistent interval write/readback/restore PASS. 2026-06-02 operator-confirmed manual unplug/replug recovery PASS. GPIOs from firmware: DATA=6, CLOCK=7. |
+| B-S3-A | ESP32-S3 dev board | `examples/01_basic_bringup_cli` | `ex_bringup_s3` | EE871-E2 bench sensor | External pull-ups, level shifter as required | PASS | 2026-06-01 on `COM17`; safe default, historical extended-safe, and legacy interval write/readback/restore procedures PASS. The current expanded runner procedures are NOT RUN. 2026-06-02 operator-confirmed manual unplug/replug recovery PASS. GPIOs from firmware: DATA=6, CLOCK=7. |
 | B-S2-A | ESP32-S2 dev board | `examples/01_basic_bringup_cli` | `ex_bringup_s2` | EE871-E2 bench sensor | External pull-ups, level shifter as required | NOT RUN | Record GPIOs, supply, cable length. |
 | B-S3-IDF | ESP32-S3 dev board | `examples/idf/basic_bringup` | `esp32s3` | EE871-E2 bench sensor | External pull-ups, level shifter as required | NOT RUN | Requires local or CI pure ESP-IDF build. |
 | B-S2-IDF | ESP32-S2 dev board | `examples/idf/basic_bringup` | `esp32s2` | EE871-E2 bench sensor | External pull-ups, level shifter as required | NOT RUN | Requires local or CI pure ESP-IDF build. |
@@ -312,17 +336,21 @@ Run these only on a bench sensor after recording original values.
 
 | ID | Scenario | Board(s) | CLI/API sequence | Expected behavior | Status | Evidence to capture |
 | --- | --- | --- | --- | --- | --- | --- |
-| P-01 | Measurement interval write/readback | S2, S3 | `interval`, `dirty`, record value, `interval <bench_value>`, `interval`, `dirty` | Write returns OK and readback matches; on failure, `dirty` reports whether persistent state may be partial. | PASS | 2026-06-01 on ESP32-S3 `COM17`: baseline `150 ds`, wrote `160 ds`, read back `160 ds`, dirty clean; restored `150 ds`, read back `150 ds`, dirty clean. |
-| P-02 | Measurement interval power-cycle persistence | S2, S3 | Run P-01, power cycle sensor and MCU, `interval` | Value persists across power cycle or documented sensor behavior explains difference. | NOT RUN | No operator power-cycle step was executed during the automated persistent validation run. |
-| P-03 | CO2 offset write/readback | S2, S3 | `offset`, `dirty`, record value, `offset <bench_value>`, `offset`, `dirty` | Write returns OK and readback matches; dirty diagnostics checked on failure. | NOT RUN | Read-only baseline/final value recorded as `0 ppm`; no calibration write was performed. |
-| P-04 | CO2 gain write/readback | S2, S3 | `gain`, `dirty`, record value, `gain <bench_value>`, `gain`, `dirty` | Write returns OK and readback matches; dirty diagnostics checked on failure. | NOT RUN | Read-only baseline/final value recorded as `32768`; no calibration write was performed. |
-| P-05 | Part name write/readback | S2, S3 | `partname`, `dirty`, record value, `partname <bench_text>`, `partname`, `dirty` | Write returns OK and readback matches; dirty diagnostics checked on failure. | NOT RUN | Before/write/after output plus dirty diagnostics. |
-| P-06 | Bus address candidate reconciliation | S2, S3 | Record address/config, issue one authorized candidate write, inspect `dirty`, `end`, perform documented power procedure if required, configure candidate, `begin`, `resync`, `dirty` | Acknowledgement returns unresolved uncertainty; no old-address readback or address scan occurs. Candidate-session resync verifies or coherently reconciles the address. | NOT RUN | Original/candidate config, mutation diagnostic, power procedure, begin/resync output. |
+| P-01 | Measurement interval write/readback | S2, S3 | Full snapshot, typed baseline, approved alternate write/readback, exact `dirty`, complete post-test/pre-restore snapshot, typed baseline restore/readback, exact `dirty`, final snapshot | Both writes return OK, readbacks match, each mutation is exact `VERIFIED` at `0xC6..0xC7`, the post-test image changes only that target plus documented volatile bytes, and the final image has no unexpected non-volatile changes. Any failed/uncertain step stops later writes. | NOT RUN | A 2026-06-01 legacy ESP32-S3 run verified `150 -> 160 -> 150 ds` with clean dirty state, but it predates exact mutation-range and full-image comparison and therefore does not satisfy this strengthened row. |
+| P-02 | Measurement interval power-cycle persistence | S2, S3 | Run verified alternate phase, sensor-only approved cycle with controller retained, recover, read alternate; restore/verify baseline as a separately admitted mutation and optionally repeat cycle | Alternate and restored baseline persist exactly, or the row FAILs unless contrary behavior is supported by cited authoritative device documentation. | NOT RUN | No operator power-cycle step was executed during the automated persistent validation run. |
+| P-03 | CO2 offset write/readback | S2, S3 | Separate calibration-authorized full snapshot/test/verify/restore/final-snapshot plan | Typed readbacks and exact two-element mutation evidence match; baseline restoration is verified but does not prove calibration accuracy. | NOT RUN | Read-only historical value was `0 ppm`; no calibration write was performed. |
+| P-04 | CO2 gain write/readback | S2, S3 | Separate calibration-authorized full snapshot/test/verify/restore/final-snapshot plan | Typed readbacks and exact two-element mutation evidence match; baseline restoration is verified but does not prove calibration accuracy. | NOT RUN | Read-only historical value was `32768`; no calibration write was performed. |
+| P-05 | Part name write/readback | S2, S3 | Full snapshot, `partnamehex`, exact 16-byte test, readback/diagnostic, exact baseline restore, final snapshot | All 16 bytes and mutation counts match; arbitrary binary baseline is restored without lossy text conversion. | NOT RUN | Before/write/after bytes, full mutation diagnostic, final image diff. |
+| P-06 | Bus address candidate reconciliation | S2, S3 | Dedicated address runner: full snapshot, one candidate request, `dirty`, authorized sensor-only activation, `addr rebegin <candidate>`, verify; independently authorize and repeat back to baseline | Acknowledgement returns unresolved uncertainty; no old-address readback or address scan occurs. Each explicit candidate session reconciles before the separately authorized next write. | NOT RUN | Original/candidate config, mutation diagnostic, power procedure, begin/resync output, final restored snapshot. |
 | P-07 | Verified mutation diagnostic | S2, S3 | On an approved reversible bench setting, record baseline, write an approved value, `dirty`, restore baseline, `dirty` | Successful target-specific verification reports exact requested/acknowledged/observed/matched counts and `VERIFIED` without unresolved state. | NOT RUN | Before/write/after values and full mutation diagnostic. |
 | P-08 | Unresolved mutation and resync | S2, S3 | Dedicated fault jig/test firmware injects a post-acceptance failure, `dirty`, attempt another mutation, remove fault, `resync`, `dirty` | First cause and intent remain; further mutation is bus-silently rejected; successful target resync records `VERIFIED` or `RESYNCHRONIZED`. | NOT RUN | Fault setup, line activity, exact diagnostic before/after, target readback. |
 | P-09 | Auto-adjust pre/post observation | S2, S3 | Dedicated approved maintenance run: inspect status, `autoadj start`, `dirty`; do not repeat automatically | Already-running returns BUSY without a write. A new request records pre/post evidence; ambiguous not-running remains unresolved. | NOT RUN | Explicit operator authorization, status evidence, mutation diagnostic. |
 | P-10 | Auto-adjust ambiguous operator acknowledgement | S2, S3 | Only after P-09 records successful post-failure not-running observation, call `acknowledgeAutoAdjustUncertainty()` from dedicated test firmware | Cache-only acknowledgement performs no E2 I/O, records `OPERATOR_ACKNOWLEDGED`, and clears only AUTO_ADJUST uncertainty. | NOT RUN | Line trace/counters and diagnostic before/after. |
 | P-11 | Uncertainty survives stopped/re-begin state | S2, S3 | Create approved unresolved state in dedicated test firmware, `end`, failed/repeated begin, successful candidate begin, inspect diagnostic, resync | Session/capability state resets but unresolved target/cause/intent survive on the same object until reconciliation. | NOT RUN | Diagnostic after each lifecycle transition and final resync. |
+| P-12 | Specific CO2 interval factor write/readback | S2, S3 | Full snapshot, typed factor test/verify, pre-restore snapshot, restore, final snapshot | Capability-supported one-byte value and exact `0xCB` mutation evidence match; only `0xCB` plus documented volatile bytes differ before restore; baseline is restored. | NOT RUN | Typed values, diagnostic, both full-image diffs. |
+| P-13 | CO2 filter write/readback | S2, S3 | Full snapshot, typed filter test/verify, pre-restore snapshot, restore, final snapshot | Capability-supported one-byte value and exact `0xD3` mutation evidence match; only `0xD3` plus documented volatile bytes differ before restore; baseline is restored. | NOT RUN | Typed values, diagnostic, both full-image diffs. |
+| P-14 | Operating mode write/readback | S2, S3 | Full snapshot, approved mode test/verify, pre-restore snapshot, restore, final snapshot | Recorded mode must be typed-restorable in `0..3`; exact `0xD8` mutation evidence and baseline restoration match. The historical `0x55` sensor is skipped. | NOT RUN | Typed values, diagnostic, both full-image diffs or explicit preflight skip. |
+| P-15 | Full pre/post custom-memory forensic comparison | S2, S3 | `reg dump 0 256` before any write, after each test mutation before restore, and after verified restoration | Every byte is retained as evidence; the pre-restore image may change only the selected typed target plus documented volatile/read-dependent addresses; the final image may differ only at documented volatile/read-dependent addresses; the image is never replayed. | NOT RUN | Baseline JSON/hex, pre-restore/final images, categorized diffs. |
 
 ## Fault And Recovery Matrix
 
@@ -330,8 +358,8 @@ Run these only on a bench sensor after recording original values.
 | --- | --- | --- | --- | --- | --- | --- |
 | R-01 | Wrong wiring or no sensor | S2, S3 | Disconnect sensor, boot, `probe`, `status`, `drv` | Initialization or reads fail with bounded non-OK status; no hang. | NOT RUN | Boot log, command output, health counters. |
 | R-02 | Unplug/replug recovery | S2, S3 | Start connected, `read`, unplug, repeated `read`, replug, `recover`, `drv` | Tracked failures degrade/offline as configured; successful `recover` returns READY. | PASS | 2026-06-02 operator-confirmed manual physical unplug/replug recovery PASS on the ESP32-S3 bench setup. Evidence type: operator-confirmed manual test. No automated HIL transcript artifact exists; automated HIL evidence remains separate. |
-| R-03 | SDA stuck low | S2, S3 | Use fault jig to pull SDA low, `buscheck`, `libreset`, `drv` | `BUS_STUCK` or precise bounded error; no unbounded wait. | NOT RUN | Jig setup and command output. |
-| R-04 | SCL stuck low / clock stretch timeout | S2, S3 | Use fault jig to pull SCL low, `status`, `buscheck`, `libreset` | Timeout or `BUS_STUCK` within configured deadline; no hang. | NOT RUN | Timing notes and output. |
+| R-03 | SDA stuck low | S2, S3 | `--include-stuck-line`: levels before/during/after reviewed SDA-low jig, `buscheck`, `status`, `libreset`, release, `recover`, `drv` | `BUS_STUCK` or precise bounded timeout; no unbounded wait; both lines recover high. | NOT RUN | Jig setup, runner artifacts, and logic-analyzer timing. |
+| R-04 | SCL stuck low / clock stretch timeout | S2, S3 | `--include-stuck-line`: levels before/during/after reviewed SCL-low jig, `buscheck`, `status`, `libreset`, release, `recover`, `drv` | Timeout or `BUS_STUCK` within configured deadline; no hang; both lines recover high. | NOT RUN | Jig setup, runner artifacts, and logic-analyzer timing. |
 | R-05 | SDA forced high/no ACK | S2, S3 | Use fault jig/open line, `probe`, `status` | NACK/no-response error is bounded and health rules match `probe` vs tracked reads. | NOT RUN | Command output. |
 | R-06 | Recovery clocks on stuck bus | S2, S3 | `busreset`, `libreset`, `buscheck` | Recovery clocks are issued and idle state is reported accurately. | NOT RUN | Output and line-level observation if available. |
 | R-07 | Timing sweep | S2, S3 | `timing` | Supported timing range is identified without hangs; failures are bounded. | NOT RUN | Timing table output. |

@@ -34,9 +34,11 @@ Recorded evidence:
 - Arduino PlatformIO builds: `ex_bringup_s3` and `ex_bringup_s2` pass locally
   in the latest hardening/readiness runs.
 - ESP32-S3 safe default HIL: PASS on `COM17`.
-- ESP32-S3 extended safe HIL: PASS on `COM17`.
-- ESP32-S3 persistent measurement interval write/readback/restore: PASS on
-  `COM17`.
+- ESP32-S3 historical legacy extended-safe HIL: PASS on `COM17`; this predates
+  the current expanded alias.
+- ESP32-S3 legacy persistent measurement interval write/readback/restore:
+  PASS on `COM17`; the new full-image pre-restore/final comparison procedure
+  has not been run on hardware.
 - Physical unplug/replug recovery: PASS, operator-confirmed manual test; no
   automated transcript is recorded.
 
@@ -45,6 +47,8 @@ Remaining documented gaps:
 - Pure ESP-IDF build success must be verified by GitHub Actions or local
   `idf.py` builds.
 - ESP32-S2 hardware HIL and pure ESP-IDF hardware HIL are not recorded.
+- The expanded checked-sample/health `--complete-safe` plan and strengthened
+  full-image persistent restore plan are not yet recorded on hardware.
 - Power-cycle persistence, CO2 calibration writes, bus-address write/recovery,
   and stuck-line fault-jig tests are not recorded.
 
@@ -447,15 +451,23 @@ run:
 
 ```bash
 python tools/ee871_hil_runner.py --port COMx
-python tools/ee871_hil_runner.py --port COMx --include-extended
-python tools/ee871_hil_runner.py --port COMx --include-unplug-replug
-python tools/ee871_hil_runner.py --port COMx --include-persistent-writes --confirm-persistent-writes
+python tools/ee871_hil_runner.py --port COMx --complete-safe
+python tools/ee871_hil_runner.py --port COMx --include-unplug-replug --board BOARD --target-name TARGET --operator OPERATOR --sensor-id SENSOR --fixture-id FIXTURE --electrical-authority PROCEDURE
+python tools/ee871_hil_runner.py --port COMx --include-persistent-writes --confirm-persistent-writes --board BOARD --target-name TARGET --operator OPERATOR --sensor-id SENSOR --fixture-id FIXTURE --electrical-authority PROCEDURE
 ```
 
 The default runner sequence is non-persistent and records `version`, `help`,
 `probe`, `read`, `selftest`, `drv`, `dirty`, `stress 50`, final `drv`, and
-final `dirty`. It writes a raw transcript, `summary.json`, and `summary.md`.
-Dry-runs and operator/fault steps are never reported as hardware `PASS`.
+final `dirty`. `--complete-safe` adds checked fast/average samples with adjacent
+health-counter evidence, complete feature/capability reads, bus/line checks,
+`stress_mix 100`, recovery, and resync. Warm-up and stale-measurement timing
+remain separate controlled HIL rows.
+Destructive plans are isolated behind separate exact opt-ins. They checkpoint
+a complete 256-byte forensic baseline plus a pre-restore post-test image,
+restore only typed settings from verified-clean state, journal every write
+before transmission, and never replay raw custom memory. Dry-runs and
+operator/fault steps are never reported as hardware `PASS`; see the runner
+guide for calibration, address, auto-adjust, power, and stuck-line procedures.
 
 ## Documentation
 

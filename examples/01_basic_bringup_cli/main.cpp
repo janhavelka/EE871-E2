@@ -3,6 +3,7 @@
 /// @note This is an EXAMPLE, not part of the library
 
 #include <Arduino.h>
+#include <errno.h>
 #include <stdlib.h>
 #include "common/CliStyle.h"
 #include "common/Log.h"
@@ -189,12 +190,14 @@ bool splitToken(const String& in, String& head, String& tail) {
 }
 
 bool parseU8Token(const String& token, uint8_t& out) {
-  if (token.isEmpty()) {
+  if (token.isEmpty() || token[0] == '-') {
     return false;
   }
+  errno = 0;
   char* end = nullptr;
   const unsigned long value = strtoul(token.c_str(), &end, 0);
-  if (end == token.c_str() || *end != '\0' || value > 0xFFUL) {
+  if (errno == ERANGE || end == token.c_str() || *end != '\0' ||
+      value > 0xFFUL) {
     return false;
   }
   out = static_cast<uint8_t>(value);
@@ -202,16 +205,62 @@ bool parseU8Token(const String& token, uint8_t& out) {
 }
 
 bool parseU16Token(const String& token, uint16_t& out) {
-  if (token.isEmpty()) {
+  if (token.isEmpty() || token[0] == '-') {
     return false;
   }
+  errno = 0;
   char* end = nullptr;
   const unsigned long value = strtoul(token.c_str(), &end, 0);
-  if (end == token.c_str() || *end != '\0' || value > 0xFFFFUL) {
+  if (errno == ERANGE || end == token.c_str() || *end != '\0' ||
+      value > 0xFFFFUL) {
     return false;
   }
   out = static_cast<uint16_t>(value);
   return true;
+}
+
+bool parseIntToken(const String& token, long& out) {
+  if (token.isEmpty()) {
+    return false;
+  }
+  errno = 0;
+  char* end = nullptr;
+  const long value = strtol(token.c_str(), &end, 0);
+  if (errno == ERANGE || end == token.c_str() || *end != '\0') {
+    return false;
+  }
+  out = value;
+  return true;
+}
+
+int hexNibble(char value) {
+  if (value >= '0' && value <= '9') return value - '0';
+  if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+  if (value >= 'A' && value <= 'F') return value - 'A' + 10;
+  return -1;
+}
+
+bool parsePartNameHex(const String& token, uint8_t (&out)[16]) {
+  if (token.length() != 32U) {
+    return false;
+  }
+  for (size_t i = 0; i < sizeof(out); ++i) {
+    const int high = hexNibble(token[2U * i]);
+    const int low = hexNibble(token[2U * i + 1U]);
+    if (high < 0 || low < 0) {
+      return false;
+    }
+    out[i] = static_cast<uint8_t>((high << 4) | low);
+  }
+  return true;
+}
+
+void printPartNameHex(const uint8_t (&name)[16]) {
+  Serial.print("  Part name hex: ");
+  for (uint8_t value : name) {
+    Serial.printf("%02X", value);
+  }
+  Serial.println();
 }
 
 /// Convert error code to string
@@ -643,10 +692,13 @@ void printHelp() {
   cli::printHelpItem("serial", "Read serial number");
   cli::printHelpItem("partname", "Read part name");
   cli::printHelpItem("partname <text>", "Write persistent part name (16 bytes max)");
+  cli::printHelpItem("partnamehex", "Read exact 16-byte part name as hex");
+  cli::printHelpItem("partnamehex <32-hex>", "Write exact persistent 16-byte part name");
 
   cli::printHelpSection("Configuration");
   cli::printHelpItem("addr", "Read current bus address");
-  cli::printHelpItem("addr <0-7>", "Write persistent bus address (power cycle)");
+  cli::printHelpItem("addr <0-7>", "Request persistent bus address change");
+  cli::printHelpItem("addr rebegin <0-7>", "Rebegin/resync retained address candidate (no scan)");
   cli::printHelpItem("interval", "Read measurement interval");
   cli::printHelpItem("interval <dec>", "Write persistent interval (150..36000 ds)");
   cli::printHelpItem("factor", "Read CO2 interval factor");
@@ -1018,21 +1070,45 @@ void runSelfTest() {
     reportSkip("readPartName", "not supported");
   }
 
-  uint8_t addr = 0;
-  st = device.readBusAddress(addr);
-  reportCheck("readBusAddress", st.ok(), st.ok() ? "" : errToStr(st.code));
+  if (device.hasAddressConfig()) {
+    uint8_t addr = 0;
+    st = device.readBusAddress(addr);
+    reportCheck("readBusAddress", st.ok(), st.ok() ? "" : errToStr(st.code));
+  } else {
+    reportSkip("readBusAddress", "not supported");
+  }
 
-  uint16_t interval = 0;
-  st = device.readMeasurementInterval(interval);
-  reportCheck("readMeasurementInterval", st.ok(), st.ok() ? "" : errToStr(st.code));
+  if (device.hasGlobalInterval()) {
+    uint16_t interval = 0;
+    st = device.readMeasurementInterval(interval);
+    reportCheck("readMeasurementInterval", st.ok(), st.ok() ? "" : errToStr(st.code));
+  } else {
+    reportSkip("readMeasurementInterval", "not supported");
+  }
 
-  int8_t factor = 0;
-  st = device.readCo2IntervalFactor(factor);
-  reportCheck("readCo2IntervalFactor", st.ok(), st.ok() ? "" : errToStr(st.code));
+  if (device.hasSpecificInterval()) {
+    int8_t factor = 0;
+    st = device.readCo2IntervalFactor(factor);
+    reportCheck("readCo2IntervalFactor", st.ok(), st.ok() ? "" : errToStr(st.code));
+  } else {
+    reportSkip("readCo2IntervalFactor", "not supported");
+  }
 
-  uint8_t mode = 0;
-  st = device.readOperatingMode(mode);
-  reportCheck("readOperatingMode", st.ok(), st.ok() ? "" : errToStr(st.code));
+  if (device.hasFilterConfig()) {
+    uint8_t filter = 0;
+    st = device.readCo2Filter(filter);
+    reportCheck("readCo2Filter", st.ok(), st.ok() ? "" : errToStr(st.code));
+  } else {
+    reportSkip("readCo2Filter", "not supported");
+  }
+
+  if (device.hasLowPowerMode() || device.hasE2Priority()) {
+    uint8_t mode = 0;
+    st = device.readOperatingMode(mode);
+    reportCheck("readOperatingMode", st.ok(), st.ok() ? "" : errToStr(st.code));
+  } else {
+    reportSkip("readOperatingMode", "not supported");
+  }
 
   uint8_t ctrl = 0;
   st = device.readControlByte(EE871::cmd::MAIN_STATUS, ctrl);
@@ -1365,9 +1441,9 @@ void processCommand(const String& cmd) {
   } else if (trimmed == "features") {
     uint8_t ops = 0, modes = 0, special = 0;
     auto st = device.readOperatingFunctions(ops);
-    printStatus(st);
     if (st.ok()) st = device.readOperatingModeSupport(modes);
     if (st.ok()) st = device.readSpecialFeatures(special);
+    printStatus(st);
     if (st.ok()) {
       Serial.printf("  Operating functions (0x07): 0x%02X\n", ops);
       Serial.printf("    Serial number: %s\n", device.hasSerialNumber() ? "yes" : "no");
@@ -1426,13 +1502,12 @@ void processCommand(const String& cmd) {
   } else if (trimmed.startsWith("partname ")) {
     String text = trimmed.substring(9);
     text.trim();
-    if (text.length() == 0) {
-      LOGW("Usage: partname <text>");
+    if (text.length() == 0 || text.length() > 16U) {
+      LOGW("partname must contain 1..16 bytes; use partnamehex for exact binary data");
       return;
     }
     uint8_t out[16] = {0};
-    const size_t maxLen = (text.length() > 16) ? 16 : static_cast<size_t>(text.length());
-    for (size_t i = 0; i < maxLen; ++i) {
+    for (size_t i = 0; i < static_cast<size_t>(text.length()); ++i) {
       out[i] = static_cast<uint8_t>(text[i]);
     }
     auto st = device.writePartName(out);
@@ -1451,6 +1526,31 @@ void processCommand(const String& cmd) {
         Serial.println();
       }
     }
+  } else if (trimmed == "partnamehex") {
+    uint8_t name[16] = {0};
+    auto st = device.readPartName(name);
+    printStatus(st);
+    if (st.ok()) {
+      printPartNameHex(name);
+    }
+  } else if (trimmed.startsWith("partnamehex ")) {
+    String token = trimmed.substring(12);
+    token.trim();
+    uint8_t name[16] = {0};
+    if (!parsePartNameHex(token, name)) {
+      LOGW("Usage: partnamehex <exactly 32 hex digits>");
+      return;
+    }
+    auto st = device.writePartName(name);
+    printStatus(st);
+    if (st.ok()) {
+      uint8_t verify[16] = {0};
+      st = device.readPartName(verify);
+      printStatus(st);
+      if (st.ok()) {
+        printPartNameHex(verify);
+      }
+    }
   
   // === Configuration Commands ===
   } else if (trimmed == "addr") {
@@ -1460,10 +1560,43 @@ void processCommand(const String& cmd) {
     if (st.ok()) {
       Serial.printf("  Bus address: %u\n", addr);
     }
+  } else if (trimmed.startsWith("addr rebegin ")) {
+    String token = trimmed.substring(13);
+    token.trim();
+    uint8_t candidate = 0;
+    if (!parseU8Token(token, candidate) ||
+        candidate > EE871::cmd::BUS_ADDRESS_MAX) {
+      LOGW("Usage: addr rebegin <0-7>");
+      return;
+    }
+    const EE871::MutationDiagnostic before = device.mutationDiagnostic();
+    if (!before.unresolved ||
+        before.target != EE871::MutationTarget::BUS_ADDRESS ||
+        before.attemptedValue != candidate) {
+      LOGW("No retained unresolved BUS_ADDRESS candidate matching %u", candidate);
+      return;
+    }
+    Serial.println("=== Address Candidate Rebegin/Resync ===");
+    device.end();
+    deviceCfg.deviceAddress = candidate;
+    auto st = device.begin(deviceCfg);
+    printStatus(st);
+    if (st.ok()) {
+      st = device.resyncPersistentConfig();
+      printStatus(st);
+    }
+    printPersistentDirtyState("After:");
   } else if (trimmed.startsWith("addr ")) {
-    int val = trimmed.substring(5).toInt();
-    LOGI("Writing bus address %d (power cycle required)...", val);
-    auto st = device.writeBusAddress(static_cast<uint8_t>(val));
+    String token = trimmed.substring(5);
+    token.trim();
+    uint8_t value = 0;
+    if (!parseU8Token(token, value) ||
+        value > EE871::cmd::BUS_ADDRESS_MAX) {
+      LOGW("addr must be 0..7");
+      return;
+    }
+    LOGI("Requesting bus address %u; use only the authorized activation procedure", value);
+    auto st = device.writeBusAddress(value);
     printStatus(st);
   } else if (trimmed == "interval") {
     uint16_t interval = 0;
@@ -1473,9 +1606,15 @@ void processCommand(const String& cmd) {
       Serial.printf("  Interval: %u deciseconds (%.1f s)\n", interval, interval / 10.0f);
     }
   } else if (trimmed.startsWith("interval ")) {
-    int val = trimmed.substring(9).toInt();
-    LOGI("Writing interval %d deciseconds...", val);
-    auto st = device.writeMeasurementInterval(static_cast<uint16_t>(val));
+    String token = trimmed.substring(9);
+    token.trim();
+    uint16_t value = 0;
+    if (!parseU16Token(token, value) || value < 150U || value > 36000U) {
+      LOGW("interval must be 150..36000 deciseconds");
+      return;
+    }
+    LOGI("Writing interval %u deciseconds...", value);
+    auto st = device.writeMeasurementInterval(value);
     printStatus(st);
   } else if (trimmed == "factor") {
     int8_t factor = 0;
@@ -1485,12 +1624,14 @@ void processCommand(const String& cmd) {
       Serial.printf("  CO2 interval factor: %d\n", static_cast<int>(factor));
     }
   } else if (trimmed.startsWith("factor ")) {
-    const int val = trimmed.substring(7).toInt();
-    if (val < -128 || val > 127) {
+    String token = trimmed.substring(7);
+    token.trim();
+    long value = 0;
+    if (!parseIntToken(token, value) || value < -128L || value > 127L) {
       LOGW("factor must be -128..127");
       return;
     }
-    auto st = device.writeCo2IntervalFactor(static_cast<int8_t>(val));
+    auto st = device.writeCo2IntervalFactor(static_cast<int8_t>(value));
     printStatus(st);
   } else if (trimmed == "filter") {
     uint8_t filter = 0;
@@ -1500,8 +1641,14 @@ void processCommand(const String& cmd) {
       Serial.printf("  CO2 filter: %u\n", filter);
     }
   } else if (trimmed.startsWith("filter ")) {
-    int val = trimmed.substring(7).toInt();
-    auto st = device.writeCo2Filter(static_cast<uint8_t>(val));
+    String token = trimmed.substring(7);
+    token.trim();
+    uint8_t value = 0;
+    if (!parseU8Token(token, value)) {
+      LOGW("filter must be 0..255");
+      return;
+    }
+    auto st = device.writeCo2Filter(value);
     printStatus(st);
   } else if (trimmed == "mode") {
     uint8_t mode = 0;
@@ -1513,8 +1660,14 @@ void processCommand(const String& cmd) {
       Serial.printf("    Priority: %s\n", (mode & 0x02) ? "E2 comm" : "measurement");
     }
   } else if (trimmed.startsWith("mode ")) {
-    int val = trimmed.substring(5).toInt();
-    auto st = device.writeOperatingMode(static_cast<uint8_t>(val));
+    String token = trimmed.substring(5);
+    token.trim();
+    uint8_t value = 0;
+    if (!parseU8Token(token, value) || value > 3U) {
+      LOGW("mode must be 0..3");
+      return;
+    }
+    auto st = device.writeOperatingMode(value);
     printStatus(st);
   
   // === Calibration Commands ===
@@ -1526,9 +1679,15 @@ void processCommand(const String& cmd) {
       Serial.printf("  CO2 offset: %d ppm\n", offset);
     }
   } else if (trimmed.startsWith("offset ")) {
-    int val = trimmed.substring(7).toInt();
-    LOGI("Writing CO2 offset %d...", val);
-    auto st = device.writeCo2Offset(static_cast<int16_t>(val));
+    String token = trimmed.substring(7);
+    token.trim();
+    long value = 0;
+    if (!parseIntToken(token, value) || value < -32768L || value > 32767L) {
+      LOGW("offset must be -32768..32767");
+      return;
+    }
+    LOGI("Writing CO2 offset %ld...", value);
+    auto st = device.writeCo2Offset(static_cast<int16_t>(value));
     printStatus(st);
   } else if (trimmed == "gain") {
     uint16_t gain = 0;
@@ -1538,12 +1697,14 @@ void processCommand(const String& cmd) {
       Serial.printf("  CO2 gain: %u (factor=%.4f)\n", gain, gain / 32768.0f);
     }
   } else if (trimmed.startsWith("gain ")) {
-    int val = trimmed.substring(5).toInt();
-    if (val < 0 || val > 65535) {
+    String token = trimmed.substring(5);
+    token.trim();
+    uint16_t value = 0;
+    if (!parseU16Token(token, value)) {
       LOGW("gain must be 0..65535");
       return;
     }
-    auto st = device.writeCo2Gain(static_cast<uint16_t>(val));
+    auto st = device.writeCo2Gain(value);
     printStatus(st);
   } else if (trimmed == "calpoints") {
     uint16_t lower = 0, upper = 0;

@@ -63,6 +63,10 @@ IDF_REQUIRED_FRAGMENTS = [
     "may trigger next measurement",
     "samplefast",
     "sampleavg",
+    "partnamehex",
+    "addr rebegin <0-7>",
+    "No retained unresolved BUS_ADDRESS candidate",
+    "parsePartNameHex",
     "recover",
     "busReset",
     "checkBusIdle",
@@ -86,6 +90,10 @@ IDF_REQUIRED_PATTERNS = {
     "CO2 sensor error formatter": r"co2SensorErrorToStr\s*\(",
     "IDF delayMs callback use": r"deviceCfg\.delayMs\s*=\s*ee871_idf::delayMs\s*;",
     "IDF yield callback use": r"deviceCfg\.yield\s*=\s*ee871_idf::yieldTask\s*;",
+    "address candidate rebegin": r'startsWith\(\s*trimmed,\s*"addr rebegin "\s*\)[\s\S]*?device\.end\(\)[\s\S]*?device\.begin\(deviceCfg\)[\s\S]*?resyncPersistentConfig\(\)',
+    "selftest address capability gate": r"hasAddressConfig\(\)[\s\S]*?readBusAddress",
+    "selftest interval capability gate": r"hasGlobalInterval\(\)[\s\S]*?readMeasurementInterval",
+    "unsigned parser rejects negative tokens": r"bool\s+parseU8Token[\s\S]*?token\[0\]\s*==\s*'-'[\s\S]*?bool\s+parseU16Token[\s\S]*?token\[0\]\s*==\s*'-'",
 }
 
 STALE_IDF_WORDING = [

@@ -289,12 +289,13 @@ void splitTokens(const char* input, Tokens& out) {
 }
 
 bool parseU8Token(const char* token, uint8_t& out) {
-  if (token == nullptr || token[0] == '\0') {
+  if (token == nullptr || token[0] == '\0' || token[0] == '-') {
     return false;
   }
+  errno = 0;
   char* end = nullptr;
   const unsigned long value = std::strtoul(token, &end, 0);
-  if (end == token || *end != '\0' || value > 0xFFUL) {
+  if (errno == ERANGE || end == token || *end != '\0' || value > 0xFFUL) {
     return false;
   }
   out = static_cast<uint8_t>(value);
@@ -302,12 +303,13 @@ bool parseU8Token(const char* token, uint8_t& out) {
 }
 
 bool parseU16Token(const char* token, uint16_t& out) {
-  if (token == nullptr || token[0] == '\0') {
+  if (token == nullptr || token[0] == '\0' || token[0] == '-') {
     return false;
   }
+  errno = 0;
   char* end = nullptr;
   const unsigned long value = std::strtoul(token, &end, 0);
-  if (end == token || *end != '\0' || value > 0xFFFFUL) {
+  if (errno == ERANGE || end == token || *end != '\0' || value > 0xFFFFUL) {
     return false;
   }
   out = static_cast<uint16_t>(value);
@@ -318,13 +320,44 @@ bool parseIntToken(const char* token, long& out) {
   if (token == nullptr || token[0] == '\0') {
     return false;
   }
+  errno = 0;
   char* end = nullptr;
   const long value = std::strtol(token, &end, 0);
-  if (end == token || *end != '\0') {
+  if (errno == ERANGE || end == token || *end != '\0') {
     return false;
   }
   out = value;
   return true;
+}
+
+int hexNibble(char value) {
+  if (value >= '0' && value <= '9') return value - '0';
+  if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+  if (value >= 'A' && value <= 'F') return value - 'A' + 10;
+  return -1;
+}
+
+bool parsePartNameHex(const char* token, uint8_t (&out)[16]) {
+  if (token == nullptr || std::strlen(token) != 32U) {
+    return false;
+  }
+  for (size_t i = 0; i < sizeof(out); ++i) {
+    const int high = hexNibble(token[2U * i]);
+    const int low = hexNibble(token[2U * i + 1U]);
+    if (high < 0 || low < 0) {
+      return false;
+    }
+    out[i] = static_cast<uint8_t>((high << 4) | low);
+  }
+  return true;
+}
+
+void printPartNameHex(const uint8_t (&name)[16]) {
+  std::printf("  Part name hex: ");
+  for (uint8_t value : name) {
+    std::printf("%02X", static_cast<unsigned>(value));
+  }
+  std::printf("\n");
 }
 
 // ============================================================================
@@ -760,10 +793,13 @@ void printHelp() {
   printHelpItem("serial", "Read serial number");
   printHelpItem("partname", "Read part name");
   printHelpItem("partname <text>", "Write persistent part name (16 bytes max)");
+  printHelpItem("partnamehex", "Read exact 16-byte part name as hex");
+  printHelpItem("partnamehex <32-hex>", "Write exact persistent 16-byte part name");
 
   printHelpSection("Configuration");
   printHelpItem("addr", "Read current bus address");
-  printHelpItem("addr <0-7>", "Write persistent bus address (power cycle)");
+  printHelpItem("addr <0-7>", "Request persistent bus address change");
+  printHelpItem("addr rebegin <0-7>", "Rebegin/resync retained address candidate (no scan)");
   printHelpItem("interval", "Read measurement interval");
   printHelpItem("interval <dec>", "Write persistent interval (150..36000 ds)");
   printHelpItem("factor", "Read CO2 interval factor");
@@ -1883,21 +1919,45 @@ void runSelfTest() {
     reportSkip("readPartName", "not supported");
   }
 
-  uint8_t addr = 0;
-  st = device.readBusAddress(addr);
-  reportCheck("readBusAddress", st.ok(), st.ok() ? "" : errToStr(st.code));
+  if (device.hasAddressConfig()) {
+    uint8_t addr = 0;
+    st = device.readBusAddress(addr);
+    reportCheck("readBusAddress", st.ok(), st.ok() ? "" : errToStr(st.code));
+  } else {
+    reportSkip("readBusAddress", "not supported");
+  }
 
-  uint16_t interval = 0;
-  st = device.readMeasurementInterval(interval);
-  reportCheck("readMeasurementInterval", st.ok(), st.ok() ? "" : errToStr(st.code));
+  if (device.hasGlobalInterval()) {
+    uint16_t interval = 0;
+    st = device.readMeasurementInterval(interval);
+    reportCheck("readMeasurementInterval", st.ok(), st.ok() ? "" : errToStr(st.code));
+  } else {
+    reportSkip("readMeasurementInterval", "not supported");
+  }
 
-  int8_t factor = 0;
-  st = device.readCo2IntervalFactor(factor);
-  reportCheck("readCo2IntervalFactor", st.ok(), st.ok() ? "" : errToStr(st.code));
+  if (device.hasSpecificInterval()) {
+    int8_t factor = 0;
+    st = device.readCo2IntervalFactor(factor);
+    reportCheck("readCo2IntervalFactor", st.ok(), st.ok() ? "" : errToStr(st.code));
+  } else {
+    reportSkip("readCo2IntervalFactor", "not supported");
+  }
 
-  uint8_t mode = 0;
-  st = device.readOperatingMode(mode);
-  reportCheck("readOperatingMode", st.ok(), st.ok() ? "" : errToStr(st.code));
+  if (device.hasFilterConfig()) {
+    uint8_t filter = 0;
+    st = device.readCo2Filter(filter);
+    reportCheck("readCo2Filter", st.ok(), st.ok() ? "" : errToStr(st.code));
+  } else {
+    reportSkip("readCo2Filter", "not supported");
+  }
+
+  if (device.hasLowPowerMode() || device.hasE2Priority()) {
+    uint8_t mode = 0;
+    st = device.readOperatingMode(mode);
+    reportCheck("readOperatingMode", st.ok(), st.ok() ? "" : errToStr(st.code));
+  } else {
+    reportSkip("readOperatingMode", "not supported");
+  }
 
   uint8_t ctrl = 0;
   st = device.readControlByte(EE871::cmd::MAIN_STATUS, ctrl);
@@ -2245,9 +2305,9 @@ void processCommand(const char* input) {
     uint8_t modes = 0;
     uint8_t special = 0;
     auto st = device.readOperatingFunctions(ops);
-    printStatus(st);
     if (st.ok()) st = device.readOperatingModeSupport(modes);
     if (st.ok()) st = device.readSpecialFeatures(special);
+    printStatus(st);
     if (st.ok()) {
       std::printf("  Operating functions (0x07): 0x%02X\n", static_cast<unsigned>(ops));
       std::printf("    Serial number: %s\n", device.hasSerialNumber() ? "yes" : "no");
@@ -2302,8 +2362,11 @@ void processCommand(const char* input) {
     }
     uint8_t out[16] = {0};
     const size_t textLen = std::strlen(text);
-    const size_t maxLen = (textLen > sizeof(out)) ? sizeof(out) : textLen;
-    for (size_t i = 0; i < maxLen; ++i) {
+    if (textLen > sizeof(out)) {
+      logWarn("partname must contain 1..16 bytes; use partnamehex for exact binary data");
+      return;
+    }
+    for (size_t i = 0; i < textLen; ++i) {
       out[i] = static_cast<uint8_t>(text[i]);
     }
     auto st = device.writePartName(out);
@@ -2316,6 +2379,31 @@ void processCommand(const char* input) {
         printAsciiField("Part name", verify, sizeof(verify), true);
       }
     }
+  } else if (std::strcmp(trimmed, "partnamehex") == 0) {
+    uint8_t name[16] = {0};
+    auto st = device.readPartName(name);
+    printStatus(st);
+    if (st.ok()) {
+      printPartNameHex(name);
+    }
+  } else if (startsWith(trimmed, "partnamehex ")) {
+    Tokens tok;
+    splitTokens(trimmed, tok);
+    uint8_t name[16] = {0};
+    if (tok.argc != 2 || !parsePartNameHex(tok.argv[1], name)) {
+      logWarn("Usage: partnamehex <exactly 32 hex digits>");
+      return;
+    }
+    auto st = device.writePartName(name);
+    printStatus(st);
+    if (st.ok()) {
+      uint8_t verify[16] = {0};
+      st = device.readPartName(verify);
+      printStatus(st);
+      if (st.ok()) {
+        printPartNameHex(verify);
+      }
+    }
   } else if (std::strcmp(trimmed, "addr") == 0) {
     uint8_t addr = 0;
     auto st = device.readBusAddress(addr);
@@ -2323,14 +2411,45 @@ void processCommand(const char* input) {
     if (st.ok()) {
       std::printf("  Bus address: %u\n", static_cast<unsigned>(addr));
     }
+  } else if (startsWith(trimmed, "addr rebegin ")) {
+    Tokens tok;
+    splitTokens(trimmed, tok);
+    long candidateValue = 0;
+    if (tok.argc != 3 || !parseIntToken(tok.argv[2], candidateValue) ||
+        candidateValue < 0L ||
+        candidateValue > static_cast<long>(EE871::cmd::BUS_ADDRESS_MAX)) {
+      logWarn("Usage: addr rebegin <0-7>");
+      return;
+    }
+    const uint8_t candidate = static_cast<uint8_t>(candidateValue);
+    const EE871::MutationDiagnostic before = device.mutationDiagnostic();
+    if (!before.unresolved ||
+        before.target != EE871::MutationTarget::BUS_ADDRESS ||
+        before.attemptedValue != candidate) {
+      logWarn("No retained unresolved BUS_ADDRESS candidate matching %u",
+              static_cast<unsigned>(candidate));
+      return;
+    }
+    std::printf("=== Address Candidate Rebegin/Resync ===\n");
+    device.end();
+    deviceCfg.deviceAddress = candidate;
+    auto st = device.begin(deviceCfg);
+    printStatus(st);
+    if (st.ok()) {
+      st = device.resyncPersistentConfig();
+      printStatus(st);
+    }
+    printPersistentDirtyState("After:");
   } else if (startsWith(trimmed, "addr ")) {
     long val = 0;
     Tokens tok;
     splitTokens(trimmed, tok);
-    if (tok.argc < 2 || !parseIntToken(tok.argv[1], val)) {
-      val = 0;
+    if (tok.argc != 2 || !parseIntToken(tok.argv[1], val) ||
+        val < 0L || val > static_cast<long>(EE871::cmd::BUS_ADDRESS_MAX)) {
+      logWarn("addr must be 0..7");
+      return;
     }
-    logInfo("Writing bus address %ld (power cycle required)...", val);
+    logInfo("Requesting bus address %ld; use only the authorized activation procedure", val);
     auto st = device.writeBusAddress(static_cast<uint8_t>(val));
     printStatus(st);
   } else if (std::strcmp(trimmed, "interval") == 0) {
@@ -2346,8 +2465,10 @@ void processCommand(const char* input) {
     long val = 0;
     Tokens tok;
     splitTokens(trimmed, tok);
-    if (tok.argc < 2 || !parseIntToken(tok.argv[1], val)) {
-      val = 0;
+    if (tok.argc != 2 || !parseIntToken(tok.argv[1], val) ||
+        val < 150L || val > 36000L) {
+      logWarn("interval must be 150..36000 deciseconds");
+      return;
     }
     logInfo("Writing interval %ld deciseconds...", val);
     auto st = device.writeMeasurementInterval(static_cast<uint16_t>(val));
@@ -2363,7 +2484,7 @@ void processCommand(const char* input) {
     long val = 0;
     Tokens tok;
     splitTokens(trimmed, tok);
-    if (tok.argc < 2 || !parseIntToken(tok.argv[1], val) || val < -128L || val > 127L) {
+    if (tok.argc != 2 || !parseIntToken(tok.argv[1], val) || val < -128L || val > 127L) {
       logWarn("factor must be -128..127");
       return;
     }
@@ -2380,8 +2501,10 @@ void processCommand(const char* input) {
     long val = 0;
     Tokens tok;
     splitTokens(trimmed, tok);
-    if (tok.argc < 2 || !parseIntToken(tok.argv[1], val)) {
-      val = 0;
+    if (tok.argc != 2 || !parseIntToken(tok.argv[1], val) ||
+        val < 0L || val > 255L) {
+      logWarn("filter must be 0..255");
+      return;
     }
     auto st = device.writeCo2Filter(static_cast<uint8_t>(val));
     printStatus(st);
@@ -2398,8 +2521,10 @@ void processCommand(const char* input) {
     long val = 0;
     Tokens tok;
     splitTokens(trimmed, tok);
-    if (tok.argc < 2 || !parseIntToken(tok.argv[1], val)) {
-      val = 0;
+    if (tok.argc != 2 || !parseIntToken(tok.argv[1], val) ||
+        val < 0L || val > 3L) {
+      logWarn("mode must be 0..3");
+      return;
     }
     auto st = device.writeOperatingMode(static_cast<uint8_t>(val));
     printStatus(st);
@@ -2414,8 +2539,10 @@ void processCommand(const char* input) {
     long val = 0;
     Tokens tok;
     splitTokens(trimmed, tok);
-    if (tok.argc < 2 || !parseIntToken(tok.argv[1], val)) {
-      val = 0;
+    if (tok.argc != 2 || !parseIntToken(tok.argv[1], val) ||
+        val < -32768L || val > 32767L) {
+      logWarn("offset must be -32768..32767");
+      return;
     }
     logInfo("Writing CO2 offset %ld...", val);
     auto st = device.writeCo2Offset(static_cast<int16_t>(val));
@@ -2433,7 +2560,7 @@ void processCommand(const char* input) {
     long val = 0;
     Tokens tok;
     splitTokens(trimmed, tok);
-    if (tok.argc < 2 || !parseIntToken(tok.argv[1], val) || val < 0L || val > 65535L) {
+    if (tok.argc != 2 || !parseIntToken(tok.argv[1], val) || val < 0L || val > 65535L) {
       logWarn("gain must be 0..65535");
       return;
     }
