@@ -60,6 +60,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- HIL runner 2.3 now validates checked-sample ppm validity, step status/detail,
+  and exact public status enum numbers; a coherent sensor fault produces one
+  sensor-domain failure reason rather than contradictory evidence.
+- Destructive admission now independently validates the stored 256-byte
+  baseline image. Auto-adjust additionally requires the fresh pre-action idle
+  row, and stuck-line health evidence is scoped to the matching fault group.
+- Arduino and native ESP-IDF diagnostics no longer claim an undocumented
+  five-minute auto-adjust duration; D9 remains the authoritative running state.
 - HIL response classification no longer degrades definite non-OK statuses or
   semantic validator failures to operator review when success text is absent.
 - D9 is no longer globally ignored in custom-memory comparisons; it is allowed

@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 
-SCRIPT_VERSION = "2.2"
+SCRIPT_VERSION = "2.3"
 DEFAULT_BAUD = 115200
 DEFAULT_TIMEOUT_S = 8.0
 DEFAULT_COMMAND_TIMEOUT_S = 20.0
@@ -60,6 +60,27 @@ ANSI_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 PROMPT_RE = re.compile(r"(^|\r?\n)>\s*$")
 BOOL_TRUE = {"yes", "true", "1", "on"}
 BOOL_FALSE = {"no", "false", "0", "off"}
+STATUS_CODE_BY_NAME = {
+    "OK": 0,
+    "NOT_INITIALIZED": 1,
+    "INVALID_CONFIG": 2,
+    "E2_ERROR": 3,
+    "TIMEOUT": 4,
+    "INVALID_PARAM": 5,
+    "DEVICE_NOT_FOUND": 6,
+    "PEC_MISMATCH": 7,
+    "NACK": 8,
+    "BUSY": 9,
+    "IN_PROGRESS": 10,
+    "BUS_STUCK": 11,
+    "ALREADY_INITIALIZED": 12,
+    "OUT_OF_RANGE": 13,
+    "NOT_SUPPORTED": 14,
+    "VERIFY_MISMATCH": 15,
+    "OFFLINE": 16,
+    "CO2_SENSOR_ERROR": 17,
+    "PERSISTENT_STATE_UNCERTAIN": 18,
+}
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -608,8 +629,6 @@ def validate_checked_sample(
         failures.append(f"checked status status is {parsed.get('checked_status_status')}")
     elif parsed.get("checked_status_detail") != 0:
         failures.append(f"checked status OK detail is {parsed.get('checked_status_detail')}")
-    if parsed.get("checked_ppm_valid") is not True:
-        failures.append("checked ppm is not valid")
     if parsed.get("checked_status_valid") is not True:
         failures.append("checked status byte is not valid")
 
@@ -626,6 +645,8 @@ def validate_checked_sample(
                 f"status byte 0x{status_byte:02X} bit3 disagrees with co2Error={co2_error}"
             )
     if co2_error is False:
+        if parsed.get("checked_ppm_valid") is not True:
+            failures.append("clean checked ppm is not valid")
         if parsed.get("checked_error_attempted") is not False:
             failures.append("error-code read was attempted without CO2 error")
         if parsed.get("checked_error_status") != "OK":
@@ -651,6 +672,8 @@ def validate_checked_sample(
         if top.get("name") != "OK" or top.get("code") != 0:
             failures.append(f"clean checked sample returned {top.get('name')}")
     elif co2_error is True:
+        if parsed.get("checked_ppm_valid") is not False:
+            failures.append("sensor-error checked ppm was incorrectly marked valid")
         operating_functions = (state or {}).get("operating_functions")
         if not isinstance(operating_functions, int):
             reviews.append("error-code capability was not recorded before checked sample")
@@ -662,6 +685,10 @@ def validate_checked_sample(
             if parsed.get("checked_error_status") != "OK":
                 failures.append(
                     f"checked error-code status is {parsed.get('checked_error_status')}"
+                )
+            elif parsed.get("checked_error_detail") != 0:
+                failures.append(
+                    f"checked error-code OK detail is {parsed.get('checked_error_detail')}"
                 )
             if parsed.get("checked_error_valid") is not True:
                 failures.append("CO2 error code is not valid")
@@ -682,8 +709,11 @@ def validate_checked_sample(
                     "sensor-error enum/name is inconsistent with "
                     f"error code {error_code}"
                 )
-            if top.get("name") != "CO2_SENSOR_ERROR":
-                failures.append(f"CO2 sensor error returned {top.get('name')}")
+            if top.get("name") != "CO2_SENSOR_ERROR" or top.get("code") != 17:
+                failures.append(
+                    "CO2 sensor error returned "
+                    f"{top.get('name')} (code={top.get('code')})"
+                )
             elif isinstance(error_code, int) and top.get("detail") != error_code:
                 failures.append(
                     f"CO2 sensor status detail {top.get('detail')} != error code {error_code}"
@@ -691,6 +721,16 @@ def validate_checked_sample(
         else:
             if parsed.get("checked_error_attempted") is not False:
                 failures.append("unadvertised error-code read was attempted")
+            if parsed.get("checked_error_status") != "OK":
+                failures.append(
+                    "unattempted error-code step status is "
+                    f"{parsed.get('checked_error_status')}"
+                )
+            elif parsed.get("checked_error_detail") != 0:
+                failures.append(
+                    "unattempted error-code step OK detail is "
+                    f"{parsed.get('checked_error_detail')}"
+                )
             if parsed.get("checked_error_valid") is not False:
                 failures.append("unadvertised error code was marked valid")
             if "checked_error_code" in parsed:
@@ -700,8 +740,11 @@ def validate_checked_sample(
                 parsed.get("checked_sensor_error_value"),
             ) != ("UNKNOWN", 255):
                 failures.append("unsupported detailed-error path did not report UNKNOWN (255)")
-            if top.get("name") != "CO2_SENSOR_ERROR":
-                failures.append(f"CO2 sensor error returned {top.get('name')}")
+            if top.get("name") != "CO2_SENSOR_ERROR" or top.get("code") != 17:
+                failures.append(
+                    "CO2 sensor error returned "
+                    f"{top.get('name')} (code={top.get('code')})"
+                )
             elif isinstance(status_byte, int) and top.get("detail") != status_byte:
                 failures.append(
                     f"CO2 sensor status detail {top.get('detail')} != status byte {status_byte}"
@@ -742,6 +785,14 @@ def custom_memory_diff(
     return expected, unexpected
 
 
+def is_complete_custom_memory_image(value: Any) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) == CUSTOM_MEMORY_SIZE
+        and all(type(item) is int and 0 <= item <= 0xFF for item in value)
+    )
+
+
 def validate_parsed(
     spec: CommandSpec,
     parsed: dict[str, Any],
@@ -755,6 +806,22 @@ def validate_parsed(
         "status_optional" in spec.validators
         and status.get("name") == "NOT_SUPPORTED"
     )
+    statuses = parsed.get("statuses")
+    if not isinstance(statuses, list):
+        statuses = [status] if status else []
+    for reported_status in statuses:
+        if not isinstance(reported_status, dict):
+            failures.append("parsed status evidence is not structured")
+            continue
+        name = reported_status.get("name")
+        code = reported_status.get("code")
+        expected_code = STATUS_CODE_BY_NAME.get(name)
+        if expected_code is None:
+            failures.append(f"unrecognized status name {name}")
+        elif code != expected_code:
+            failures.append(
+                f"status {name} reported code {code}, expected {expected_code}"
+            )
 
     for validator in spec.validators:
         if validator == "version":
@@ -1272,7 +1339,11 @@ def validate_parsed(
             if "online" not in parsed:
                 reviews.append("online flag not parsed")
             if validator == "health_faulted_since_pre":
-                if not isinstance(before_failures, int):
+                if context.get("fault_pre_group") != spec.group:
+                    reviews.append(
+                        "pre-fault health snapshot does not belong to this fault group"
+                    )
+                elif not isinstance(before_failures, int):
                     reviews.append("pre-fault total-failure counter not recorded")
                 elif not isinstance(after_failures, int):
                     reviews.append("in-fault total-failure counter not parsed")
@@ -1889,7 +1960,7 @@ def operator_fault_specs(args: argparse.Namespace) -> list[CommandSpec]:
                 [
                     CommandSpec("levels", f"Record idle levels before the {line}-low fault.", group=group, expected_any=("SCL:", "SDA:"), validators=("levels_idle",), requires_opt_in="--include-stuck-line"),
                     CommandSpec("drv", f"Capture health before the {line}-low fault.", group=group, expected_any=("Driver Health",), validators=("health_ready",), requires_opt_in="--include-stuck-line"),
-                    CommandSpec(f"operator: apply {line}-low jig", f"Apply the reviewed open-drain/current-limited {line}-low fault jig; never force a line high.", group=group, send=False, operator_required=True, requires_opt_in="--include-stuck-line"),
+                    CommandSpec(f"operator: apply {line}-low jig", f"Apply the reviewed open-drain/current-limited {line}-low fault jig; never force a line high.", group=group, send=False, operator_required=True, requires_opt_in="--include-stuck-line", dynamic="fault_preflight_passed"),
                     CommandSpec("levels", f"Record line levels during the {line}-low fault.", group=group, expected_any=("SCL:", "SDA:"), validators=(level_validator,), requires_opt_in="--include-stuck-line"),
                     CommandSpec("buscheck", f"Capture bounded raw bus-idle failure during {line}-low.", group=group, expected_any=("Status:",), validators=("fault_bus_line",), timeout_s=30.0, requires_opt_in="--include-stuck-line"),
                     CommandSpec("status", f"Capture bounded tracked status failure during {line}-low.", group=group, expected_any=("Status:",), validators=("fault_bus_line",), timeout_s=30.0, requires_opt_in="--include-stuck-line"),
@@ -2039,14 +2110,18 @@ def resolve_dynamic_command(spec: CommandSpec, state: dict[str, Any]) -> tuple[s
             return None, "recorded address baseline was not captured"
         return f"addr rebegin {value}", None
     if spec.dynamic == "auto_adjust_idle":
-        if state.get("baseline_complete") is not True:
-            return None, "complete auto-adjust baseline preflight did not pass"
-        if state.get("baseline_auto_adjust_running") is not False:
-            return None, "auto-adjust baseline was not parsed as idle"
+        if state.get("auto_adjust_fresh_idle_passed") is not True:
+            return None, "fresh pre-action auto-adjust idle check did not pass"
         return spec.command, None
     if spec.dynamic == "auto_adjust_authorized":
         if state.get("auto_adjust_authorized") is not True:
             return None, "controlled auto-adjust conditions were not explicitly confirmed"
+        if state.get("auto_adjust_fresh_idle_passed") is not True:
+            return None, "fresh pre-action auto-adjust idle check did not pass"
+        return spec.command, None
+    if spec.dynamic == "fault_preflight_passed":
+        if state.get("fault_preflight_group") != spec.group:
+            return None, "released levels and pre-fault health did not pass for this fault group"
         return spec.command, None
     return spec.command, None
 
@@ -2072,12 +2147,20 @@ def maintenance_write_block_reason(spec: CommandSpec, state: dict[str, Any]) -> 
         return "not sent: the complete required baseline preflight did not pass"
     if state.get("baseline_custom_memory_complete") is not True:
         return "not sent: complete custom-memory baseline was not checkpointed"
-    if not isinstance(state.get("baseline_custom_memory_captured_utc"), str):
+    if not is_complete_custom_memory_image(state.get("baseline_custom_memory")):
+        return "not sent: immutable 256-byte custom-memory baseline is missing or invalid"
+    captured_utc = state.get("baseline_custom_memory_captured_utc")
+    if not isinstance(captured_utc, str) or not captured_utc.strip():
         return "not sent: immutable custom-memory capture time was not recorded"
     if state.get("baseline_device_address") != state.get("configured_device_address"):
         return "not sent: persistent bus-address baseline does not match configured address"
     if state.get("baseline_auto_adjust_preflight_complete") is not True:
         return "not sent: capability-aware auto-adjust idle preflight did not pass"
+    if (
+        spec.group.startswith("auto-adjust")
+        and state.get("auto_adjust_fresh_idle_passed") is not True
+    ):
+        return "not sent: fresh pre-action auto-adjust idle check did not pass"
     target_baselines = {
         "maintenance-interval": "baseline_measurement_interval_ds",
         "maintenance-factor": "baseline_co2_interval_factor",
@@ -2341,6 +2424,15 @@ def update_state(state: dict[str, Any], row: dict[str, Any]) -> None:
         and parsed.get("operator_confirmed") is True
     ):
         state["auto_adjust_authorized"] = True
+    if (
+        group == "auto-adjust"
+        and planned_command == "autoadj"
+        and "before the one-shot" in str(row.get("description", "")).lower()
+    ):
+        state["auto_adjust_fresh_idle_passed"] = (
+            result == RESULT_PASS
+            and parsed.get("auto_adjust_running") is False
+        )
     if group.endswith("-baseline"):
         typed_commands = {
             "partnamehex",
@@ -2375,12 +2467,32 @@ def update_state(state: dict[str, Any], row: dict[str, Any]) -> None:
                 and state.get("baseline_failure_latched") is not True
             )
     if (
-        group.startswith("fault-")
+        group in {"fault-sda-low", "fault-scl-low"}
+        and planned_command == "levels"
+        and "before the" in str(row.get("description", "")).lower()
+    ):
+        if result == RESULT_PASS:
+            state["fault_released_levels_group"] = group
+        else:
+            state.pop("fault_released_levels_group", None)
+            state.pop("fault_preflight_group", None)
+    if (
+        group in {"fault-sda-low", "fault-scl-low"}
         and planned_command == "drv"
         and "before the" in str(row.get("description", "")).lower()
-        and result == RESULT_PASS
     ):
-        state["fault_pre_total_failures"] = parsed.get("total_failures")
+        if (
+            result == RESULT_PASS
+            and state.get("fault_released_levels_group") == group
+            and isinstance(parsed.get("total_failures"), int)
+        ):
+            state["fault_pre_total_failures"] = parsed["total_failures"]
+            state["fault_pre_group"] = group
+            state["fault_preflight_group"] = group
+        else:
+            state.pop("fault_pre_total_failures", None)
+            state.pop("fault_pre_group", None)
+            state.pop("fault_preflight_group", None)
     if group == "address-candidate" and planned_command == "dirty" and result == RESULT_PASS:
         state["address_candidate_diagnostic_passed"] = True
     if (

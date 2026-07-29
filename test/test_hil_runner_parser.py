@@ -28,6 +28,7 @@ class HilRunnerParserTest(unittest.TestCase):
         state: dict[str, object] = {
             "baseline_complete": True,
             "baseline_custom_memory_complete": True,
+            "baseline_custom_memory": [0] * 256,
             "baseline_custom_memory_captured_utc": "2026-07-29T10:00:00Z",
             "configured_device_address": 0,
             "baseline_device_address": 0,
@@ -40,6 +41,45 @@ class HilRunnerParserTest(unittest.TestCase):
         }
         state.update(overrides)
         return state
+
+    def resolved_mutation(
+        self,
+        target: str,
+        count: int,
+        first: int,
+        last: int,
+        attempted: int,
+    ) -> dict[str, object]:
+        return {
+            "persistent_config_dirty": False,
+            "persistent_config_dirty_error": {
+                "name": "OK",
+                "code": 0,
+                "detail": 0,
+            },
+            "resync_needed": False,
+            "mutation_unresolved": False,
+            "mutation_target": target,
+            "mutation_target_value": 0,
+            "mutation_effect": "VERIFIED",
+            "mutation_effect_value": 4,
+            "mutation_first_address": first,
+            "mutation_last_address": last,
+            "mutation_elements_requested": count,
+            "mutation_elements_acknowledged": count,
+            "mutation_elements_observed": count,
+            "mutation_elements_matched": count,
+            "mutation_attempted_value": attempted,
+            "mutation_pre_observed_valid": False,
+            "mutation_pre_observed_value": 0,
+            "mutation_observed_valid": True,
+            "mutation_observed_value": attempted,
+            "mutation_cause": {
+                "name": "OK",
+                "code": 0,
+                "detail": 0,
+            },
+        }
 
     def test_parse_selftest_counts_ansi_output(self) -> None:
         text = """
@@ -201,7 +241,7 @@ Selftest result: pass=9 fail=1 skip=0
                 "mutation_unresolved": True,
                 "persistent_config_dirty_error": {
                     "name": "VERIFY_MISMATCH",
-                    "code": 14,
+                    "code": 15,
                     "detail": 1,
                 },
             },
@@ -419,8 +459,11 @@ Selftest result: pass=9 fail=1 skip=0
 
         sensor_error = text.replace(
             "Status: OK (code=0, detail=0)",
-            "Status: CO2_SENSOR_ERROR (code=15, detail=200)",
+            "Status: CO2_SENSOR_ERROR (code=17, detail=200)",
             1,
+        ).replace(
+            "CO2 value: 612 ppm, valid=yes",
+            "CO2 value: 612 ppm, valid=no",
         ).replace(
             "byte=0x00, co2Error=no",
             "byte=0x08, co2Error=yes",
@@ -437,7 +480,10 @@ Selftest result: pass=9 fail=1 skip=0
             parsed,
             {"operating_functions": 0x80},
         )
-        self.assertTrue(any("sensor reported SENSOR_COUNTS_LOW" in item for item in failures))
+        self.assertEqual(
+            ["sensor reported SENSOR_COUNTS_LOW (code=200)"],
+            failures,
+        )
         self.assertEqual([], reviews)
 
     def test_checked_sample_kind_mismatch_and_missing_fields_are_not_pass(self) -> None:
@@ -716,6 +762,52 @@ Sensor error: NONE (enum=0)
         )
         runner.update_state(state, row)
         self.assertIsNone(runner.maintenance_write_block_reason(restore, state))
+
+    def test_restore_is_blocked_after_each_post_write_failure_or_uncertainty(self) -> None:
+        restore = runner.CommandSpec(
+            "factor <recorded-baseline>",
+            "restore",
+            group="maintenance-factor",
+            destructive=True,
+            dynamic="factor_baseline",
+        )
+        for planned_command, result in (
+            ("factor", runner.RESULT_FAIL),
+            ("dirty", runner.RESULT_FAIL),
+            ("reg dump 0 256", runner.RESULT_FAIL),
+            ("factor", runner.RESULT_OPERATOR),
+            ("dirty", runner.RESULT_OPERATOR),
+            ("reg dump 0 256", runner.RESULT_OPERATOR),
+        ):
+            state = self.admitted_state(baseline_co2_interval_factor=-1)
+            runner.record_persistent_write_expectation(
+                {
+                    "result": runner.RESULT_PASS,
+                    "destructive": True,
+                    "command": "factor 1",
+                    "group": "maintenance-factor",
+                },
+                state,
+            )
+            failed = runner.result_row(
+                runner.CommandSpec(
+                    planned_command,
+                    "post-write verification",
+                    group="maintenance-factor",
+                ),
+                planned_command,
+                result,
+                "failed or uncertain",
+                0.1,
+                "",
+                "test",
+                {},
+            )
+            runner.update_state(state, failed)
+            self.assertIn(
+                "maintenance verification step failed",
+                runner.maintenance_write_block_reason(restore, state) or "",
+            )
 
     def test_custom_memory_diff_allows_only_documented_volatile_addresses(self) -> None:
         baseline = [0] * 256
@@ -1048,7 +1140,7 @@ Sensor error: NONE (enum=0)
                 "start",
                 dynamic="auto_adjust_authorized",
             ),
-            {"baseline_auto_adjust_running": False},
+            {"auto_adjust_fresh_idle_passed": True},
         )
         self.assertIn("not explicitly confirmed", reason or "")
 
@@ -1074,6 +1166,72 @@ Sensor error: NONE (enum=0)
             state,
         )
         self.assertIn("address-workflow step failed", blocked or "")
+
+    def test_auto_adjust_requires_the_fresh_pre_action_idle_result(self) -> None:
+        pre_action = runner.CommandSpec(
+            "autoadj",
+            "Require auto-adjust to be idle before the one-shot request.",
+            group="auto-adjust",
+        )
+        running = runner.result_row(
+            pre_action,
+            "autoadj",
+            runner.RESULT_FAIL,
+            "auto-adjust running",
+            0.1,
+            "",
+            "test",
+            {"auto_adjust_running": True},
+        )
+        state = self.admitted_state(
+            baseline_auto_adjust_running=False,
+            auto_adjust_authorized=True,
+        )
+        runner.update_state(state, running)
+        self.assertIs(
+            False,
+            state["auto_adjust_fresh_idle_passed"],
+        )
+        _, reason = runner.resolve_dynamic_command(
+            runner.CommandSpec(
+                "autoadj start",
+                "start",
+                group="auto-adjust",
+                dynamic="auto_adjust_authorized",
+            ),
+            state,
+        )
+        self.assertIn("fresh pre-action", reason or "")
+        self.assertIn(
+            "fresh pre-action",
+            runner.maintenance_write_block_reason(
+                runner.CommandSpec(
+                    "autoadj start",
+                    "start",
+                    group="auto-adjust",
+                    destructive=True,
+                ),
+                state,
+            )
+            or "",
+        )
+
+        idle = dict(running)
+        idle["result"] = runner.RESULT_PASS
+        idle["parsed"] = {"auto_adjust_running": False}
+        runner.update_state(state, idle)
+        self.assertIs(True, state["auto_adjust_fresh_idle_passed"])
+        command, reason = runner.resolve_dynamic_command(
+            runner.CommandSpec(
+                "autoadj start",
+                "start",
+                group="auto-adjust",
+                dynamic="auto_adjust_authorized",
+            ),
+            state,
+        )
+        self.assertEqual("autoadj start", command)
+        self.assertIsNone(reason)
 
     def test_unconfirmed_operator_transition_aborts_plan(self) -> None:
         spec = runner.CommandSpec(
@@ -1207,10 +1365,36 @@ Sensor error: NONE (enum=0)
         self.assertEqual(runner.RESULT_FAIL, result)
         self.assertIn("TIMEOUT", reason)
 
+        no_validator = runner.CommandSpec(
+            "read",
+            "read",
+            expected_any=("CO2 avg:",),
+        )
+        result, reason = runner.classify_response(
+            no_validator,
+            "Status: NACK (code=8, detail=0)\n",
+            False,
+            runner.parse_response(
+                "read", "Status: NACK (code=8, detail=0)\n"
+            ),
+        )
+        self.assertEqual(runner.RESULT_FAIL, result)
+        self.assertIn("NACK", reason)
+
+        mismatched_status = "Status: NACK (code=7, detail=0)\n"
+        result, reason = runner.classify_response(
+            no_validator,
+            mismatched_status,
+            False,
+            runner.parse_response("read", mismatched_status),
+        )
+        self.assertEqual(runner.RESULT_FAIL, result)
+        self.assertIn("expected 8", reason)
+
         accepted = (
             (
                 runner.CommandSpec("filter", "optional", expected_any=("Status:",), validators=("status_optional",)),
-                "Status: NOT_SUPPORTED (code=13, detail=0)\n",
+                "Status: NOT_SUPPORTED (code=14, detail=0)\n",
             ),
             (
                 runner.CommandSpec("addr 1", "address", expected_any=("Status:",), validators=("status_address_uncertain",)),
@@ -1222,11 +1406,11 @@ Sensor error: NONE (enum=0)
             ),
             (
                 runner.CommandSpec("read", "unplug", expected_any=("Status:",), validators=("expected_failure",)),
-                "Status: NACK (code=7, detail=0)\n",
+                "Status: NACK (code=8, detail=0)\n",
             ),
             (
                 runner.CommandSpec("status", "stuck", expected_any=("Status:",), validators=("fault_bus_line",)),
-                "Status: BUS_STUCK (code=10, detail=0)\n",
+                "Status: BUS_STUCK (code=11, detail=0)\n",
             ),
         )
         for spec, text in accepted:
@@ -1264,6 +1448,13 @@ Sensor error: NONE (enum=0)
             "does not match configured address",
             runner.maintenance_write_block_reason(spec, mismatch) or "",
         )
+        for invalid_image in (None, [0] * 255, [0] * 255 + [256]):
+            invalid = dict(complete)
+            invalid["baseline_custom_memory"] = invalid_image
+            self.assertIn(
+                "baseline is missing or invalid",
+                runner.maintenance_write_block_reason(spec, invalid) or "",
+            )
 
     def test_configured_address_is_not_overwritten_by_candidate_state(self) -> None:
         state: dict[str, object] = {"configured_device_address": 0}
@@ -1306,7 +1497,7 @@ Sensor error: NONE (enum=0)
         )
         self.assertEqual(runner.RESULT_FAIL, result)
 
-        unsupported = "Status: NOT_SUPPORTED (code=13, detail=0)\n"
+        unsupported = "Status: NOT_SUPPORTED (code=14, detail=0)\n"
         result, reason = runner.classify_response(
             spec,
             unsupported,
@@ -1318,10 +1509,10 @@ Sensor error: NONE (enum=0)
 
     def test_checked_sensor_error_without_detailed_capability_is_coherent_failure(self) -> None:
         text = """
-Status: CO2_SENSOR_ERROR (code=15, detail=8)
+Status: CO2_SENSOR_ERROR (code=17, detail=8)
 Sample kind: FAST (MV3)
 Value step: attempted=yes status=OK detail=0
-CO2 value: 612 ppm, valid=yes
+CO2 value: 612 ppm, valid=no
 Status step: attempted=yes status=OK detail=0 valid=yes, byte=0x08, co2Error=yes
 Error-code step: attempted=no status=OK detail=0 valid=no
 Sensor error: UNKNOWN (enum=255)
@@ -1333,16 +1524,71 @@ Sensor error: UNKNOWN (enum=255)
             {"operating_functions": 0x00},
         )
         self.assertEqual([], reviews)
-        self.assertEqual(1, len([item for item in failures if item.startswith("sensor reported")]))
+        self.assertEqual(["sensor reported UNKNOWN (status=0x08)"], failures)
         self.assertFalse(any("transport" in item.lower() for item in failures))
 
-    def test_stuck_line_validators_require_exact_selected_fault_and_bus_stuck(self) -> None:
+    def test_checked_sensor_error_rejects_contradictory_step_evidence(self) -> None:
+        advertised = """
+Status: CO2_SENSOR_ERROR (code=17, detail=200)
+Sample kind: FAST (MV3)
+Value step: attempted=yes status=OK detail=0
+CO2 value: 612 ppm, valid=no
+Status step: attempted=yes status=OK detail=0 valid=yes, byte=0x08, co2Error=yes
+Error-code step: attempted=yes status=OK detail=99 valid=yes, code=200 (sensor counts low)
+Sensor error: SENSOR_COUNTS_LOW (enum=200)
+"""
         failures, reviews = runner.validate_parsed(
-            runner.CommandSpec("levels", "SCL low", validators=("levels_scl_low",)),
-            {"scl_high": False, "sda_high": False},
+            runner.CommandSpec(
+                "samplefast",
+                "checked",
+                validators=("checked_fast",),
+            ),
+            runner.parse_response("samplefast", advertised),
+            {"operating_functions": 0x80},
         )
-        self.assertTrue(failures)
+        self.assertTrue(any("error-code OK detail" in item for item in failures))
         self.assertEqual([], reviews)
+
+        unadvertised = """
+Status: CO2_SENSOR_ERROR (code=17, detail=8)
+Sample kind: FAST (MV3)
+Value step: attempted=yes status=OK detail=0
+CO2 value: 612 ppm, valid=no
+Status step: attempted=yes status=OK detail=0 valid=yes, byte=0x08, co2Error=yes
+Error-code step: attempted=no status=TIMEOUT detail=99 valid=no
+Sensor error: UNKNOWN (enum=255)
+"""
+        failures, reviews = runner.validate_parsed(
+            runner.CommandSpec(
+                "samplefast",
+                "checked",
+                validators=("checked_fast",),
+            ),
+            runner.parse_response("samplefast", unadvertised),
+            {"operating_functions": 0x00},
+        )
+        self.assertTrue(
+            any("unattempted error-code step status" in item for item in failures)
+        )
+        self.assertEqual([], reviews)
+
+    def test_stuck_line_validators_require_exact_selected_fault_and_bus_stuck(self) -> None:
+        for validator, good in (
+            ("levels_sda_low", {"scl_high": True, "sda_high": False}),
+            ("levels_scl_low", {"scl_high": False, "sda_high": True}),
+        ):
+            failures, reviews = runner.validate_parsed(
+                runner.CommandSpec("levels", "selected low", validators=(validator,)),
+                good,
+            )
+            self.assertEqual([], failures)
+            self.assertEqual([], reviews)
+            failures, reviews = runner.validate_parsed(
+                runner.CommandSpec("levels", "both low", validators=(validator,)),
+                {"scl_high": False, "sda_high": False},
+            )
+            self.assertTrue(failures)
+            self.assertEqual([], reviews)
         failures, _ = runner.validate_parsed(
             runner.CommandSpec("status", "fault", validators=("fault_bus_line",)),
             {"status": {"name": "TIMEOUT", "code": 4, "detail": 25000}},
@@ -1377,7 +1623,10 @@ Sensor error: UNKNOWN (enum=255)
 
     def test_in_fault_health_requires_counter_movement_and_coherent_state(self) -> None:
         spec = runner.CommandSpec(
-            "drv", "fault", validators=("health_faulted_since_pre",)
+            "drv",
+            "fault",
+            group="fault-sda-low",
+            validators=("health_faulted_since_pre",),
         )
         good = {
             "driver_state": "DEGRADED",
@@ -1386,15 +1635,111 @@ Sensor error: UNKNOWN (enum=255)
             "total_failures": 11,
         }
         failures, reviews = runner.validate_parsed(
-            spec, good, {"fault_pre_total_failures": 10}
+            spec,
+            good,
+            {
+                "fault_pre_total_failures": 10,
+                "fault_pre_group": "fault-sda-low",
+            },
         )
         self.assertEqual([], failures)
         self.assertEqual([], reviews)
         bad = dict(good, online=False, total_failures=10)
         failures, _ = runner.validate_parsed(
-            spec, bad, {"fault_pre_total_failures": 10}
+            spec,
+            bad,
+            {
+                "fault_pre_total_failures": 10,
+                "fault_pre_group": "fault-sda-low",
+            },
         )
         self.assertGreaterEqual(len(failures), 2)
+
+    def test_stuck_line_health_snapshot_is_scoped_to_each_fault_group(self) -> None:
+        state: dict[str, object] = {}
+        released_sda = runner.result_row(
+            runner.CommandSpec(
+                "levels",
+                "Record idle levels before the SDA-low fault.",
+                group="fault-sda-low",
+            ),
+            "levels",
+            runner.RESULT_PASS,
+            "",
+            0.1,
+            "",
+            "test",
+            {"scl_high": True, "sda_high": True},
+        )
+        runner.update_state(state, released_sda)
+        pre_sda = runner.result_row(
+            runner.CommandSpec(
+                "drv",
+                "Capture health before the SDA-low fault.",
+                group="fault-sda-low",
+            ),
+            "drv",
+            runner.RESULT_PASS,
+            "",
+            0.1,
+            "",
+            "test",
+            {"total_failures": 10},
+        )
+        runner.update_state(state, pre_sda)
+        self.assertEqual("fault-sda-low", state["fault_pre_group"])
+        command, reason = runner.resolve_dynamic_command(
+            runner.CommandSpec(
+                "operator: apply SDA-low jig",
+                "apply",
+                group="fault-sda-low",
+                dynamic="fault_preflight_passed",
+            ),
+            state,
+        )
+        self.assertEqual("operator: apply SDA-low jig", command)
+        self.assertIsNone(reason)
+
+        released_scl = dict(released_sda)
+        released_scl["group"] = "fault-scl-low"
+        released_scl["description"] = "Record idle levels before the SCL-low fault."
+        runner.update_state(state, released_scl)
+        pre_scl = dict(pre_sda)
+        pre_scl["group"] = "fault-scl-low"
+        pre_scl["description"] = "Capture health before the SCL-low fault."
+        pre_scl["result"] = runner.RESULT_FAIL
+        pre_scl["parsed"] = {}
+        runner.update_state(state, pre_scl)
+        self.assertNotIn("fault_pre_total_failures", state)
+        self.assertNotIn("fault_pre_group", state)
+        _, reason = runner.resolve_dynamic_command(
+            runner.CommandSpec(
+                "operator: apply SCL-low jig",
+                "apply",
+                group="fault-scl-low",
+                dynamic="fault_preflight_passed",
+            ),
+            state,
+        )
+        self.assertIn("did not pass for this fault group", reason or "")
+
+        failures, reviews = runner.validate_parsed(
+            runner.CommandSpec(
+                "drv",
+                "in fault",
+                group="fault-scl-low",
+                validators=("health_faulted_since_pre",),
+            ),
+            {
+                "driver_state": "DEGRADED",
+                "online": True,
+                "consecutive_failures": 1,
+                "total_failures": 11,
+            },
+            state,
+        )
+        self.assertEqual([], failures)
+        self.assertTrue(any("does not belong" in item for item in reviews))
 
     def test_repeated_checkpoints_preserve_capture_time_bytes_and_typed_baseline(self) -> None:
         args = runner.parse_args(["--dry-run"])
@@ -1403,7 +1748,7 @@ Sensor error: UNKNOWN (enum=255)
             "baseline_custom_memory_captured_utc": "2026-07-29T10:00:00Z",
             "baseline_typed_results": {
                 "filter": {
-                    "status": {"name": "NOT_SUPPORTED", "code": 13, "detail": 0},
+                    "status": {"name": "NOT_SUPPORTED", "code": 14, "detail": 0},
                     "supported": False,
                     "value": {},
                 }
@@ -1442,17 +1787,38 @@ Sensor error: UNKNOWN (enum=255)
             "--fixture-id", "fixture",
             "--electrical-authority", "authority",
         ]
-        for flag, value in (
-            ("--board", ""),
-            ("--target-name", "   "),
-            ("--operator", "UnSpEcIfIeD"),
-        ):
-            argv = list(base)
-            index = argv.index(flag)
-            argv[index + 1] = value
-            with contextlib.redirect_stderr(io.StringIO()):
-                with self.assertRaises(SystemExit):
-                    runner.parse_args(argv)
+        required = (
+            "--board",
+            "--target-name",
+            "--operator",
+            "--sensor-id",
+            "--fixture-id",
+            "--electrical-authority",
+        )
+        for flag in required:
+            for value in ("", "   ", "UnSpEcIfIeD"):
+                argv = list(base)
+                index = argv.index(flag)
+                argv[index + 1] = value
+                with contextlib.redirect_stderr(io.StringIO()):
+                    with self.assertRaises(SystemExit):
+                        runner.parse_args(argv)
+
+        power = [
+            "--port", "COM1",
+            "--include-power-cycle",
+            "--confirm-power-cycle",
+            "--board", "board",
+            "--target-name", "target",
+            "--operator", "operator",
+            "--sensor-id", "sensor",
+            "--fixture-id", "fixture",
+            "--electrical-authority", "authority",
+            "--power-procedure", "   ",
+        ]
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                runner.parse_args(power)
 
     def test_factor_zero_is_rejected_and_nonzero_boundaries_are_accepted(self) -> None:
         prefix = [
@@ -1500,6 +1866,58 @@ Sensor error: UNKNOWN (enum=255)
             )
         )
 
+        plan_args = (
+            [
+                "--dry-run",
+                "--include-persistent-writes",
+                "--confirm-persistent-writes",
+                "--maintenance-interval", "160",
+                "--write-interval-factor", "1",
+                "--write-operating-mode", "1",
+                "--write-part-name-hex", "41" * 16,
+            ],
+            [
+                "--dry-run",
+                "--include-persistent-writes",
+                "--confirm-persistent-writes",
+                "--include-calibration-writes",
+                "--confirm-calibration-writes",
+                "--write-co2-offset", "1",
+                "--write-co2-gain", "32768",
+            ],
+            [
+                "--dry-run",
+                "--include-address-change",
+                "--candidate-address", "1",
+                "--confirm-address-change",
+                "--confirm-address-restore",
+            ],
+            [
+                "--dry-run",
+                "--include-auto-adjust",
+                "--confirm-auto-adjust",
+            ],
+            ["--dry-run", "--include-unplug-replug"],
+            ["--dry-run", "--include-stuck-line", "--confirm-stuck-line"],
+            ["--dry-run", "--include-power-cycle", "--confirm-power-cycle"],
+        )
+        all_plans = [quick, complete]
+        all_plans.extend(
+            runner.build_plan(runner.parse_args(argv))
+            for argv in plan_args
+        )
+        self.assertFalse(
+            any(
+                re.search(r"\breg\s+write\b", spec.command)
+                for built in all_plans
+                for spec in built
+            )
+        )
+        self.assertNotRegex(
+            MODULE_PATH.read_text(encoding="utf-8"),
+            r"CommandSpec\(\s*[\"']reg\s+write\b",
+        )
+
     def test_baseline_records_versions_typed_values_and_filter_read_only(self) -> None:
         specs = runner.baseline_specs("maintenance-baseline", "opt-in")
         commands = [spec.command for spec in specs]
@@ -1517,7 +1935,7 @@ Sensor error: UNKNOWN (enum=255)
         interval_spec = next(spec for spec in specs if spec.command == "interval")
         failures, reviews = runner.validate_parsed(
             interval_spec,
-            {"status": {"name": "NOT_SUPPORTED", "code": 13, "detail": 0}},
+            {"status": {"name": "NOT_SUPPORTED", "code": 14, "detail": 0}},
             {"operating_functions": 0x10},
         )
         self.assertTrue(any("advertised interval" in item for item in failures))
@@ -1535,7 +1953,7 @@ Sensor error: UNKNOWN (enum=255)
             {
                 "status": {
                     "name": "NOT_SUPPORTED",
-                    "code": 13,
+                    "code": 14,
                     "detail": 0,
                 }
             },
@@ -1543,6 +1961,38 @@ Sensor error: UNKNOWN (enum=255)
         runner.update_state(state, unsupported)
         self.assertFalse(
             state["baseline_typed_results"]["filter"]["supported"]  # type: ignore[index]
+        )
+
+        all_results: dict[str, object] = {}
+        for command in sorted(required):
+            spec = next(item for item in specs if item.command == command)
+            row = runner.result_row(
+                spec,
+                command,
+                runner.RESULT_PASS,
+                "",
+                0.1,
+                "",
+                "test",
+                {
+                    "status": {
+                        "name": "NOT_SUPPORTED",
+                        "code": 14,
+                        "detail": 0,
+                    }
+                },
+            )
+            runner.update_state(all_results, row)
+        self.assertEqual(
+            required,
+            set(all_results["baseline_typed_results"]),  # type: ignore[arg-type]
+        )
+        self.assertTrue(
+            all(
+                result["supported"] is False
+                and result["status"]["name"] == "NOT_SUPPORTED"
+                for result in all_results["baseline_typed_results"].values()  # type: ignore[union-attr]
+            )
         )
 
     def test_reversible_row_restores_with_typed_owner_and_full_image_check(self) -> None:
@@ -1563,6 +2013,163 @@ Sensor error: UNKNOWN (enum=255)
         self.assertIn("mutation_verified", specs[6].validators)
         self.assertIn("custom_memory_restored", specs[7].validators)
         self.assertFalse(any("reg write" in spec.command for spec in specs))
+
+    def test_successful_reversible_row_preserves_typed_end_to_end_evidence(self) -> None:
+        baseline = [0] * 256
+        baseline[0xCB] = 0xFF
+        state = self.admitted_state(
+            baseline_custom_memory=baseline,
+            baseline_co2_interval_factor=-1,
+        )
+
+        test_write = runner.result_row(
+            runner.CommandSpec(
+                "factor 1",
+                "test",
+                group="maintenance-factor",
+                destructive=True,
+            ),
+            "factor 1",
+            runner.RESULT_PASS,
+            "",
+            0.1,
+            "",
+            "test",
+            {"status": {"name": "OK", "code": 0, "detail": 0}},
+        )
+        runner.record_persistent_write_expectation(test_write, state)
+
+        readback = runner.CommandSpec(
+            "factor",
+            "readback",
+            group="maintenance-factor",
+            validators=("status_ok", "factor_read", "factor_expected"),
+        )
+        failures, reviews = runner.validate_parsed(
+            readback,
+            {
+                "status": {"name": "OK", "code": 0, "detail": 0},
+                "co2_interval_factor": 1,
+            },
+            state,
+        )
+        self.assertEqual([], failures)
+        self.assertEqual([], reviews)
+
+        test_diagnostic = self.resolved_mutation(
+            "CO2_INTERVAL_FACTOR", 1, 0xCB, 0xCB, 1
+        )
+        dirty_spec = runner.CommandSpec(
+            "dirty",
+            "diagnostic",
+            group="maintenance-factor",
+            validators=("dirty_clean", "dirty_state", "mutation_verified"),
+        )
+        failures, reviews = runner.validate_parsed(
+            dirty_spec, test_diagnostic, state
+        )
+        self.assertEqual([], failures)
+        self.assertEqual([], reviews)
+        runner.update_state(
+            state,
+            runner.result_row(
+                dirty_spec,
+                "dirty",
+                runner.RESULT_PASS,
+                "",
+                0.1,
+                "",
+                "test",
+                test_diagnostic,
+            ),
+        )
+
+        post_test = baseline.copy()
+        post_test[0xCB] = 1
+        failures, reviews = runner.validate_parsed(
+            runner.CommandSpec(
+                "reg dump 0 256",
+                "post-test",
+                validators=("custom_memory_complete", "custom_memory_target_only"),
+            ),
+            {
+                "custom_memory": post_test,
+                "custom_memory_complete": True,
+            },
+            state,
+        )
+        self.assertEqual([], failures)
+        self.assertEqual([], reviews)
+
+        restore = runner.CommandSpec(
+            "factor <recorded-baseline>",
+            "restore",
+            group="maintenance-factor",
+            destructive=True,
+            dynamic="factor_baseline",
+        )
+        self.assertIsNone(runner.maintenance_write_block_reason(restore, state))
+        command, reason = runner.resolve_dynamic_command(restore, state)
+        self.assertEqual("factor -1", command)
+        self.assertIsNone(reason)
+        restore_row = runner.result_row(
+            restore,
+            command or "",
+            runner.RESULT_PASS,
+            "",
+            0.1,
+            "",
+            "test",
+            {"status": {"name": "OK", "code": 0, "detail": 0}},
+        )
+        runner.record_persistent_write_expectation(restore_row, state)
+
+        failures, reviews = runner.validate_parsed(
+            readback,
+            {
+                "status": {"name": "OK", "code": 0, "detail": 0},
+                "co2_interval_factor": -1,
+            },
+            state,
+        )
+        self.assertEqual([], failures)
+        self.assertEqual([], reviews)
+
+        restored_diagnostic = self.resolved_mutation(
+            "CO2_INTERVAL_FACTOR", 1, 0xCB, 0xCB, 0xFF
+        )
+        failures, reviews = runner.validate_parsed(
+            dirty_spec, restored_diagnostic, state
+        )
+        self.assertEqual([], failures)
+        self.assertEqual([], reviews)
+        runner.update_state(
+            state,
+            runner.result_row(
+                dirty_spec,
+                "dirty",
+                runner.RESULT_PASS,
+                "",
+                0.1,
+                "",
+                "test",
+                restored_diagnostic,
+            ),
+        )
+        failures, reviews = runner.validate_parsed(
+            runner.CommandSpec(
+                "reg dump 0 256",
+                "final",
+                validators=("custom_memory_complete", "custom_memory_restored"),
+            ),
+            {
+                "custom_memory": baseline.copy(),
+                "custom_memory_complete": True,
+            },
+            state,
+        )
+        self.assertEqual([], failures)
+        self.assertEqual([], reviews)
 
     def test_auto_adjust_plan_has_no_restore_retry_or_automatic_resync(self) -> None:
         args = runner.parse_args(
@@ -1585,7 +2192,7 @@ Sensor error: UNKNOWN (enum=255)
             "mutation_unresolved": False,
             "persistent_config_dirty_error": {
                 "name": "VERIFY_MISMATCH",
-                "code": 14,
+                "code": 15,
                 "detail": 1,
             },
         }

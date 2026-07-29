@@ -47,6 +47,7 @@ REQUIRED_FRAGMENTS = [
     "Write persistent interval",
     "Write nonzero persistent CO2 interval factor",
     "Write opaque vendor-defined persistent CO2 filter",
+    "duration is device-defined",
     "Write persistent CO2 offset",
     "Write persistent CO2 gain",
     "mutation.unresolved",
@@ -171,6 +172,13 @@ def main() -> int:
     for fragment in REQUIRED_FRAGMENTS:
         if fragment not in text:
             fail(f"mandatory CLI dirty diagnostic fragment '{fragment}' missing")
+
+    for unsupported_claim in ("~5 min", "takes ~5 minutes"):
+        if unsupported_claim in text.lower():
+            fail(
+                "unsupported auto-adjust duration claim remains in "
+                f"{bringup_main.as_posix()}: {unsupported_claim!r}"
+            )
 
     for label, pattern in REQUIRED_PATTERNS.items():
         if re.search(pattern, text) is None:

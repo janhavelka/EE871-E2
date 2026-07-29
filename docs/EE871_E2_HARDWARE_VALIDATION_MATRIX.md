@@ -29,8 +29,8 @@ Current evidence summary:
 - Power-cycle persistence and stuck-line fault/jig validation: not recorded.
 - No Prompt 04 checked-sample, mutation-effect/resync, bus-address,
   auto-adjust, or stopped-state persistence scenario was run on hardware.
-- Runner 2.2 source/parser corrections were validated without opening a serial
-  port; no new HIL result is claimed.
+- Runner 2.2 and 2.3 source/parser corrections were validated without opening
+  a serial port; no new HIL result is claimed.
 
 Allowed statuses:
 

@@ -816,7 +816,7 @@ void printHelp() {
   printHelpItem("gain <val>", "Write persistent CO2 gain");
   printHelpItem("calpoints", "Read last calibration points");
   printHelpItem("autoadj", "Read auto-adjust status");
-  printHelpItem("autoadj start", "Start config-changing auto-adjustment (~5 min)");
+  printHelpItem("autoadj start", "Start config-changing auto-adjustment (duration is device-defined)");
 
   printHelpSection("Bus Safety");
   printHelpItem("buscheck", "Check if bus is idle");
@@ -2584,7 +2584,7 @@ void processCommand(const char* input) {
       std::printf("  Auto adjustment: %s\n", running ? "RUNNING" : "idle");
     }
   } else if (std::strcmp(trimmed, "autoadj start") == 0) {
-    logInfo("Starting auto adjustment (takes ~5 minutes)...");
+    logInfo("Starting auto adjustment (duration is device-defined)...");
     auto st = device.startAutoAdjust();
     printStatus(st);
   } else if (std::strcmp(trimmed, "buscheck") == 0) {

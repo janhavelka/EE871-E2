@@ -493,11 +493,13 @@ The default runner sequence is non-persistent and records `version`, `help`,
 `probe`, `read`, `selftest`, `drv`, `dirty`, `stress 50`, final `drv`, and
 final `dirty`. `--complete-safe` captures feature/capability evidence before
 checked fast/average samples, validates both detailed-error capability shapes
-with adjacent health-counter evidence, and adds bus/line checks,
+with exact validity/status/enum evidence and adjacent health-counter evidence,
+and adds bus/line checks,
 `stress_mix 100`, recovery, and resync. Warm-up and stale-measurement timing
 remain separate controlled HIL rows.
 Destructive plans are isolated behind separate exact opt-ins. They checkpoint
-a complete immutable 256-byte forensic baseline, require clean mutation state,
+a complete immutable 256-byte forensic baseline whose actual bytes are checked
+again at write admission, require clean mutation state,
 matching configured address, and capability-aware idle auto-adjust evidence,
 then restore only typed settings after exact readback/memory-diff checks.
 Filter-write HIL is intentionally unavailable without an authoritative value

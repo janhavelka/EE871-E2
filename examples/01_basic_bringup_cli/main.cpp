@@ -715,7 +715,7 @@ void printHelp() {
   cli::printHelpItem("gain <val>", "Write persistent CO2 gain");
   cli::printHelpItem("calpoints", "Read last calibration points");
   cli::printHelpItem("autoadj", "Read auto-adjust status");
-  cli::printHelpItem("autoadj start", "Start config-changing auto-adjustment (~5 min)");
+  cli::printHelpItem("autoadj start", "Start config-changing auto-adjustment (duration is device-defined)");
 
   cli::printHelpSection("Bus Safety");
   cli::printHelpItem("buscheck", "Check if bus is idle");
@@ -1721,7 +1721,7 @@ void processCommand(const String& cmd) {
       Serial.printf("  Auto adjustment: %s\n", running ? "RUNNING" : "idle");
     }
   } else if (trimmed == "autoadj start") {
-    LOGI("Starting auto adjustment (takes ~5 minutes)...");
+    LOGI("Starting auto adjustment (duration is device-defined)...");
     auto st = device.startAutoAdjust();
     printStatus(st);
   

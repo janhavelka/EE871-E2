@@ -45,8 +45,10 @@ field, enforces FAST/MV3 and AVERAGE/MV4 identity, status-bit consistency, and
 clean/error enum coherence. With detailed error-code capability, a CO2 error
 must contain the validated detail read and mapping. Without it, the result must
 preserve `UNKNOWN (255)`, omit raw detail, and use the status byte as top-level
-detail. Either coherent sensor-domain error is a truthful healthy-bench
-`FAIL`, not an invented transport failure.
+detail. Clean status requires `ppmValid=true`; sensor-error status requires
+`ppmValid=false`. Attempted and unattempted step statuses/details must also
+match the library's exact evidence contract. Either coherent sensor-domain
+error is one truthful healthy-bench `FAIL`, not an invented transport failure.
 
 “Complete safe” means the complete non-destructive Prompt 04 command surface;
 it does not include power-up warm-up or stale-measurement timing observation.
@@ -294,7 +296,11 @@ The plan requires capability-aware idle evidence, starts auto-adjust exactly
 once, records pre/post mutation evidence, observes status, and captures a final
 forensic image. It never retries, cancels, resyncs, acknowledges uncertainty,
 or claims to restore calibration. The one-shot command is sent only after the
-operator enters the exact controlled-conditions phrase requested in sequence.
+fresh pre-action `autoadj` row has independently passed and the operator enters
+the exact controlled-conditions phrase requested in sequence. A running,
+failed, missing, or malformed fresh result blocks the action even if the
+earlier maintenance baseline was idle. The supplied documents define no fixed
+completion duration; observe D9 rather than assuming a five-minute interval.
 
 ## Sensor Power-Cycle and Stuck-Line Plans
 
@@ -339,6 +345,11 @@ coherent online `DEGRADED` or offline `OFFLINE` state. After release, both
 lines must be high; explicit `recover` must finish at READY, online, and zero
 consecutive failures. Never force an E2 line high. A logic analyzer or
 oscilloscope remains required to prove the millisecond timing bound.
+
+Each in-fault health comparison is scoped to the matching SDA-low or SCL-low
+pre-fault snapshot. A missing/failed pre-fault capture cannot reuse the other
+fault group's counter evidence, and the apply-jig operator step is not admitted
+until released levels and pre-fault health pass for that same group.
 
 Operator steps remain `OPERATOR_REVIEW_REQUIRED`; parser success cannot replace
 physical fixture and waveform evidence. Skipping or mistyping any required
@@ -399,7 +410,7 @@ Parser and planner tests:
 python -m unittest discover -s test -p "*hil_runner_parser.py"
 ```
 
-No hardware or HIL was run while making the runner 2.2 source correction. No
-hardware, calibration, power-cycle, stuck-line, or auto-adjust result should
-be claimed unless the corresponding raw artifacts and physical evidence were
-actually captured.
+No hardware or HIL was run while making the runner 2.2 or 2.3 source
+corrections. No hardware, calibration, power-cycle, stuck-line, or auto-adjust
+result should be claimed unless the corresponding raw artifacts and physical
+evidence were actually captured.

@@ -42,6 +42,7 @@ IDF_REQUIRED_FRAGMENTS = [
     "Write persistent interval",
     "Write nonzero persistent CO2 interval factor",
     "Write opaque vendor-defined persistent CO2 filter",
+    "duration is device-defined",
     "Write persistent CO2 offset",
     "Write persistent CO2 gain",
     "mutation.unresolved",
@@ -166,6 +167,13 @@ def main() -> int:
     for fragment in IDF_REQUIRED_FRAGMENTS:
         if fragment not in idf:
             fail(f"IDF CLI missing required fragment: {fragment!r}")
+
+    for unsupported_claim in ("~5 min", "takes ~5 minutes"):
+        if unsupported_claim in idf.lower():
+            fail(
+                "unsupported auto-adjust duration claim remains in IDF CLI: "
+                f"{unsupported_claim!r}"
+            )
 
     for label, pattern in IDF_REQUIRED_PATTERNS.items():
         if re.search(pattern, idf) is None:
