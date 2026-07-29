@@ -30,7 +30,8 @@ physical fault case.
 
 Recorded evidence:
 
-- Native tests: 91/91 passing on the Prompt 04 final candidate.
+- Native library tests: 104/104 passing on the current source candidate.
+- HIL runner parser/planner tests: 72/72 passing after duplicate-test cleanup.
 - Arduino PlatformIO builds: `ex_bringup_s3` and `ex_bringup_s2` pass locally
   in the latest hardening/readiness runs.
 - ESP32-S3 safe default HIL: PASS on `COM17`.
@@ -465,6 +466,8 @@ python tools/check_core_timing_guard.py
 python tools/check_public_timing_contract.py
 python tools/check_cli_contract.py
 python tools/check_idf_example_contract.py
+python scripts/generate_version.py check
+python test/test_hil_runner_parser.py
 ```
 
 When ESP-IDF is installed, build the IDF example from

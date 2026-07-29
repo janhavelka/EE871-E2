@@ -24,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- HIL runner 2.2 now admits a destructive command only after a complete
+- HIL runner 2.3 admits a destructive command only after a complete
   immutable 256-byte/typed baseline, fresh explicitly resolved mutation
   evidence, configured-address agreement, and capability-aware idle
   auto-adjust evidence.
@@ -60,6 +60,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Removed duplicate capability-byte mirrors, dead runner state/resolver
+  branches, obsolete example shims/native stubs, unused diagnostic state, and
+  duplicated CLI input/color helpers. The Arduino CLI now uses its existing
+  bounded line reader.
 - HIL runner 2.3 now validates checked-sample ppm validity, step status/detail,
   and exact public status enum numbers; a coherent sensor fault produces one
   sensor-domain failure reason rather than contradictory evidence.

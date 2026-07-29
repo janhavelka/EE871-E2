@@ -287,91 +287,104 @@ def parse_health(text: str) -> dict[str, Any]:
 def parse_dirty(text: str) -> dict[str, Any]:
     clean = strip_ansi(text)
     parsed: dict[str, Any] = {}
-    matches = list(re.finditer(r"\bpersistentConfigDirty:\s*(yes|no|true|false|0|1)", clean, re.IGNORECASE))
-    if matches:
-        parsed["persistent_config_dirty"] = parse_boolish(matches[-1].group(1))
-    matches = list(re.finditer(
+    match = last_match(
+        r"\bpersistentConfigDirty:\s*(yes|no|true|false|0|1)",
+        clean,
+        re.IGNORECASE,
+    )
+    if match:
+        parsed["persistent_config_dirty"] = parse_boolish(match.group(1))
+    match = last_match(
         r"\bpersistentConfigDirtyError:\s*([A-Z0-9_]+)\s*\(code=(\d+),\s*detail=(-?\d+)\)",
         clean,
         re.IGNORECASE,
-    ))
-    if matches:
-        match = matches[-1]
+    )
+    if match:
         parsed["persistent_config_dirty_error"] = {
             "name": match.group(1).upper(),
             "code": int(match.group(2)),
             "detail": int(match.group(3)),
         }
-    matches = list(re.finditer(r"\bpersistentConfigDirtyError message:\s*([^\r\n]+)", clean, re.IGNORECASE))
-    if matches:
-        parsed["persistent_config_dirty_error_message"] = matches[-1].group(1).strip()
-    matches = list(re.finditer(r"\bresyncNeeded:\s*(yes|no|true|false|0|1)", clean, re.IGNORECASE))
-    if matches:
-        parsed["resync_needed"] = parse_boolish(matches[-1].group(1))
-    matches = list(re.finditer(r"\bmutation\.unresolved:\s*(yes|no|true|false|0|1)", clean, re.IGNORECASE))
-    if matches:
-        parsed["mutation_unresolved"] = parse_boolish(matches[-1].group(1))
-    matches = list(re.finditer(
+    match = last_match(
+        r"\bpersistentConfigDirtyError message:\s*([^\r\n]+)",
+        clean,
+        re.IGNORECASE,
+    )
+    if match:
+        parsed["persistent_config_dirty_error_message"] = match.group(1).strip()
+    match = last_match(
+        r"\bresyncNeeded:\s*(yes|no|true|false|0|1)",
+        clean,
+        re.IGNORECASE,
+    )
+    if match:
+        parsed["resync_needed"] = parse_boolish(match.group(1))
+    match = last_match(
+        r"\bmutation\.unresolved:\s*(yes|no|true|false|0|1)",
+        clean,
+        re.IGNORECASE,
+    )
+    if match:
+        parsed["mutation_unresolved"] = parse_boolish(match.group(1))
+    match = last_match(
         r"\bmutation\.target:\s*([A-Z0-9_]+)\s*\(value=(\d+)\)",
         clean,
         re.IGNORECASE,
-    ))
-    if matches:
-        match = matches[-1]
+    )
+    if match:
         parsed["mutation_target"] = match.group(1).upper()
         parsed["mutation_target_value"] = int(match.group(2))
-    matches = list(re.finditer(
+    match = last_match(
         r"\bmutation\.effect:\s*([A-Z0-9_]+)\s*\(value=(\d+)\)",
         clean,
         re.IGNORECASE,
-    ))
-    if matches:
-        match = matches[-1]
+    )
+    if match:
         parsed["mutation_effect"] = match.group(1).upper()
         parsed["mutation_effect_value"] = int(match.group(2))
-    matches = list(re.finditer(
+    match = last_match(
         r"\bmutation\.addresses:\s*first=0x([0-9A-Fa-f]{2})\s+last=0x([0-9A-Fa-f]{2})",
         clean,
         re.IGNORECASE,
-    ))
-    if matches:
-        match = matches[-1]
+    )
+    if match:
         parsed["mutation_first_address"] = int(match.group(1), 16)
         parsed["mutation_last_address"] = int(match.group(2), 16)
-    matches = list(re.finditer(
+    match = last_match(
         r"\bmutation\.elements:\s*requested=(\d+)\s+acknowledged=(\d+)\s+observed=(\d+)\s+matched=(\d+)",
         clean,
         re.IGNORECASE,
-    ))
-    if matches:
-        match = matches[-1]
+    )
+    if match:
         parsed["mutation_elements_requested"] = int(match.group(1))
         parsed["mutation_elements_acknowledged"] = int(match.group(2))
         parsed["mutation_elements_observed"] = int(match.group(3))
         parsed["mutation_elements_matched"] = int(match.group(4))
-    matches = list(re.finditer(r"\bmutation\.attemptedValue:\s*0x([0-9A-Fa-f]{2})", clean, re.IGNORECASE))
-    if matches:
-        parsed["mutation_attempted_value"] = int(matches[-1].group(1), 16)
+    match = last_match(
+        r"\bmutation\.attemptedValue:\s*0x([0-9A-Fa-f]{2})",
+        clean,
+        re.IGNORECASE,
+    )
+    if match:
+        parsed["mutation_attempted_value"] = int(match.group(1), 16)
     for prefix, key in (
         ("preObservedValue", "mutation_pre_observed"),
         ("observedValue", "mutation_observed"),
     ):
-        matches = list(re.finditer(
+        match = last_match(
             rf"\bmutation\.{prefix}:\s*valid=(yes|no|true|false|0|1)\s+value=0x([0-9A-Fa-f]{{2}})",
             clean,
             re.IGNORECASE,
-        ))
-        if matches:
-            match = matches[-1]
+        )
+        if match:
             parsed[f"{key}_valid"] = parse_boolish(match.group(1))
             parsed[f"{key}_value"] = int(match.group(2), 16)
-    matches = list(re.finditer(
+    match = last_match(
         r"\bmutation\.cause:\s*([A-Z0-9_]+)\s*\(code=(\d+),\s*detail=(-?\d+)\)",
         clean,
         re.IGNORECASE,
-    ))
-    if matches:
-        match = matches[-1]
+    )
+    if match:
         parsed["mutation_cause"] = {
             "name": match.group(1).upper(),
             "code": int(match.group(2)),
@@ -1146,43 +1159,63 @@ def validate_parsed(
                 reviews.append("auto-adjust status not parsed")
             elif parsed.get("auto_adjust_running") is not False:
                 failures.append("auto-adjust is already running")
-        elif validator == "interval_expected":
-            expected = context.get("expected_measurement_interval_ds")
-            actual = parsed.get("measurement_interval_ds")
-            if not isinstance(expected, int):
-                reviews.append("expected measurement interval not recorded")
-            elif actual != expected:
-                failures.append(f"measurement interval readback {actual} != expected {expected}")
-        elif validator == "offset_expected":
-            expected = context.get("expected_co2_offset_ppm")
-            actual = parsed.get("co2_offset_ppm")
-            if not isinstance(expected, int):
-                reviews.append("expected CO2 offset not recorded")
-            elif actual != expected:
-                failures.append(f"CO2 offset readback {actual} != expected {expected}")
-        elif validator == "gain_expected":
-            expected = context.get("expected_co2_gain")
-            actual = parsed.get("co2_gain")
-            if not isinstance(expected, int):
-                reviews.append("expected CO2 gain not recorded")
-            elif actual != expected:
-                failures.append(f"CO2 gain readback {actual} != expected {expected}")
         elif validator in {
+            "interval_expected",
             "factor_expected",
             "mode_expected",
             "part_name_hex_expected",
+            "offset_expected",
+            "gain_expected",
             "address_expected",
         }:
             field_map = {
-                "factor_expected": ("expected_co2_interval_factor", "co2_interval_factor", "CO2 interval factor"),
-                "mode_expected": ("expected_operating_mode", "operating_mode", "operating mode"),
-                "part_name_hex_expected": ("expected_part_name_hex", "part_name_hex", "part name"),
-                "address_expected": ("expected_device_address", "device_address", "bus address"),
+                "interval_expected": (
+                    "expected_measurement_interval_ds",
+                    "measurement_interval_ds",
+                    "measurement interval",
+                    int,
+                ),
+                "factor_expected": (
+                    "expected_co2_interval_factor",
+                    "co2_interval_factor",
+                    "CO2 interval factor",
+                    int,
+                ),
+                "mode_expected": (
+                    "expected_operating_mode",
+                    "operating_mode",
+                    "operating mode",
+                    int,
+                ),
+                "part_name_hex_expected": (
+                    "expected_part_name_hex",
+                    "part_name_hex",
+                    "part name",
+                    str,
+                ),
+                "offset_expected": (
+                    "expected_co2_offset_ppm",
+                    "co2_offset_ppm",
+                    "CO2 offset",
+                    int,
+                ),
+                "gain_expected": (
+                    "expected_co2_gain",
+                    "co2_gain",
+                    "CO2 gain",
+                    int,
+                ),
+                "address_expected": (
+                    "expected_device_address",
+                    "device_address",
+                    "bus address",
+                    int,
+                ),
             }
-            expected_key, actual_key, label = field_map[validator]
+            expected_key, actual_key, label, expected_type = field_map[validator]
             expected = context.get(expected_key)
             actual = parsed.get(actual_key)
-            if expected is None:
+            if not isinstance(expected, expected_type):
                 reviews.append(f"expected {label} not recorded")
             elif actual != expected:
                 failures.append(f"{label} readback {actual} != expected {expected}")
@@ -1512,9 +1545,6 @@ def read_until_ready(
             continue
         if data_seen and completion_seen and (time.monotonic() - last_data_at) >= idle_s:
             return "".join(chunks), "completion-idle" if command else "serial-idle", False
-        if data_seen and command is None and not require_prompt and (time.monotonic() - last_data_at) >= idle_s:
-            return "".join(chunks), "serial-idle", False
-
     return "".join(chunks), "timeout", True
 
 
@@ -2068,7 +2098,6 @@ def resolve_dynamic_command(spec: CommandSpec, state: dict[str, Any]) -> tuple[s
         "offset_baseline": ("offset", "baseline_co2_offset_ppm"),
         "gain_baseline": ("gain", "baseline_co2_gain"),
         "address_baseline_write": ("addr", "baseline_device_address"),
-        "address_baseline_rebegin": ("addr rebegin", "baseline_device_address"),
     }
     if spec.dynamic in baseline_dynamic:
         command, key = baseline_dynamic[spec.dynamic]
@@ -2126,7 +2155,7 @@ def resolve_dynamic_command(spec: CommandSpec, state: dict[str, Any]) -> tuple[s
     return spec.command, None
 
 
-def maintenance_write_block_reason(spec: CommandSpec, state: dict[str, Any]) -> str | None:
+def destructive_step_block_reason(spec: CommandSpec, state: dict[str, Any]) -> str | None:
     if (
         state.get("address_failure_latched") is True
         and str(spec.group).startswith("address")
@@ -2511,12 +2540,6 @@ def update_state(state: dict[str, Any], row: dict[str, Any]) -> None:
     if group == "address-restore" and planned_command == "dirty" and result == RESULT_PASS:
         state["address_restore_diagnostic_passed"] = True
     if (
-        group == "address-restore"
-        and planned_command.startswith("addr rebegin ")
-        and result == RESULT_PASS
-    ):
-        state["address_restore_rebegin_passed"] = True
-    if (
         state.get("address_change_started") is True
         and group.startswith("address")
         and row.get("operator_required") is not True
@@ -2531,7 +2554,7 @@ def update_state(state: dict[str, Any], row: dict[str, Any]) -> None:
         state["maintenance_failure_latched"] = True
 
 
-def record_persistent_write_expectation(row: dict[str, Any], state: dict[str, Any]) -> None:
+def record_mutation_expectation(row: dict[str, Any], state: dict[str, Any]) -> None:
     if not row.get("destructive") or row.get("wait_reason") == "not-sent":
         return
     state["mutation_epoch"] = int(state.get("mutation_epoch", 0)) + 1
@@ -3114,7 +3137,7 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 initial_output, _, _ = read_until_ready(ser, args.timeout, args.idle, None, require_prompt=True)
                 for spec in plan:
-                    reason = maintenance_write_block_reason(spec, state)
+                    reason = destructive_step_block_reason(spec, state)
                     command: str | None = spec.command
                     if not reason:
                         command, reason = resolve_dynamic_command(spec, state)
@@ -3129,7 +3152,7 @@ def main(argv: list[str] | None = None) -> int:
                         row = run_serial_command(ser, spec, command or spec.command, args, state)
                     results.append(row)
                     update_state(state, row)
-                    record_persistent_write_expectation(row, state)
+                    record_mutation_expectation(row, state)
                     if spec.destructive and state.get("in_flight_destructive") is not None:
                         journal_destructive_completion(state, row)
                     write_checkpoint(log_dir, meta, initial_output, results, state)

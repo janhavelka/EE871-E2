@@ -11,10 +11,15 @@ REQUIRED_COMMON = [
     "BoardConfig.h",
     "BuildConfig.h",
     "Log.h",
-    "TransportAdapter.h",
-    "BusDiag.h",
+    "E2Transport.h",
+    "E2Diagnostics.h",
     "CliShell.h",
     "CliStyle.h",
+]
+
+REMOVED_COMMON = [
+    "TransportAdapter.h",
+    "BusDiag.h",
     "HealthView.h",
 ]
 
@@ -38,6 +43,7 @@ MANDATORY_COMMANDS = [
 ]
 
 REQUIRED_FRAGMENTS = [
+    'common/CliShell.h',
     "persistentConfigDirty",
     "persistentConfigDirtyError",
     "persistentConfigDirtyError message",
@@ -100,6 +106,7 @@ REQUIRED_PATTERNS = {
     "unsigned parser rejects negative tokens": r"bool\s+parseU8Token[\s\S]*?token\[0\]\s*==\s*'-'[\s\S]*?bool\s+parseU16Token[\s\S]*?token\[0\]\s*==\s*'-'",
     "selftest address capability gate": r"hasAddressConfig\(\)[\s\S]*?readBusAddress",
     "selftest interval capability gate": r"hasGlobalInterval\(\)[\s\S]*?readMeasurementInterval",
+    "bounded CLI line reader": r"void\s+loop\s*\(\s*\)[\s\S]*?cli_shell::readLine\(\s*command\s*\)",
 }
 
 
@@ -159,6 +166,8 @@ def main() -> int:
 
     for name in REQUIRED_COMMON:
         ensure_exists(common_dir / name, f"common helper {name}")
+    for name in REMOVED_COMMON:
+        ensure_missing(common_dir / name, f"obsolete common helper {name}")
 
     text = bringup_main.read_text(encoding="utf-8", errors="replace")
     transport_text = (common_dir / "E2Transport.h").read_text(
@@ -179,6 +188,8 @@ def main() -> int:
                 "unsupported auto-adjust duration claim remains in "
                 f"{bringup_main.as_posix()}: {unsupported_claim!r}"
             )
+    if "static String inputBuffer" in text:
+        fail("obsolete duplicate unbounded CLI input buffer remains")
 
     for label, pattern in REQUIRED_PATTERNS.items():
         if re.search(pattern, text) is None:

@@ -645,37 +645,56 @@ public:
   /// Check if serial number is readable.
   /// @return true when cached feature flags advertise serial number support.
   /// @note Timing contract: NO_E2_IO.
-  bool hasSerialNumber() const { return (_operatingFunctions & cmd::FEATURE_SERIAL_NUMBER) != 0; }
+  bool hasSerialNumber() const {
+    return (_capabilities.operatingFunctions &
+            cmd::FEATURE_SERIAL_NUMBER) != 0;
+  }
 
   /// Check if part name is readable/writable.
   /// @return true when cached feature flags advertise part-name support.
   /// @note Timing contract: NO_E2_IO.
-  bool hasPartName() const { return (_operatingFunctions & cmd::FEATURE_PART_NAME) != 0; }
+  bool hasPartName() const {
+    return (_capabilities.operatingFunctions & cmd::FEATURE_PART_NAME) != 0;
+  }
 
   /// Check if bus address is configurable.
   /// @return true when cached feature flags advertise address configuration.
   /// @note Timing contract: NO_E2_IO.
-  bool hasAddressConfig() const { return (_operatingFunctions & cmd::FEATURE_ADDRESS_CONFIG) != 0; }
+  bool hasAddressConfig() const {
+    return (_capabilities.operatingFunctions &
+            cmd::FEATURE_ADDRESS_CONFIG) != 0;
+  }
 
   /// Check if global measurement interval is configurable.
   /// @return true when cached feature flags advertise global interval support.
   /// @note Timing contract: NO_E2_IO.
-  bool hasGlobalInterval() const { return (_operatingFunctions & cmd::FEATURE_GLOBAL_INTERVAL) != 0; }
+  bool hasGlobalInterval() const {
+    return (_capabilities.operatingFunctions &
+            cmd::FEATURE_GLOBAL_INTERVAL) != 0;
+  }
 
   /// Check if specific (per-quantity) interval is configurable.
   /// @return true when cached feature flags advertise specific interval support.
   /// @note Timing contract: NO_E2_IO.
-  bool hasSpecificInterval() const { return (_operatingFunctions & cmd::FEATURE_SPECIFIC_INTERVAL) != 0; }
+  bool hasSpecificInterval() const {
+    return (_capabilities.operatingFunctions &
+            cmd::FEATURE_SPECIFIC_INTERVAL) != 0;
+  }
 
   /// Check if measurement filter is configurable.
   /// @return true when cached feature flags advertise filter configuration.
   /// @note Timing contract: NO_E2_IO.
-  bool hasFilterConfig() const { return (_operatingFunctions & cmd::FEATURE_FILTER_CONFIG) != 0; }
+  bool hasFilterConfig() const {
+    return (_capabilities.operatingFunctions &
+            cmd::FEATURE_FILTER_CONFIG) != 0;
+  }
 
   /// Check if error code register exists.
   /// @return true when cached feature flags advertise error-code support.
   /// @note Timing contract: NO_E2_IO.
-  bool hasErrorCode() const { return (_operatingFunctions & cmd::FEATURE_ERROR_CODE) != 0; }
+  bool hasErrorCode() const {
+    return (_capabilities.operatingFunctions & cmd::FEATURE_ERROR_CODE) != 0;
+  }
 
   /// Check if CO2 offset/gain adjustment is supported.
   /// @return true when cached custom byte 0x03 advertises CO2 adjustment;
@@ -698,17 +717,26 @@ public:
   /// Check if low power mode is supported.
   /// @return true when cached mode flags advertise low-power mode.
   /// @note Timing contract: NO_E2_IO.
-  bool hasLowPowerMode() const { return (_operatingModeSupport & cmd::MODE_SUPPORT_LOW_POWER) != 0; }
+  bool hasLowPowerMode() const {
+    return (_capabilities.operatingModeSupport &
+            cmd::MODE_SUPPORT_LOW_POWER) != 0;
+  }
 
   /// Check if E2 priority mode is supported.
   /// @return true when cached mode flags advertise E2 priority mode.
   /// @note Timing contract: NO_E2_IO.
-  bool hasE2Priority() const { return (_operatingModeSupport & cmd::MODE_SUPPORT_E2_PRIORITY) != 0; }
+  bool hasE2Priority() const {
+    return (_capabilities.operatingModeSupport &
+            cmd::MODE_SUPPORT_E2_PRIORITY) != 0;
+  }
 
   /// Check if auto adjustment is supported.
   /// @return true when cached special-feature flags advertise auto adjustment.
   /// @note Timing contract: NO_E2_IO.
-  bool hasAutoAdjust() const { return (_specialFeatures & cmd::SPECIAL_FEATURE_AUTO_ADJUST) != 0; }
+  bool hasAutoAdjust() const {
+    return (_capabilities.specialFeatures &
+            cmd::SPECIAL_FEATURE_AUTO_ADJUST) != 0;
+  }
 
   // =========================================================================
   // Identity Strings
@@ -1095,10 +1123,10 @@ private:
 
   Status _writeCommandRaw(uint8_t controlByte, uint8_t addressByte, uint8_t dataByte,
                           ClockWaitClass completionClass,
-                          MutationProgress* progress = nullptr);
+                          MutationProgress* progressOut = nullptr);
   Status _writeCommandTracked(uint8_t controlByte, uint8_t addressByte, uint8_t dataByte,
                               ClockWaitClass completionClass,
-                              MutationProgress* progress = nullptr);
+                              MutationProgress* progressOut = nullptr);
   Status _mutationAdmissionGuard() const;
   Status _beginMutation(
       MutationTarget target,
@@ -1189,11 +1217,6 @@ private:
   CapabilitySnapshot _capabilities;
   Status _beginProbeStatus = Status::Ok();
   bool _recoveryBypass = false;
-
-  // Feature flags (cached during begin())
-  uint8_t _operatingFunctions = 0;   ///< Cached 0x07
-  uint8_t _operatingModeSupport = 0; ///< Cached 0x08
-  uint8_t _specialFeatures = 0;      ///< Cached 0x09
 
   // Health counters
   uint32_t _lastOkMs = 0;

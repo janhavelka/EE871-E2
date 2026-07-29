@@ -4,8 +4,6 @@
 
 #include <cstdint>
 
-#include "EE871/EE871.h"
-
 #include "driver/gpio.h"
 #include "esp_err.h"
 #include "esp_rom_sys.h"
@@ -87,20 +85,6 @@ inline void delayMs(uint32_t ms, void*) {
 
 inline void yieldTask(void*) {
   taskYIELD();
-}
-
-inline EE871::Config makeConfig(E2GpioBus& bus, uint8_t deviceAddress = 0) {
-  EE871::Config cfg;
-  cfg.setScl = setScl;
-  cfg.setSda = setSda;
-  cfg.readScl = readScl;
-  cfg.readSda = readSda;
-  cfg.delayUs = delayUs;
-  cfg.delayMs = delayMs;
-  cfg.yield = yieldTask;
-  cfg.busUser = &bus;
-  cfg.deviceAddress = deviceAddress;
-  return cfg;
 }
 
 }  // namespace ee871_idf

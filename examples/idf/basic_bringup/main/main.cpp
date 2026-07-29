@@ -1555,7 +1555,7 @@ public:
     s.isFirstByte = true;
     s.haveLowByte = false;
     s.active = true;
-    std::printf("[SNIFF] ON - 'sniff 0' to stop\n");
+    std::printf("[SNIFF] ON - run 'sniff' again to stop\n");
   }
 
   void stop() {

@@ -4,6 +4,7 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
+| 1.0.x   | :white_check_mark: |
 | 0.3.x   | :white_check_mark: |
 
 ## Reporting a Vulnerability
@@ -25,7 +26,9 @@ We will acknowledge receipt within 48 hours and aim to provide a fix or mitigati
 This library is designed for embedded systems. Security considerations include:
 - No dynamic memory allocation in steady state (reduces attack surface)
 - No network code (networking is out of scope for this library)
-- No persistent storage by default (NVS side effects are opt-in)
+- No NVS, filesystem, or network ownership in the library core
+- Sensor persistent-memory changes are explicit maintenance operations with
+  verified readback and observable uncertainty
 
 ## Security Best Practices for Users
 

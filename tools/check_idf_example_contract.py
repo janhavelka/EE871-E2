@@ -211,11 +211,15 @@ def main() -> int:
         "vTaskDelay(",
         "inline void yieldTask(void*)",
         "taskYIELD();",
-        "cfg.delayMs = delayMs;",
-        "cfg.yield = yieldTask;",
     ):
         if fragment not in transport:
             fail(f"ESP-IDF transport missing long-wait mapping: {fragment!r}")
+    for fragment in (
+        "deviceCfg.delayMs = ee871_idf::delayMs;",
+        "deviceCfg.yield = ee871_idf::yieldTask;",
+    ):
+        if fragment not in idf:
+            fail(f"ESP-IDF CLI missing production callback mapping: {fragment!r}")
     forbidden_patterns = {
         "Arduino.h": r'#\s*include\s*[<"]Arduino\.h[>"]',
         "Wire.h": r'#\s*include\s*[<"]Wire\.h[>"]',

@@ -10,6 +10,7 @@
 #include "common/BoardConfig.h"
 #include "common/E2Transport.h"
 #include "common/E2Diagnostics.h"
+#include "common/CliShell.h"
 
 #include "EE871/EE871.h"
 
@@ -363,28 +364,6 @@ const char* stateColor(EE871::DriverState st, bool online, uint8_t consecutiveFa
   return LOG_COLOR_STATE(online, consecutiveFailures);
 }
 
-const char* goodIfZeroColor(uint32_t value) {
-  return (value == 0U) ? LOG_COLOR_GREEN : LOG_COLOR_RED;
-}
-
-const char* goodIfNonZeroColor(uint32_t value) {
-  return (value > 0U) ? LOG_COLOR_GREEN : LOG_COLOR_YELLOW;
-}
-
-const char* onOffColor(bool enabled) {
-  return enabled ? LOG_COLOR_GREEN : LOG_COLOR_RESET;
-}
-
-const char* skipCountColor(uint32_t value) {
-  return (value > 0U) ? LOG_COLOR_YELLOW : LOG_COLOR_RESET;
-}
-
-const char* successRateColor(float pct) {
-  if (pct >= 99.9f) return LOG_COLOR_GREEN;
-  if (pct >= 80.0f) return LOG_COLOR_YELLOW;
-  return LOG_COLOR_RED;
-}
-
 static constexpr uint32_t STRESS_PROGRESS_UPDATES = 10U;
 
 uint32_t stressProgressStep(uint32_t total) {
@@ -407,13 +386,13 @@ void printStressProgress(uint32_t completed, uint32_t total, uint32_t okCount, u
   Serial.printf("  Progress: %lu/%lu (%s%.0f%%%s, ok=%s%lu%s, fail=%s%lu%s)\n",
                 static_cast<unsigned long>(completed),
                 static_cast<unsigned long>(total),
-                successRateColor(pct),
+                cli::successRateColor(pct),
                 pct,
                 LOG_COLOR_RESET,
-                goodIfNonZeroColor(okCount),
+                cli::nonZeroGoodColor(okCount),
                 static_cast<unsigned long>(okCount),
                 LOG_COLOR_RESET,
-                goodIfZeroColor(failCount),
+                cli::zeroGoodColor(failCount),
                 static_cast<unsigned long>(failCount),
                 LOG_COLOR_RESET);
 }
@@ -602,19 +581,19 @@ void printDriverHealth() {
                 log_bool_str(online),
                 LOG_COLOR_RESET);
   Serial.printf("  Consecutive failures: %s%u%s\n",
-                goodIfZeroColor(settings.consecutiveFailures),
+                cli::zeroGoodColor(settings.consecutiveFailures),
                 settings.consecutiveFailures,
                 LOG_COLOR_RESET);
   Serial.printf("  Total success: %s%lu%s\n",
-                goodIfNonZeroColor(totalOk),
+                cli::nonZeroGoodColor(totalOk),
                 static_cast<unsigned long>(totalOk),
                 LOG_COLOR_RESET);
   Serial.printf("  Total failures: %s%lu%s\n",
-                goodIfZeroColor(totalFail),
+                cli::zeroGoodColor(totalFail),
                 static_cast<unsigned long>(totalFail),
                 LOG_COLOR_RESET);
   Serial.printf("  Success rate: %s%.1f%%%s\n",
-                successRateColor(successRate),
+                cli::successRateColor(successRate),
                 successRate,
                 LOG_COLOR_RESET);
 
@@ -786,15 +765,15 @@ void runStress(int count) {
   Serial.println("=== Stress Summary ===");
   Serial.printf("  Total: %d\n", count);
   Serial.printf("  Success: %s%d%s\n",
-                goodIfNonZeroColor(static_cast<uint32_t>(ok)),
+                cli::nonZeroGoodColor(static_cast<uint32_t>(ok)),
                 ok,
                 LOG_COLOR_RESET);
   Serial.printf("  Errors: %s%d%s\n",
-                goodIfZeroColor(static_cast<uint32_t>(fail)),
+                cli::zeroGoodColor(static_cast<uint32_t>(fail)),
                 fail,
                 LOG_COLOR_RESET);
   Serial.printf("  Success rate: %s%.2f%%%s\n",
-                successRateColor(successPct),
+                cli::successRateColor(successPct),
                 successPct,
                 LOG_COLOR_RESET);
   Serial.printf("  Duration: %lu ms\n", static_cast<unsigned long>(elapsed));
@@ -803,10 +782,10 @@ void runStress(int count) {
                   (1000.0f * static_cast<float>(count)) / static_cast<float>(elapsed));
   }
   Serial.printf("  Health delta: %ssuccess +%lu%s, %sfailures +%lu%s\n",
-                goodIfNonZeroColor(successDelta),
+                cli::nonZeroGoodColor(successDelta),
                 static_cast<unsigned long>(successDelta),
                 LOG_COLOR_RESET,
-                goodIfZeroColor(failDelta),
+                cli::zeroGoodColor(failDelta),
                 static_cast<unsigned long>(failDelta),
                 LOG_COLOR_RESET);
   if (hasFailure) {
@@ -916,13 +895,13 @@ void runStressMix(int count) {
   const float successPct =
       (count > 0) ? (100.0f * static_cast<float>(okTotal) / static_cast<float>(count)) : 0.0f;
   Serial.printf("  Total: %sok=%lu%s %sfail=%lu%s (%s%.2f%%%s)\n",
-                goodIfNonZeroColor(okTotal),
+                cli::nonZeroGoodColor(okTotal),
                 static_cast<unsigned long>(okTotal),
                 LOG_COLOR_RESET,
-                goodIfZeroColor(failTotal),
+                cli::zeroGoodColor(failTotal),
                 static_cast<unsigned long>(failTotal),
                 LOG_COLOR_RESET,
-                successRateColor(successPct),
+                cli::successRateColor(successPct),
                 successPct,
                 LOG_COLOR_RESET);
   Serial.printf("  Duration: %lu ms\n", static_cast<unsigned long>(elapsed));
@@ -932,20 +911,20 @@ void runStressMix(int count) {
   for (int i = 0; i < opCount; ++i) {
     Serial.printf("  %-11s %sok=%lu%s %sfail=%lu%s\n",
                   stats[i].name,
-                  goodIfNonZeroColor(stats[i].ok),
+                  cli::nonZeroGoodColor(stats[i].ok),
                   static_cast<unsigned long>(stats[i].ok),
                   LOG_COLOR_RESET,
-                  goodIfZeroColor(stats[i].fail),
+                  cli::zeroGoodColor(stats[i].fail),
                   static_cast<unsigned long>(stats[i].fail),
                   LOG_COLOR_RESET);
   }
   const uint32_t successDelta = device.totalSuccess() - succBefore;
   const uint32_t failDelta = device.totalFailures() - failBefore;
   Serial.printf("  Health delta: %ssuccess +%lu%s, %sfailures +%lu%s\n",
-                goodIfNonZeroColor(successDelta),
+                cli::nonZeroGoodColor(successDelta),
                 static_cast<unsigned long>(successDelta),
                 LOG_COLOR_RESET,
-                goodIfZeroColor(failDelta),
+                cli::zeroGoodColor(failDelta),
                 static_cast<unsigned long>(failDelta),
                 LOG_COLOR_RESET);
 }
@@ -994,9 +973,9 @@ void runSelfTest() {
     reportSkip("probe responds", "driver not initialized");
     reportSkip("remaining checks", "selftest aborted");
     Serial.printf("Selftest result: pass=%s%lu%s fail=%s%lu%s skip=%s%lu%s\n",
-                  goodIfNonZeroColor(result.pass), static_cast<unsigned long>(result.pass), LOG_COLOR_RESET,
-                  goodIfZeroColor(result.fail), static_cast<unsigned long>(result.fail), LOG_COLOR_RESET,
-                  skipCountColor(result.skip), static_cast<unsigned long>(result.skip), LOG_COLOR_RESET);
+                  cli::nonZeroGoodColor(result.pass), static_cast<unsigned long>(result.pass), LOG_COLOR_RESET,
+                  cli::zeroGoodColor(result.fail), static_cast<unsigned long>(result.fail), LOG_COLOR_RESET,
+                  cli::warningIfNonZeroColor(result.skip), static_cast<unsigned long>(result.skip), LOG_COLOR_RESET);
     return;
   }
   reportCheck("probe responds", st.ok(), st.ok() ? "" : errToStr(st.code));
@@ -1028,12 +1007,18 @@ void runSelfTest() {
   st = device.readE2SpecVersion(e2spec);
   reportCheck("readE2SpecVersion", st.ok(), st.ok() ? "" : errToStr(st.code));
 
-  uint8_t ops = 0, modes = 0, special = 0;
+  uint8_t ops = 0;
   st = device.readOperatingFunctions(ops);
   reportCheck("readOperatingFunctions", st.ok(), st.ok() ? "" : errToStr(st.code));
-  if (st.ok()) st = device.readOperatingModeSupport(modes);
+  if (st.ok()) {
+    uint8_t modes = 0;
+    st = device.readOperatingModeSupport(modes);
+  }
   reportCheck("readOperatingModeSupport", st.ok(), st.ok() ? "" : errToStr(st.code));
-  if (st.ok()) st = device.readSpecialFeatures(special);
+  if (st.ok()) {
+    uint8_t special = 0;
+    st = device.readSpecialFeatures(special);
+  }
   reportCheck("readSpecialFeatures", st.ok(), st.ok() ? "" : errToStr(st.code));
 
   uint8_t status = 0;
@@ -1123,9 +1108,9 @@ void runSelfTest() {
   reportCheck("isOnline", device.isOnline(), "");
 
   Serial.printf("Selftest result: pass=%s%lu%s fail=%s%lu%s skip=%s%lu%s\n",
-                goodIfNonZeroColor(result.pass), static_cast<unsigned long>(result.pass), LOG_COLOR_RESET,
-                goodIfZeroColor(result.fail), static_cast<unsigned long>(result.fail), LOG_COLOR_RESET,
-                skipCountColor(result.skip), static_cast<unsigned long>(result.skip), LOG_COLOR_RESET);
+                cli::nonZeroGoodColor(result.pass), static_cast<unsigned long>(result.pass), LOG_COLOR_RESET,
+                cli::zeroGoodColor(result.fail), static_cast<unsigned long>(result.fail), LOG_COLOR_RESET,
+                cli::warningIfNonZeroColor(result.skip), static_cast<unsigned long>(result.skip), LOG_COLOR_RESET);
 }
 
 // ============================================================================
@@ -1738,7 +1723,7 @@ void processCommand(const String& cmd) {
     printStatus(st);
   
   } else if (trimmed == "verbose") {
-    LOGI("Verbose mode: %s%s%s", onOffColor(verboseMode), verboseMode ? "ON" : "OFF", LOG_COLOR_RESET);
+    LOGI("Verbose mode: %s%s%s", cli::enabledColor(verboseMode), verboseMode ? "ON" : "OFF", LOG_COLOR_RESET);
   
   } else if (trimmed.startsWith("verbose ")) {
     int val = trimmed.substring(8).toInt();
@@ -1747,7 +1732,7 @@ void processCommand(const String& cmd) {
       buslog::clear();
     }
     buslog::setEnabled(verboseMode);
-    LOGI("Verbose mode: %s%s%s", onOffColor(verboseMode), verboseMode ? "ON" : "OFF", LOG_COLOR_RESET);
+    LOGI("Verbose mode: %s%s%s", cli::enabledColor(verboseMode), verboseMode ? "ON" : "OFF", LOG_COLOR_RESET);
   } else if (trimmed == "trace stats") {
     buslog::printStats();
   } else if (trimmed == "trace clear") {
@@ -1765,10 +1750,10 @@ void processCommand(const String& cmd) {
     e2diag::testClockPulses(deviceCfg, 10);
   } else if (trimmed == "sniff") {
     // Toggle
-    if (e2diag::sniffer().isActive()) {
-      e2diag::sniffer().stop();
+    if (e2diag::isSnifferActive()) {
+      e2diag::stopSniffer();
     } else {
-      e2diag::sniffer().start(&deviceCfg);
+      e2diag::startSniffer(deviceCfg);
     }
   } else if (trimmed == "scan") {
     e2diag::scanAddresses(deviceCfg);
@@ -1815,10 +1800,7 @@ void setup() {
   Serial.println();
   Serial.println("=== EE871 Bringup Example ===");
 
-  if (!board::initE2()) {
-    Serial.println("[E] Failed to initialize E2 pins");
-    return;
-  }
+  board::initE2();
 
   Serial.printf("[I] E2 initialized (DATA=%d, CLOCK=%d)\n", board::E2_DATA, board::E2_CLOCK);
 
@@ -1860,20 +1842,11 @@ void setup() {
 
 void loop() {
   device.tick(millis());
-  e2diag::sniffer().tick();  // Background sniffer (if active)
 
-  static String inputBuffer;
-  while (Serial.available()) {
-    char c = Serial.read();
-    if (c == '\n' || c == '\r') {
-      if (inputBuffer.length() > 0) {
-        processCommand(inputBuffer);
-        inputBuffer = "";
-        cli::printPrompt();
-      }
-    } else {
-      inputBuffer += c;
-    }
+  String command;
+  if (cli_shell::readLine(command)) {
+    processCommand(command);
+    cli::printPrompt();
   }
 
   buslog::flush();

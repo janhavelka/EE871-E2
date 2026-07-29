@@ -821,9 +821,9 @@ Status EE871::getSettings(SettingsSnapshot& out) const {
   out.state = _driverState;
   out.initialized = _initialized;
   out.nowMs = _nowMs;
-  out.operatingFunctions = _operatingFunctions;
-  out.operatingModeSupport = _operatingModeSupport;
-  out.specialFeatures = _specialFeatures;
+  out.operatingFunctions = _capabilities.operatingFunctions;
+  out.operatingModeSupport = _capabilities.operatingModeSupport;
+  out.specialFeatures = _capabilities.specialFeatures;
   out.lastOkMs = _lastOkMs;
   out.lastErrorMs = _lastErrorMs;
   out.lastError = _lastError;
@@ -870,17 +870,11 @@ void EE871::_publishIdentityAndCapabilities(
     const CapabilitySnapshot& capabilities) {
   _identity = identity;
   _capabilities = capabilities;
-  _operatingFunctions = capabilities.operatingFunctions;
-  _operatingModeSupport = capabilities.operatingModeSupport;
-  _specialFeatures = capabilities.specialFeatures;
 }
 
 void EE871::_clearIdentityAndCapabilities() {
   _identity = DeviceIdentity{};
   _capabilities = CapabilitySnapshot{};
-  _operatingFunctions = 0;
-  _operatingModeSupport = 0;
-  _specialFeatures = 0;
 }
 
 void EE871::_latchSemanticOffline(const Status& cause) {

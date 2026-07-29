@@ -1,6 +1,6 @@
 # EE871-E2 ESP-IDF v6.0.1 Port Guide
 
-Last audited: 2026-06-02
+Last audited: 2026-07-29
 
 Scope: first-class ESP-IDF support while keeping the Arduino/PlatformIO example
 and public driver core usable. The framework-neutral driver core is shared; the
@@ -26,12 +26,13 @@ Official ESP-IDF references used for the port guidance, verified on
   writes block inside bounded callback-driven operations.
 - Timing is callback owned. The driver validates E2 timing fields and caps flash
   write delays with `WRITE_DELAY_MAX_MS`.
-- Arduino dependencies are isolated in examples and test stubs:
+- Arduino dependencies are isolated in examples:
   - `examples/common/E2Transport.h` uses `pinMode`, `digitalWrite`,
     `digitalRead`, and `delayMicroseconds`.
   - `examples/01_basic_bringup_cli/main.cpp` and `examples/common/*.h` use
     `Serial`, `String`, `millis()`, and Arduino command helpers.
-  - native tests use stubs under `test/stubs/`.
+- Native tests compile the framework-neutral core directly and require no
+  Arduino or `Wire` compatibility stubs.
 - `library.json` advertises Arduino and ESP-IDF framework support.
 - `platformio.ini` owns Arduino example and native-test builds; ESP-IDF builds
   use the root `CMakeLists.txt`, `idf_component.yml`, and the
@@ -67,9 +68,9 @@ from the core. EE871 E2 is represented by bit-level open-drain callbacks in
    - Avoid implicit narrowing in GPIO numbers and timing conversions.
 2. Write-delay scheduling:
    - Current public writes can block in bounded millisecond loops.
-   - Accept this explicitly for the first IDF port or convert write completion
-     into a `tick()`-driven state before claiming the driver is suitable for
-     high-priority tasks.
+   - Keep persistent writes and other long bounded operations out of
+     high-priority tasks. The library remains intentionally synchronous; do
+     not add a parallel asynchronous engine.
 3. Pure ESP-IDF build proof:
    - Component metadata and the native IDF example are present.
    - CI is configured for the `esp32s3` and `esp32s2` matrix.
@@ -81,7 +82,7 @@ from the core. EE871 E2 is represented by bit-level open-drain callbacks in
    - Pure ESP-IDF hardware HIL, bus timing, pull-up behavior, clock stretching,
      and recovery still require bench validation.
 
-## Files To Change
+## Ownership Map
 
 Core files to keep framework-neutral:
 - `include/EE871/Config.h`
@@ -92,12 +93,11 @@ Core files to keep framework-neutral:
 
 ESP-IDF support files:
 - `CMakeLists.txt`
-- `idf_component.yml` optional but recommended
+- `idf_component.yml`
 - `examples/idf/basic_bringup/CMakeLists.txt`
 - `examples/idf/basic_bringup/main/CMakeLists.txt`
 - `examples/idf/basic_bringup/main/main.cpp`
-- `examples/idf/common/E2GpioTransport.h` or component-local
-  `examples/idf/basic_bringup/main/E2GpioTransport.h`
+- `examples/idf/common/E2GpioTransport.h`
 
 Files that should remain Arduino-only:
 - `examples/01_basic_bringup_cli/main.cpp`
@@ -238,14 +238,13 @@ Keep the example deterministic:
 - Use bounded command attempts.
 - Avoid heap-backed command parsing in first IDF example.
 
-## Arduino Compatibility Plan
+## Framework Boundary
 
 - Do not remove the existing Arduino example.
 - Keep `examples/common/E2Transport.h` as the Arduino GPIO adapter.
 - Do not add ESP-IDF includes to public headers.
-- If adding helper adapter headers, keep framework-specific names explicit:
-  `E2TransportArduino.h` and `E2TransportIdf.h`.
-- Keep native tests using stubs, but add an IDF compile test separately.
+- Keep any future framework adapter names explicit.
+- Keep native tests platform-free and retain a separate native ESP-IDF build.
 
 ## Test And Validation Plan
 
@@ -299,12 +298,15 @@ Static checks:
 ## Ordered Validation Checklist
 
 1. Run `python tools/check_core_timing_guard.py`.
-2. Run `python tools/check_cli_contract.py`.
-3. Run `python tools/check_idf_example_contract.py`.
-4. Run `python -m platformio test -e native`.
-5. Run `python -m platformio run -e ex_bringup_s3`.
-6. Run `python -m platformio run -e ex_bringup_s2`.
-7. Build the IDF example for ESP32-S3 and ESP32-S2 with `idf.py` when ESP-IDF
+2. Run `python tools/check_public_timing_contract.py`.
+3. Run `python tools/check_cli_contract.py`.
+4. Run `python tools/check_idf_example_contract.py`.
+5. Run `python scripts/generate_version.py check`.
+6. Run `python test/test_hil_runner_parser.py`.
+7. Run `python -m platformio test -e native`.
+8. Run `python -m platformio run -e ex_bringup_s3`.
+9. Run `python -m platformio run -e ex_bringup_s2`.
+10. Build the IDF example for ESP32-S3 and ESP32-S2 with `idf.py` when ESP-IDF
    is available, or record the passing GitHub Actions `idf-build` matrix.
-8. Hardware-test `begin()`, `probe()`, status read, CO2 reads, bus diagnostics,
+11. Hardware-test `begin()`, `probe()`, status read, CO2 reads, bus diagnostics,
    self-test/stress workflows, missing-device timeout, and stuck-bus recovery.

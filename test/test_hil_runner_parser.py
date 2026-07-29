@@ -94,7 +94,7 @@ Selftest result: pass=\x1b[32m2\x1b[0m fail=\x1b[32m0\x1b[0m skip=\x1b[33m1\x1b[
         self.assertEqual(parsed["selftest"]["fail"], 0)
         self.assertEqual(parsed["selftest"]["skip"], 1)
 
-    def test_parse_selftest_failure_sets_fail_verdict(self) -> None:
+    def test_parse_selftest_records_nonzero_failure_count(self) -> None:
         text = """
 === EE871 selftest (safe commands) ===
   [PASS] probe responds
@@ -219,17 +219,19 @@ Selftest result: pass=9 fail=1 skip=0
         self.assertFalse(parsed["online"])
         self.assertEqual(parsed["consecutive_failures"], 5)
 
-    def test_dirty_state_fails_safe_run(self) -> None:
+    def test_parse_dirty_records_verify_mismatch(self) -> None:
         text = """
 === Persistent Config Dirty State ===
   persistentConfigDirty: yes
-  persistentConfigDirtyError: VERIFY_FAILED (code=8, detail=199)
+  persistentConfigDirtyError: VERIFY_MISMATCH (code=15, detail=199)
   persistentConfigDirtyError message: verify mismatch
   resyncNeeded: yes
 > """
         parsed = runner.parse_dirty(text)
         self.assertTrue(parsed["persistent_config_dirty"])
-        self.assertEqual(parsed["persistent_config_dirty_error"]["name"], "VERIFY_FAILED")
+        self.assertEqual(
+            parsed["persistent_config_dirty_error"]["name"], "VERIFY_MISMATCH"
+        )
 
     def test_validate_parsed_marks_dirty_and_stress_failures(self) -> None:
         dirty_spec = runner.CommandSpec("dirty", "dirty", validators=("dirty_clean",))
@@ -357,31 +359,31 @@ Selftest result: pass=9 fail=1 skip=0
             destructive=True,
         )
 
-        self.assertIsNotNone(runner.maintenance_write_block_reason(spec, {}))
+        self.assertIsNotNone(runner.destructive_step_block_reason(spec, {}))
         self.assertIsNotNone(
-            runner.maintenance_write_block_reason(
+            runner.destructive_step_block_reason(
                 spec,
                 {"persistent_config_dirty": True, "resync_needed": True},
             )
         )
         self.assertIsNone(
-            runner.maintenance_write_block_reason(
+            runner.destructive_step_block_reason(
                 spec,
                 self.admitted_state(baseline_measurement_interval_ds=151),
             )
         )
 
-    def test_record_persistent_write_expectation(self) -> None:
+    def test_record_mutation_expectation(self) -> None:
         state: dict[str, object] = {}
-        runner.record_persistent_write_expectation(
+        runner.record_mutation_expectation(
             {"result": runner.RESULT_PASS, "destructive": True, "command": "interval 150"},
             state,
         )
-        runner.record_persistent_write_expectation(
+        runner.record_mutation_expectation(
             {"result": runner.RESULT_PASS, "destructive": True, "command": "offset -15"},
             state,
         )
-        runner.record_persistent_write_expectation(
+        runner.record_mutation_expectation(
             {"result": runner.RESULT_PASS, "destructive": True, "command": "gain 32768"},
             state,
         )
@@ -578,7 +580,7 @@ Sensor error: NONE (enum=0)
         self.assertFalse(duplicate["custom_memory_complete"])
         self.assertTrue(duplicate["custom_memory_errors"])
 
-    def test_extended_plan_covers_prompt04_safe_surface(self) -> None:
+    def test_extended_plan_covers_complete_safe_surface(self) -> None:
         commands = [spec.command for spec in runner.extended_specs(1, 1)]
         for command in (
             "buscheck",
@@ -689,8 +691,8 @@ Sensor error: NONE (enum=0)
             "command": "interval 160",
             "group": "maintenance-interval",
         }
-        runner.record_persistent_write_expectation(failed, state)
-        reason = runner.maintenance_write_block_reason(
+        runner.record_mutation_expectation(failed, state)
+        reason = runner.destructive_step_block_reason(
             runner.CommandSpec(
                 "interval 150",
                 "restore",
@@ -709,7 +711,7 @@ Sensor error: NONE (enum=0)
             "command": "interval 160",
             "group": "maintenance-interval",
         }
-        runner.record_persistent_write_expectation(test_write, state)
+        runner.record_mutation_expectation(test_write, state)
         restore = runner.CommandSpec(
             "interval <recorded-baseline>",
             "restore",
@@ -719,7 +721,7 @@ Sensor error: NONE (enum=0)
         )
         self.assertIn(
             "no fresh successful dirty diagnostic",
-            runner.maintenance_write_block_reason(restore, state) or "",
+            runner.destructive_step_block_reason(restore, state) or "",
         )
 
         diagnostic = {
@@ -761,7 +763,7 @@ Sensor error: NONE (enum=0)
             diagnostic,
         )
         runner.update_state(state, row)
-        self.assertIsNone(runner.maintenance_write_block_reason(restore, state))
+        self.assertIsNone(runner.destructive_step_block_reason(restore, state))
 
     def test_restore_is_blocked_after_each_post_write_failure_or_uncertainty(self) -> None:
         restore = runner.CommandSpec(
@@ -780,7 +782,7 @@ Sensor error: NONE (enum=0)
             ("reg dump 0 256", runner.RESULT_OPERATOR),
         ):
             state = self.admitted_state(baseline_co2_interval_factor=-1)
-            runner.record_persistent_write_expectation(
+            runner.record_mutation_expectation(
                 {
                     "result": runner.RESULT_PASS,
                     "destructive": True,
@@ -806,7 +808,7 @@ Sensor error: NONE (enum=0)
             runner.update_state(state, failed)
             self.assertIn(
                 "maintenance verification step failed",
-                runner.maintenance_write_block_reason(restore, state) or "",
+                runner.destructive_step_block_reason(restore, state) or "",
             )
 
     def test_custom_memory_diff_allows_only_documented_volatile_addresses(self) -> None:
@@ -905,6 +907,10 @@ Sensor error: NONE (enum=0)
         commands = [spec.command for spec in plan]
         self.assertEqual(1, commands.count("autoadj start"))
         self.assertEqual(["autoadj start"], [spec.command for spec in plan if spec.destructive])
+        self.assertNotIn("resync", commands)
+        self.assertFalse(
+            any("<recorded-baseline>" in command for command in commands)
+        )
 
     def test_checkpoint_writes_forensic_baseline_without_replay_commands(self) -> None:
         args = runner.parse_args(["--dry-run"])
@@ -1049,7 +1055,7 @@ Sensor error: NONE (enum=0)
             {},
         )
         runner.update_state(state, terminal)
-        reason = runner.maintenance_write_block_reason(
+        reason = runner.destructive_step_block_reason(
             runner.CommandSpec(
                 "interval 160",
                 "write",
@@ -1062,7 +1068,7 @@ Sensor error: NONE (enum=0)
 
     def test_unrestorable_mode_baseline_blocks_mode_write(self) -> None:
         state = self.admitted_state(baseline_operating_mode=0x55)
-        reason = runner.maintenance_write_block_reason(
+        reason = runner.destructive_step_block_reason(
             runner.CommandSpec(
                 "mode 1",
                 "write mode",
@@ -1075,7 +1081,7 @@ Sensor error: NONE (enum=0)
 
     def test_unrestorable_interval_and_address_baselines_block_first_write(self) -> None:
         common = self.admitted_state()
-        interval_reason = runner.maintenance_write_block_reason(
+        interval_reason = runner.destructive_step_block_reason(
             runner.CommandSpec(
                 "interval 160",
                 "write interval",
@@ -1088,7 +1094,7 @@ Sensor error: NONE (enum=0)
             },
         )
         self.assertIn("restore range 150..36000", interval_reason or "")
-        address_reason = runner.maintenance_write_block_reason(
+        address_reason = runner.destructive_step_block_reason(
             runner.CommandSpec(
                 "addr 1",
                 "write address",
@@ -1106,7 +1112,7 @@ Sensor error: NONE (enum=0)
 
     def test_no_op_test_value_is_blocked_before_write(self) -> None:
         state = self.admitted_state(baseline_measurement_interval_ds=150)
-        reason = runner.maintenance_write_block_reason(
+        reason = runner.destructive_step_block_reason(
             runner.CommandSpec(
                 "interval 150",
                 "write interval",
@@ -1156,7 +1162,7 @@ Sensor error: NONE (enum=0)
         )
         state["address_change_started"] = True
         runner.update_state(state, failed_row)
-        blocked = runner.maintenance_write_block_reason(
+        blocked = runner.destructive_step_block_reason(
             runner.CommandSpec(
                 "operator: activate address candidate",
                 "activate",
@@ -1204,7 +1210,7 @@ Sensor error: NONE (enum=0)
         self.assertIn("fresh pre-action", reason or "")
         self.assertIn(
             "fresh pre-action",
-            runner.maintenance_write_block_reason(
+            runner.destructive_step_block_reason(
                 runner.CommandSpec(
                     "autoadj start",
                     "start",
@@ -1430,7 +1436,7 @@ Sensor error: NONE (enum=0)
             destructive=True,
         )
         complete = self.admitted_state(baseline_measurement_interval_ds=150)
-        self.assertIsNone(runner.maintenance_write_block_reason(spec, complete))
+        self.assertIsNone(runner.destructive_step_block_reason(spec, complete))
         for key, value in (
             ("mutation_unresolved", None),
             ("mutation_unresolved", True),
@@ -1440,25 +1446,25 @@ Sensor error: NONE (enum=0)
         ):
             blocked = dict(complete)
             blocked[key] = value
-            self.assertIsNotNone(runner.maintenance_write_block_reason(spec, blocked))
+            self.assertIsNotNone(runner.destructive_step_block_reason(spec, blocked))
 
         mismatch = dict(complete)
         mismatch["baseline_device_address"] = 1
         self.assertIn(
             "does not match configured address",
-            runner.maintenance_write_block_reason(spec, mismatch) or "",
+            runner.destructive_step_block_reason(spec, mismatch) or "",
         )
         for invalid_image in (None, [0] * 255, [0] * 255 + [256]):
             invalid = dict(complete)
             invalid["baseline_custom_memory"] = invalid_image
             self.assertIn(
                 "baseline is missing or invalid",
-                runner.maintenance_write_block_reason(spec, invalid) or "",
+                runner.destructive_step_block_reason(spec, invalid) or "",
             )
 
     def test_configured_address_is_not_overwritten_by_candidate_state(self) -> None:
         state: dict[str, object] = {"configured_device_address": 0}
-        runner.record_persistent_write_expectation(
+        runner.record_mutation_expectation(
             {
                 "result": runner.RESULT_PASS,
                 "destructive": True,
@@ -1833,7 +1839,7 @@ Sensor error: UNKNOWN (enum=255)
         for value in ("-128", "-1", "1", "127"):
             args = runner.parse_args([*prefix, value])
             self.assertEqual(int(value), args.write_interval_factor)
-        reason = runner.maintenance_write_block_reason(
+        reason = runner.destructive_step_block_reason(
             runner.CommandSpec(
                 "factor 1",
                 "write",
@@ -2037,7 +2043,7 @@ Sensor error: UNKNOWN (enum=255)
             "test",
             {"status": {"name": "OK", "code": 0, "detail": 0}},
         )
-        runner.record_persistent_write_expectation(test_write, state)
+        runner.record_mutation_expectation(test_write, state)
 
         readback = runner.CommandSpec(
             "factor",
@@ -2108,7 +2114,7 @@ Sensor error: UNKNOWN (enum=255)
             destructive=True,
             dynamic="factor_baseline",
         )
-        self.assertIsNone(runner.maintenance_write_block_reason(restore, state))
+        self.assertIsNone(runner.destructive_step_block_reason(restore, state))
         command, reason = runner.resolve_dynamic_command(restore, state)
         self.assertEqual("factor -1", command)
         self.assertIsNone(reason)
@@ -2122,7 +2128,7 @@ Sensor error: UNKNOWN (enum=255)
             "test",
             {"status": {"name": "OK", "code": 0, "detail": 0}},
         )
-        runner.record_persistent_write_expectation(restore_row, state)
+        runner.record_mutation_expectation(restore_row, state)
 
         failures, reviews = runner.validate_parsed(
             readback,
@@ -2170,15 +2176,6 @@ Sensor error: UNKNOWN (enum=255)
         )
         self.assertEqual([], failures)
         self.assertEqual([], reviews)
-
-    def test_auto_adjust_plan_has_no_restore_retry_or_automatic_resync(self) -> None:
-        args = runner.parse_args(
-            ["--dry-run", "--include-auto-adjust", "--confirm-auto-adjust"]
-        )
-        commands = [spec.command for spec in runner.auto_adjust_specs(args)]
-        self.assertEqual(1, commands.count("autoadj start"))
-        self.assertNotIn("resync", commands)
-        self.assertFalse(any("<recorded-baseline>" in command for command in commands))
 
     def test_complete_safe_captures_features_before_checked_samples(self) -> None:
         commands = [spec.command for spec in runner.extended_specs(1, 1)]

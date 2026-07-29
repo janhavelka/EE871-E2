@@ -38,9 +38,9 @@ wifi_credentials.h
 *.log
 
 # Auto-generated files
-include/YourLibrary/Version.h
 compile_commands.json
 docs/doxygen/
+hil_logs/
 
 # Generated packages
 *.tar.gz

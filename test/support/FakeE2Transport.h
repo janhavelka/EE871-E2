@@ -788,8 +788,6 @@ private:
         }
         if (controlIsRead() &&
             mainCommand() == EE871::cmd::MAIN_CUSTOM_PTR) {
-          const size_t index =
-              _transactionCount == 0U ? 0U : _transactionCount - 1U;
           if (index < MAX_RECORDED_TRANSACTIONS) {
             _transactionAddress[index] = _customPointer;
             _transactionHasAddress[index] = true;

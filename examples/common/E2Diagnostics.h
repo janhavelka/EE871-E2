@@ -748,7 +748,6 @@ struct SnifferState {
   
   // For value tracking
   uint8_t lastMainCmd = 0;
-  uint8_t lastDataByte = 0;
   uint8_t pendingLowByte = 0;
   bool haveLowByte = false;
   uint8_t lowByteCmd = 0;
@@ -847,7 +846,6 @@ inline void snifferCallback(bool scl, bool sda) {
         // Data byte - check if it's data or PEC
         if (s.byteIndex == 1) {
           // First data byte
-          s.lastDataByte = s.currentByte;
           Serial.printf(" data=0x%02X(%u)", s.currentByte, s.currentByte);
           
           // Track for 16-bit assembly
@@ -883,49 +881,38 @@ inline void snifferCallback(bool scl, bool sda) {
   s.lastSda = sda;
 }
 
-/// Sniffer control class
-class BusSniffer {
-public:
-  void start(const EE871::Config* cfg) {
-    auto& s = snifferState();
-    s.lastScl = cfg->readScl(cfg->busUser);
-    s.lastSda = cfg->readSda(cfg->busUser);
-    s.transitions = 0;
-    s.startMs = millis();
-    s.state = SnifferState::State::IDLE;
-    s.currentByte = 0;
-    s.bitCount = 0;
-    s.isFirstByte = true;
-    s.haveLowByte = false;
-    s.active = true;
-    
-    // Register callback with transport
-    transport::setSnifferCallback(snifferCallback);
-    
-    Serial.println("[SNIFF] ON - 'sniff 0' to stop");
-  }
-  
-  void stop() {
-    auto& s = snifferState();
-    if (s.active) {
-      s.active = false;
-      transport::setSnifferCallback(nullptr);
-      uint32_t elapsed = millis() - s.startMs;
-      Serial.printf("\n[SNIFF] OFF (%lu ms, %lu edges)\n",
-                    static_cast<unsigned long>(elapsed),
-                    static_cast<unsigned long>(s.transitions));
-    }
-  }
-  
-  bool isActive() const { return snifferState().active; }
-  
-  void tick() {}
-};
+inline void startSniffer(const EE871::Config& cfg) {
+  auto& s = snifferState();
+  s.lastScl = cfg.readScl(cfg.busUser);
+  s.lastSda = cfg.readSda(cfg.busUser);
+  s.transitions = 0;
+  s.startMs = millis();
+  s.state = SnifferState::State::IDLE;
+  s.currentByte = 0;
+  s.bitCount = 0;
+  s.isFirstByte = true;
+  s.haveLowByte = false;
+  s.active = true;
 
-/// Global sniffer instance for use in examples
-inline BusSniffer& sniffer() {
-  static BusSniffer instance;
-  return instance;
+  transport::setSnifferCallback(snifferCallback);
+  Serial.println("[SNIFF] ON - run 'sniff' again to stop");
+}
+
+inline void stopSniffer() {
+  auto& s = snifferState();
+  if (!s.active) {
+    return;
+  }
+  s.active = false;
+  transport::setSnifferCallback(nullptr);
+  const uint32_t elapsed = millis() - s.startMs;
+  Serial.printf("\n[SNIFF] OFF (%lu ms, %lu edges)\n",
+                static_cast<unsigned long>(elapsed),
+                static_cast<unsigned long>(s.transitions));
+}
+
+inline bool isSnifferActive() {
+  return snifferState().active;
 }
 
 } // namespace e2diag

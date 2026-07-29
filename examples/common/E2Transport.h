@@ -25,7 +25,7 @@ inline void setSnifferCallback(SnifferCallback cb) {
 }
 
 /// Initialize pins for open-drain E2 bus use.
-inline bool initE2(E2Pins& pins, int sclPin, int sdaPin) {
+inline void initE2(E2Pins& pins, int sclPin, int sdaPin) {
   pins.scl = sclPin;
   pins.sda = sdaPin;
 
@@ -34,8 +34,6 @@ inline bool initE2(E2Pins& pins, int sclPin, int sdaPin) {
 
   digitalWrite(pins.scl, HIGH);
   digitalWrite(pins.sda, HIGH);
-
-  return true;
 }
 
 inline void setScl(bool level, void* user) {

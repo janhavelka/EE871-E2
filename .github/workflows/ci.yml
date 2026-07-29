@@ -52,6 +52,9 @@ jobs:
       - name: Enforce core timing guard
         run: python tools/check_core_timing_guard.py
 
+      - name: Enforce public timing contract
+        run: python tools/check_public_timing_contract.py
+
       - name: Run native tests
         run: pio test -e native
 
@@ -91,6 +94,12 @@ jobs:
 
       - name: Enforce example CLI contract
         run: python tools/check_cli_contract.py
+
+      - name: Enforce generated metadata
+        run: python scripts/generate_version.py check
+
+      - name: Run HIL runner parser and planner tests
+        run: python test/test_hil_runner_parser.py
 
       - name: Validate library.json
         run: |

@@ -1,7 +1,7 @@
 # EE871-E2 Hardening Final Report
 
 Started: 2026-05-31
-Last updated: 2026-07-28
+Last updated: 2026-07-29
 Original branch: `hardening/ee871-e2-industry-readiness`
 
 ## Current Status Summary
@@ -1118,6 +1118,41 @@ Software validation on 2026-07-29:
 At this implementation checkpoint no version, tag, release, commit, or push
 had been performed. A later authorized series commit/push does not constitute
 a tag or release. If `v1.1.0` is already published externally, these
-corrections require an authorized patch release. Prompt 04C remains required
-before live HIL. Detailed tables and compatibility impact are recorded in
+corrections require an authorized patch release. At that checkpoint Prompt 04C
+remained required before live HIL. Detailed tables and compatibility impact
+are recorded in
 `docs/reports/ee871_prompt_04b_fail_closed_metadata_handoff_20260729.md`.
+
+## 2026-07-29 Prompt 04C Closure And Cleanup Audit
+
+Prompt 04C and its post-completion audit are complete in source. Runner 2.3
+now enforces immutable full-image/typed baselines, exact checked-sample and
+status evidence, fresh auto-adjust idle admission, fault-group-scoped
+stuck-line evidence, typed restoration, and fail-closed destructive
+sequencing. Safe plans remain non-destructive; filter-write HIL and raw memory
+replay remain unavailable.
+
+The follow-up cleanup removed duplicated private capability-byte mirrors, dead
+runner resolver/state/idle branches, repeated parser/readback logic, obsolete
+example alias headers, unused Arduino/Wire native stubs, unused sniffer state,
+and a no-op sniffer wrapper. The Arduino diagnostic CLI now reuses the existing
+bounded line reader and shared color helpers. Public API, numeric enums,
+protocol behavior, timing contracts, mutation evidence, and compatibility
+aliases were preserved.
+
+Final software validation on 2026-07-29:
+
+- native library tests: PASS, 104/104;
+- HIL runner parser/planner tests: PASS, 72/72;
+- Arduino ESP32-S2 and ESP32-S3 PlatformIO builds: PASS;
+- CLI, native ESP-IDF example, core timing, and public timing contract checks:
+  PASS;
+- generated version/metadata check, Doxygen, and diff checks: PASS;
+- structured HIL dry-plan matrix: PASS, 12/12;
+- pure ESP-IDF build: not run because `idf.py` is unavailable on `PATH`;
+- serial/HIL and physical sensor/fault/destructive validation: not run.
+
+Prompt 04C is no longer a source blocker. The remaining work is the explicitly
+documented hardware/HIL matrix, native ESP-IDF build evidence, and separately
+authorized immutable release/tag/downstream pinning. No hardware or release
+claim is implied by this cleanup.

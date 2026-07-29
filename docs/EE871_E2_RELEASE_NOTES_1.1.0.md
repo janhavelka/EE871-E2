@@ -170,21 +170,24 @@ python tools/check_public_timing_contract.py
 python tools/check_cli_contract.py
 python tools/check_idf_example_contract.py
 python scripts/generate_version.py check
+python test/test_hil_runner_parser.py
 python -m platformio test -e native
 python -m platformio run -e ex_bringup_s3
 python -m platformio run -e ex_bringup_s2
 git diff --check
 ```
 
-The exact final commands, test count, and results belong in
-[`reports/ee871_prompt_04_release_handoff_20260728.md`](reports/ee871_prompt_04_release_handoff_20260728.md).
+The cumulative source-candidate results are recorded in
+[`EE871_E2_HARDENING_FINAL_REPORT.md`](EE871_E2_HARDENING_FINAL_REPORT.md).
+The dated handoffs under `reports/` preserve each implementation checkpoint.
 Pure ESP-IDF builds must be reported separately if `idf.py` is available.
 
 At the final-candidate checkpoint, the core/public timing, CLI, IDF example,
-version-metadata, and diff checks pass, and the native suite passes 91/91.
-Arduino ESP32-S3 and ESP32-S2 PlatformIO builds also pass. Exact command timing
-is retained in the handoff. Local pure ESP-IDF builds were not run because
-`idf.py` was unavailable on `PATH`.
+version-metadata, Doxygen, and diff checks pass. The native library suite passes
+104/104 and the HIL runner parser/planner suite passes 72/72 after removal of
+one exact duplicate test. Arduino ESP32-S3 and ESP32-S2 PlatformIO builds also
+pass. Local pure ESP-IDF builds were not run because `idf.py` was unavailable
+on `PATH`.
 
 No 1.1.0 HIL, physical-sensor, waveform, calibration, address-change,
 auto-adjust, network, or long-run validation is claimed by these release notes.
@@ -212,7 +215,7 @@ firmware version and provenance in the hardware matrix.
 - [x] Complete every available software validation command above on the final
   source; record unavailable `idf.py` honestly.
 - [x] Review the hardware matrix; leave unexecuted physical cases `NOT RUN`.
-- [x] Review the Prompt 04 handoff and P0/P1 closure audit.
+- [x] Review the Prompt 04/04A/04B/04C handoffs and post-completion audit.
 - [x] Confirm the working tree and intended release commit.
 - [x] Commit and push the source candidate on the already authorized series branch.
 - [ ] Obtain separate authorization to create/publish a tag or hosted release.
