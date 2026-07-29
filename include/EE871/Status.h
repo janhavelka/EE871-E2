@@ -18,7 +18,7 @@ enum class Err : uint8_t {
   E2_ERROR,                  ///< E2 bus communication failure
   TIMEOUT,                   ///< Operation timed out
   INVALID_PARAM,             ///< Invalid parameter value
-  DEVICE_NOT_FOUND,          ///< Device not responding on E2 bus
+  DEVICE_NOT_FOUND,          ///< Authoritative physical-presence check reports absence
   PEC_MISMATCH,              ///< PEC validation failed
   NACK,                      ///< Missing ACK/NACK on bus
   BUSY,                      ///< Device is busy

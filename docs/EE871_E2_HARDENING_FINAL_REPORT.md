@@ -1058,3 +1058,66 @@ The reusable library is release-source-ready only after all final software
 commands pass. Creating or publishing `v1.1.0` remains a separately authorized
 action, and downstream firmware must verify the resulting immutable reference
 rather than infer it from these source documents.
+
+## 2026-07-29 Prompt 04A Completion-Budget Correction
+
+Prompt 04A corrects a source/native timing-accounting defect found before HIL.
+The 150 ms normal-write/pointer allowance and 300 ms interval-commit allowance
+now cover cumulative sensor-held-low polling at final ACK and STOP plus only
+the remaining quiet wait. Deterministic, configuration-bounded ACK/STOP
+waveform time is tracked as separate protocol tail. An exact documented
+sensor-held-low limit therefore succeeds; the first 5 us fake polling step
+beyond it times out. ACK and STOP still share one allowance.
+
+The conservative public operation bounds now include that master tail once,
+without duplicating the completion allowance. Native fake coverage exercises
+exact and over-limit final-ACK/STOP stretches, split cumulative stretches,
+remaining-wait behavior, pointer ordering, interval commit, mutation evidence,
+ordinary pre-PEC deadlines, and maximum accepted timing configuration.
+
+This is a source/native correction pending physical HIL. It does not revise the
+historical validation evidence above, and it does not claim a release, tag, or
+hardware result.
+
+Prompt 04A alone does not reopen the release gate. Corrective Prompts 04B and
+04C remain required before an authorized immutable release or downstream
+exact-pinning, as recorded in `docs/prompts/README.md`.
+
+## 2026-07-29 Prompt 04B Fail-Closed Metadata Correction
+
+Prompt 04B removes the clean-NACK absence shortcut. Both begin policies now
+preserve GPIO E2 NACK and remain uninitialized because a
+measurement-priority slave may legitimately NACK. Only authoritative
+`DEVICE_NOT_FOUND`, which the current GPIO path cannot produce, may be
+accepted by `ALLOW_ABSENT`.
+
+Capability bytes `0x03..0x09` now validate their documented reserved-zero
+masks before atomic publication. Recovery semantic incompatibility clears all
+live identity/capability claims and latches OFFLINE from READY, DEGRADED, or
+OFFLINE without inventing transport failures. Direct typed capability reads
+share the same validation, while E2 version byte `0x02` remains diagnostic.
+
+Address, interval, nonzero signed interval factor, D8, and D9 use shared pure
+validators across typed reads, typed write admission, post-write observation,
+unresolved resync, and full resync. Invalid observations leave outputs
+unchanged, retain raw detail, and cannot falsely settle mutation uncertainty.
+Filter D3 remains opaque. Protected `customWrite()` dispatch remains intact,
+and its otherwise-unclassified fallback is documented as expert maintenance
+that requires authoritative vendor address/restoration semantics.
+
+Software validation on 2026-07-29:
+
+- native tests: PASS, 104/104;
+- Arduino ESP32-S2 and ESP32-S3 PlatformIO builds: PASS;
+- CLI, native ESP-IDF example, core timing, and public timing contract checks:
+  PASS;
+- generated version/metadata check and Doxygen: PASS;
+- pure ESP-IDF build: not run because `idf.py` is unavailable on `PATH`;
+- HIL and physical sensor/fault/destructive validation: not run.
+
+At this implementation checkpoint no version, tag, release, commit, or push
+had been performed. A later authorized series commit/push does not constitute
+a tag or release. If `v1.1.0` is already published externally, these
+corrections require an authorized patch release. Prompt 04C remains required
+before live HIL. Detailed tables and compatibility impact are recorded in
+`docs/reports/ee871_prompt_04b_fail_closed_metadata_handoff_20260729.md`.

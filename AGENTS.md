@@ -72,6 +72,9 @@ Rules:
   `NOT_SUPPORTED`, `OUT_OF_RANGE`, `PEC_MISMATCH`, `BUS_STUCK`, `TIMEOUT`,
   `NACK`, or a more precise existing code when the device responded but the
   result is invalid or unsupported.
+- E2 NACK is transient/ambiguous and must never be remapped to physical
+  absence. The GPIO E2 path has no authoritative `DEVICE_NOT_FOUND`
+  mechanism; both begin policies preserve NACK and remain uninitialized.
 - Do not hide bus or sensor side effects inside convenience APIs unless the API
   name, docs, examples, and tests make the side effect explicit.
 - Prefer explicit recovery over background magic. The application owns retry
@@ -179,6 +182,14 @@ Rules:
 - 0xD3 filter, 0xD8 operating mode, 0xD9 auto adjustment control/status.
 - 0xFE/0xFF pointer visibility.
 
+Capability bytes 0x03..0x09 must have these reserved-zero masks before atomic
+publication: F0, F0, FE, F0, 08, FC, FE respectively. E2 version 0x02 remains
+diagnostic only. Typed persisted values must fail closed for address outside
+0..7, interval outside 150..36000, zero specific-interval factor, D8 reserved
+or unadvertised set bits, and D9 reserved bits. Reuse the same validators for
+normal reads, typed writes, post-write observation, and both resync paths.
+Filter D3 remains opaque because its value set is product-specific.
+
 ---
 
 ## Measurement Timing (EE871 CO2)
@@ -283,7 +294,7 @@ enum class DriverState : uint8_t {
 
 State transitions:
 - strict `begin()` success -> READY
-- optional `begin()` with definite, cleanly terminated absence -> OFFLINE
+- optional `begin()` with authoritative accepted `DEVICE_NOT_FOUND` -> OFFLINE
 - Any E2 transfer failure in READY -> DEGRADED
 - Successful tracked transfer in DEGRADED -> READY
 - Failures reach `offlineThreshold` -> OFFLINE

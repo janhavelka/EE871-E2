@@ -12,7 +12,8 @@ Work only in `TunnelMonitor-node`.
 
 Preconditions:
 
-- Prompt 04 produced release-ready source and handoff;
+- Prompt 04 and corrective Prompts 04A-04C produced corrected release-ready
+  source and handoffs;
 - the separately authorized release/tag/push gate was completed;
 - Prompt 05 verified the exact immutable EE871 tag and commit;
 - Prompt 05 contains a fully authorized product/electrical decision;
@@ -36,7 +37,7 @@ lacks the required coherent paired checked-sample procedure.
 Read:
 
 - `AGENTS.md`;
-- Prompt 04 release-ready handoff;
+- Prompt 04 and corrective Prompt 04A-04C handoffs;
 - Prompt 05 decision report;
 - Prompt 06 handoff and all new E2 contracts/owner files;
 - current I2C modules under `src/devices/i2c/`;
@@ -309,8 +310,11 @@ The first `Probe`, `Measure`, or explicit diagnostics request may schedule one
 initialization phase. In `poll()`:
 
 - call `driver.begin(config)` exactly once;
-- `ALLOW_ABSENT` NACK produces an initialized module in `Offline`, not owner
-  failure;
+- GPIO E2 NACK remains exact NACK under `ALLOW_ABSENT`, leaves the driver
+  uninitialized, and puts only the firmware module in `Offline`; it is not
+  physical-absence evidence and does not terminate the owner;
+- only an authoritative library `DEVICE_NOT_FOUND`, if such a transport path
+  exists, can produce an initialized optional-absence session;
 - valid identity/capabilities produce `Ready`;
 - incompatible identity is a terminal `E2UnsupportedIdentity`;
 - bus-stuck/timeout/PEC remain precise failures;
@@ -347,7 +351,9 @@ their sum. Add an explicit test so this lifecycle rule cannot drift.
 - if initialized, call the library's raw/health-neutral `probe()`;
 - never call `recover()` implicitly;
 - preserve NACK as an exact attempt result;
-- initial accepted absence sets cached presence `Absent`;
+- authoritative accepted `DEVICE_NOT_FOUND` sets cached presence `Absent`;
+- initial NACK leaves cached presence `Unknown` and retains exact transport
+  context;
 - one later online NACK does not immediately invent permanent absence;
 - return no measurement reading.
 
@@ -455,10 +461,12 @@ replace it with the enum numeric value and do not expose the static message
 pointer. Retain the CO2 sensor code in `sensorErrorCode` separately.
 
 Bus-resource health counts timeout/stuck/PEC/backend/protocol transport errors.
-An accepted `ALLOW_ABSENT` `NACK`/`DEVICE_NOT_FOUND` is device absence, not a
-bus-resource fault. Sensor/range/warm-up results affect the device/sample
-result only. Prompt 08 freezes the required/optional resource projection for
-the Co2Control profile.
+Only authoritative accepted `DEVICE_NOT_FOUND` is device absence. NACK remains
+an exact device transport result and must not be relabeled as physical
+absence; product policy may keep an optional module offline without turning
+that single result into a fabricated bus fault. Sensor/range/warm-up results
+affect the device/sample result only. Prompt 08 freezes the required/optional
+resource projection for the Co2Control profile.
 
 ## ESP32 Backend
 
@@ -557,7 +565,8 @@ Freeze its cross-task rules:
   operator acceleration;
 - this backend-initialization retry is distinct from device
   `RecoverDevice`, which remains an explicit single attempt;
-- initial optional sensor absence does not terminate the worker;
+- initial optional-device NACK or authoritative absence does not terminate the
+  worker;
 - runtime `end()` first closes ingress, then asks the still-live worker to
   terminalize/cancel retained work and call `E2Task::end()` in owner context;
   only after an acknowledgement does it join/stop the worker and verify both
@@ -660,7 +669,8 @@ Prove:
 5. configure/bind/admission perform zero I/O;
 6. callback mapping uses release/input and drive-low only;
 7. first present initialization;
-8. optional absent initialization leaves owner alive/module offline;
+8. optional-device initialization NACK leaves owner alive, module offline,
+   driver uninitialized, and cached presence unknown;
 9. wrong group/subgroup/CO2 bit maps unsupported identity;
 10. partial capability failure never produces ready;
 11. non-accepted begin failure stays offline/uninitialized and ordinary
@@ -668,7 +678,7 @@ Prove:
 12. explicit recovery calls begin when uninitialized, calls recover when
     initialized, restores ready, and restarts warm-up;
 13. explicit probe is health-neutral, never recovers, and preserves exact
-    absence;
+    NACK or `DEVICE_NOT_FOUND`;
 14. measurement before warm-up is stale and bus-silent;
 15. average selection calls only checked average;
 16. fast selection calls only checked fast;
@@ -727,7 +737,8 @@ Report physical HIL as not run unless it actually ran with retained evidence.
 - all module admission/status paths are bus-silent;
 - lifecycle begin/end may configure/release GPIO, but only owner-context poll
   performs E2 protocol/device transactions;
-- initialization supports optional absence;
+- optional-device initialization remains nonfatal while NACK stays precise and
+  later retry is explicit;
 - recovery is explicit;
 - reusable runtime wrapper is implemented without a second owner path or early
   product instance;

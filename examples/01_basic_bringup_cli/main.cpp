@@ -679,7 +679,7 @@ void printHelp() {
   cli::printHelpItem("sampleavg", "Checked MV4 + status; may trigger next measurement");
   cli::printHelpItem("error", "Read error code (if status indicates error)");
   cli::printHelpItem("reg read <addr>", "Read custom register (0x00..0xFF)");
-  cli::printHelpItem("reg write <addr> <value>", "Write persistent custom register (bench only)");
+  cli::printHelpItem("reg write <addr> <value>", "Expert raw maintenance; vendor address/restore rules required");
   cli::printHelpItem("reg dump [start] [len]", "Dump custom registers (default all)");
   cli::printHelpItem("ctrl <main_nibble>", "Raw readControlByte(main_nibble)");
   cli::printHelpItem("u16 <main_lo> <main_hi>", "Raw readU16(main_lo, main_hi)");
@@ -702,9 +702,9 @@ void printHelp() {
   cli::printHelpItem("interval", "Read measurement interval");
   cli::printHelpItem("interval <dec>", "Write persistent interval (150..36000 ds)");
   cli::printHelpItem("factor", "Read CO2 interval factor");
-  cli::printHelpItem("factor <val>", "Write persistent CO2 interval factor");
-  cli::printHelpItem("filter", "Read CO2 filter setting");
-  cli::printHelpItem("filter <val>", "Write persistent CO2 filter");
+  cli::printHelpItem("factor <val>", "Write nonzero persistent CO2 interval factor");
+  cli::printHelpItem("filter", "Read opaque vendor-defined CO2 filter");
+  cli::printHelpItem("filter <val>", "Write opaque vendor-defined persistent CO2 filter");
   cli::printHelpItem("mode", "Read operating mode");
   cli::printHelpItem("mode <val>", "Write persistent operating mode (0..3)");
 

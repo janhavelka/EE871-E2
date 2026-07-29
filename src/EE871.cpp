@@ -84,10 +84,22 @@ uint64_t normalWriteTransactionBoundUs(const Config& cfg) {
   return startBoundUs(cfg) + (4ULL * cfg.byteTimeoutUs) + stopBoundUs(cfg);
 }
 
+uint64_t completionAckTailBoundUs(const Config& cfg) {
+  return static_cast<uint64_t>(kDataSetupUs) +
+         cfg.clockHighUs + cfg.clockLowUs;
+}
+
+uint64_t completionStopTailBoundUs(const Config& cfg) {
+  return static_cast<uint64_t>(kDataSetupUs) +
+         (2ULL * cfg.stopHoldUs);
+}
+
 uint64_t completionWriteTransactionBoundUs(
     const Config& cfg, uint32_t completionMs) {
   return startBoundUs(cfg) + (4ULL * cfg.byteTimeoutUs) +
-         (static_cast<uint64_t>(completionMs) * 1000ULL);
+         (static_cast<uint64_t>(completionMs) * 1000ULL) +
+         completionAckTailBoundUs(cfg) +
+         completionStopTailBoundUs(cfg);
 }
 
 uint64_t busResetBoundUs(const Config& cfg) {
@@ -180,17 +192,12 @@ void EE871::_delayUs(
 Status EE871::_delayWithinDeadline(
     const Config& config,
     uint32_t us,
-    ClockWaitClass waitClass,
     ByteDeadline& deadline) {
   if (deadline.elapsedUs > deadline.limitUs ||
       us > deadline.limitUs - deadline.elapsedUs) {
     return Status::Error(
         Err::TIMEOUT,
-        waitClass == ClockWaitClass::NORMAL_BIT
-            ? "Byte timeout"
-            : (waitClass == ClockWaitClass::INTERVAL_COMMIT
-                   ? "Interval commit timeout"
-                   : "Write completion timeout"),
+        "Byte timeout",
         static_cast<int32_t>(deadline.elapsedUs));
   }
   _delayUs(config, us, &deadline);
@@ -216,36 +223,39 @@ void EE871::_delayLongMs(const Config& config, uint32_t totalMs) {
   }
 }
 
+void EE871::_finishCompletionBudget(
+    const Config& config, CompletionBudget& budget) {
+  if (budget.consumedUs >= budget.limitUs) {
+    return;
+  }
+  const uint32_t remainingUs =
+      budget.limitUs - budget.consumedUs;
+  _delayLongMs(config, remainingUs / 1000U);
+  const uint32_t remainderUs = remainingUs % 1000U;
+  if (remainderUs != 0U) {
+    _delayUs(config, remainderUs);
+  }
+  budget.consumedUs = budget.limitUs;
+}
+
 Status EE871::_waitSclHigh(
     const Config& config,
-    ClockWaitClass waitClass,
     ByteDeadline& deadline) {
   uint32_t waitedUs = 0;
-  const uint32_t bitLimit =
-      (waitClass == ClockWaitClass::NORMAL_BIT)
-          ? config.bitTimeoutUs
-          : deadline.limitUs;
+  const uint32_t bitLimit = config.bitTimeoutUs;
 
   while (!readScl(config)) {
     if (waitedUs > bitLimit || kPollStepUs > bitLimit - waitedUs) {
       return Status::Error(
           Err::TIMEOUT,
-          waitClass == ClockWaitClass::NORMAL_BIT
-              ? "Clock stretch timeout"
-              : (waitClass == ClockWaitClass::INTERVAL_COMMIT
-                     ? "Interval commit timeout"
-                     : "Write completion timeout"),
+          "Clock stretch timeout",
           static_cast<int32_t>(waitedUs));
     }
     if (deadline.elapsedUs > deadline.limitUs ||
         kPollStepUs > deadline.limitUs - deadline.elapsedUs) {
       return Status::Error(
           Err::TIMEOUT,
-          waitClass == ClockWaitClass::NORMAL_BIT
-              ? "Byte timeout"
-              : (waitClass == ClockWaitClass::INTERVAL_COMMIT
-                     ? "Interval commit timeout"
-                     : "Write completion timeout"),
+          "Byte timeout",
           static_cast<int32_t>(deadline.elapsedUs));
     }
     _delayUs(config, kPollStepUs, &deadline);
@@ -254,12 +264,35 @@ Status EE871::_waitSclHigh(
   return Status::Ok();
 }
 
+Status EE871::_waitSclHighCompletion(
+    const Config& config,
+    ClockWaitClass waitClass,
+    CompletionBudget& completionBudget) {
+  // Only device-held-low polling spends the cumulative completion allowance.
+  // The caller accounts for the bounded master waveform separately.
+  while (!readScl(config)) {
+    if (completionBudget.consumedUs > completionBudget.limitUs ||
+        kPollStepUs >
+            completionBudget.limitUs - completionBudget.consumedUs) {
+      return Status::Error(
+          Err::TIMEOUT,
+          waitClass == ClockWaitClass::INTERVAL_COMMIT
+              ? "Interval commit timeout"
+              : "Write completion timeout",
+          static_cast<int32_t>(completionBudget.consumedUs));
+    }
+    _delayUs(config, kPollStepUs);
+    completionBudget.consumedUs = saturatingAddU32(
+        completionBudget.consumedUs, kPollStepUs);
+  }
+  return Status::Ok();
+}
+
 Status EE871::_e2Start(const Config& config) {
   setSda(config, true);
   setScl(config, true);
   ByteDeadline idleWait{0, config.bitTimeoutUs};
-  Status st = _waitSclHigh(
-      config, ClockWaitClass::NORMAL_BIT, idleWait);
+  Status st = _waitSclHigh(config, idleWait);
   if (!st.ok()) {
     return Status::Error(
         Err::BUS_STUCK, "SCL low before START", st.detail);
@@ -278,14 +311,13 @@ Status EE871::_e2Start(const Config& config) {
 Status EE871::_e2Stop(
     const Config& config,
     ClockWaitClass waitClass,
-    ByteDeadline* suppliedDeadline) {
+    CompletionBudget* completionBudget) {
   if (waitClass == ClockWaitClass::NORMAL_BIT) {
     setSda(config, false);
     _delayUs(config, kDataSetupUs);
     setScl(config, true);
     ByteDeadline sclDeadline{0, config.bitTimeoutUs};
-    Status st = _waitSclHigh(
-        config, ClockWaitClass::NORMAL_BIT, sclDeadline);
+    Status st = _waitSclHigh(config, sclDeadline);
     if (!st.ok()) {
       return st;
     }
@@ -295,72 +327,66 @@ Status EE871::_e2Stop(
     return Status::Ok();
   }
 
-  ByteDeadline normalDeadline{0, config.bitTimeoutUs};
-  ByteDeadline& deadline =
-      suppliedDeadline != nullptr ? *suppliedDeadline : normalDeadline;
+  if (completionBudget == nullptr) {
+    return Status::Error(
+        Err::INVALID_PARAM, "Missing completion budget");
+  }
 
   setSda(config, false);
-  Status st = _delayWithinDeadline(
-      config, kDataSetupUs, waitClass, deadline);
-  if (!st.ok()) {
-    return st;
-  }
+  // Deterministic STOP waveform timing is outside the sensor's completion
+  // allowance; only the SCL-high wait below consumes that allowance.
+  _delayUs(config, kDataSetupUs);
   setScl(config, true);
-  st = _waitSclHigh(config, waitClass, deadline);
+  Status st = _waitSclHighCompletion(
+      config, waitClass, *completionBudget);
   if (!st.ok()) {
     return st;
   }
-  st = _delayWithinDeadline(
-      config, config.stopHoldUs, waitClass, deadline);
-  if (!st.ok()) {
-    return st;
-  }
+  _delayUs(config, config.stopHoldUs);
   setSda(config, true);
-  return _delayWithinDeadline(
-      config, config.stopHoldUs, waitClass, deadline);
+  _delayUs(config, config.stopHoldUs);
+  return Status::Ok();
 }
 
 Status EE871::_writeBit(
     const Config& config, bool bit, ByteDeadline& deadline) {
   setSda(config, bit);
   Status st = _delayWithinDeadline(
-      config, kDataSetupUs, ClockWaitClass::NORMAL_BIT, deadline);
+      config, kDataSetupUs, deadline);
   if (!st.ok()) {
     return st;
   }
   setScl(config, true);
-  st = _waitSclHigh(
-      config, ClockWaitClass::NORMAL_BIT, deadline);
+  st = _waitSclHigh(config, deadline);
   if (!st.ok()) {
     return st;
   }
   st = _delayWithinDeadline(
-      config, config.clockHighUs, ClockWaitClass::NORMAL_BIT, deadline);
+      config, config.clockHighUs, deadline);
   if (!st.ok()) {
     return st;
   }
   setScl(config, false);
   return _delayWithinDeadline(
-      config, config.clockLowUs, ClockWaitClass::NORMAL_BIT, deadline);
+      config, config.clockLowUs, deadline);
 }
 
 Status EE871::_readBit(
     const Config& config, bool& bit, ByteDeadline& deadline) {
   setSda(config, true);
   Status st = _delayWithinDeadline(
-      config, kDataSetupUs, ClockWaitClass::NORMAL_BIT, deadline);
+      config, kDataSetupUs, deadline);
   if (!st.ok()) {
     return st;
   }
   setScl(config, true);
-  st = _waitSclHigh(
-      config, ClockWaitClass::NORMAL_BIT, deadline);
+  st = _waitSclHigh(config, deadline);
   if (!st.ok()) {
     return st;
   }
   const uint32_t sampleDelay = config.clockHighUs / 2U;
   st = _delayWithinDeadline(
-      config, sampleDelay, ClockWaitClass::NORMAL_BIT, deadline);
+      config, sampleDelay, deadline);
   if (!st.ok()) {
     return st;
   }
@@ -368,14 +394,13 @@ Status EE871::_readBit(
   st = _delayWithinDeadline(
       config,
       config.clockHighUs - sampleDelay,
-      ClockWaitClass::NORMAL_BIT,
       deadline);
   if (!st.ok()) {
     return st;
   }
   setScl(config, false);
   return _delayWithinDeadline(
-      config, config.clockLowUs, ClockWaitClass::NORMAL_BIT, deadline);
+      config, config.clockLowUs, deadline);
 }
 
 Status EE871::_writeByte(
@@ -410,23 +435,42 @@ Status EE871::_readAck(
     bool& acked,
     ClockWaitClass waitClass,
     ByteDeadline& deadline,
-    bool* observed) {
+    bool* observed,
+    CompletionBudget* completionBudget) {
   if (observed != nullptr) {
     *observed = false;
   }
+  if (waitClass != ClockWaitClass::NORMAL_BIT &&
+      completionBudget == nullptr) {
+    return Status::Error(
+        Err::INVALID_PARAM, "Missing completion budget");
+  }
+  auto delayAckPhase =
+      [&config, waitClass, &deadline](uint32_t us) {
+        if (waitClass == ClockWaitClass::NORMAL_BIT) {
+          return _delayWithinDeadline(
+              config, us, deadline);
+        }
+        // Long completion mode budgets device-held-low polling only.
+        _delayUs(config, us);
+        return Status::Ok();
+      };
+
   setSda(config, true);
-  Status st = _delayWithinDeadline(
-      config, kDataSetupUs, waitClass, deadline);
+  Status st = delayAckPhase(kDataSetupUs);
   if (!st.ok()) {
     return st;
   }
   setScl(config, true);
-  st = _waitSclHigh(config, waitClass, deadline);
+  st = waitClass == ClockWaitClass::NORMAL_BIT
+      ? _waitSclHigh(config, deadline)
+      : _waitSclHighCompletion(
+            config, waitClass, *completionBudget);
   if (!st.ok()) {
     return st;
   }
   const uint32_t sampleDelay = config.clockHighUs / 2U;
-  st = _delayWithinDeadline(config, sampleDelay, waitClass, deadline);
+  st = delayAckPhase(sampleDelay);
   if (!st.ok()) {
     return st;
   }
@@ -434,38 +478,35 @@ Status EE871::_readAck(
   if (observed != nullptr) {
     *observed = true;
   }
-  st = _delayWithinDeadline(
-      config, config.clockHighUs - sampleDelay, waitClass, deadline);
+  st = delayAckPhase(config.clockHighUs - sampleDelay);
   if (!st.ok()) {
     return st;
   }
   setScl(config, false);
-  return _delayWithinDeadline(
-      config, config.clockLowUs, waitClass, deadline);
+  return delayAckPhase(config.clockLowUs);
 }
 
 Status EE871::_sendAck(
     const Config& config, bool ack, ByteDeadline& deadline) {
   setSda(config, !ack);
   Status st = _delayWithinDeadline(
-      config, kDataSetupUs, ClockWaitClass::NORMAL_BIT, deadline);
+      config, kDataSetupUs, deadline);
   if (!st.ok()) {
     return st;
   }
   setScl(config, true);
-  st = _waitSclHigh(
-      config, ClockWaitClass::NORMAL_BIT, deadline);
+  st = _waitSclHigh(config, deadline);
   if (!st.ok()) {
     return st;
   }
   st = _delayWithinDeadline(
-      config, config.clockHighUs, ClockWaitClass::NORMAL_BIT, deadline);
+      config, config.clockHighUs, deadline);
   if (!st.ok()) {
     return st;
   }
   setScl(config, false);
   st = _delayWithinDeadline(
-      config, config.clockLowUs, ClockWaitClass::NORMAL_BIT, deadline);
+      config, config.clockLowUs, deadline);
   if (!st.ok()) {
     return st;
   }
@@ -737,14 +778,11 @@ Status EE871::begin(const Config& config) {
   }
 
   DeviceIdentity identityCandidate;
-  bool identityNackTerminatedCleanly = false;
-  st = _readAndValidateIdentityRaw(
-      identityCandidate, &identityNackTerminatedCleanly);
+  st = _readAndValidateIdentityRaw(identityCandidate);
   if (!st.ok()) {
     const bool acceptedAbsence =
         _config.beginPolicy == BeginPolicy::ALLOW_ABSENT &&
-        ((st.code == Err::NACK && identityNackTerminatedCleanly) ||
-         st.code == Err::DEVICE_NOT_FOUND);
+        st.code == Err::DEVICE_NOT_FOUND;
     if (acceptedAbsence) {
       _initialized = true;
       _beginProbeStatus = st;
@@ -1005,10 +1043,10 @@ Status EE871::_observeMutationBytes(
     return st;
   }
 
-  Status firstMismatch = Status::Ok();
+  uint8_t observedValues[16] = {};
   for (uint8_t i = 0; i < elementCount; ++i) {
-    uint8_t observed = 0;
-    st = readControlByte(cmd::MAIN_CUSTOM_PTR, observed);
+    st = readControlByte(
+        cmd::MAIN_CUSTOM_PTR, observedValues[i]);
     if (!st.ok()) {
       if (_mutationDiagnostic.cause.ok()) {
         _mutationDiagnostic.cause = st;
@@ -1021,14 +1059,34 @@ Status EE871::_observeMutationBytes(
       return st;
     }
     ++_mutationDiagnostic.elementsObserved;
-    _mutationDiagnostic.observedValue = observed;
+    _mutationDiagnostic.observedValue = observedValues[i];
     _mutationDiagnostic.observedValueValid = true;
-    if (observed != expected[i]) {
+  }
+
+  st = _validateMutationObservation(
+      _mutationDiagnostic.target,
+      observedValues,
+      elementCount);
+  if (!st.ok()) {
+    if (_mutationDiagnostic.cause.ok()) {
+      _mutationDiagnostic.cause = st;
+    }
+    _mutationDiagnostic.effect =
+        _mutationDiagnostic.elementsAcknowledged != 0U
+            ? MutationEffect::ACKNOWLEDGED
+            : MutationEffect::INDETERMINATE;
+    _mutationDiagnostic.unresolved = true;
+    return st;
+  }
+
+  Status firstMismatch = Status::Ok();
+  for (uint8_t i = 0; i < elementCount; ++i) {
+    if (observedValues[i] != expected[i]) {
       if (firstMismatch.ok()) {
         firstMismatch = Status::Error(
             Err::VERIFY_MISMATCH,
             "Write verification mismatch",
-            observed);
+            observedValues[i]);
       }
       if (_mutationDiagnostic.cause.ok()) {
         _mutationDiagnostic.cause = firstMismatch;
@@ -1128,7 +1186,7 @@ Status EE871::recover() {
   CapabilitySnapshot capabilityCandidate;
   st = _readCapabilitiesTracked(capabilityCandidate);
   if (!st.ok()) {
-    if (enteredOffline) {
+    if (enteredOffline || st.code == Err::NOT_SUPPORTED) {
       _latchSemanticOffline(st);
     }
     return st;
@@ -1142,41 +1200,26 @@ Status EE871::recover() {
   return Status::Ok();
 }
 
-Status EE871::_readAndValidateIdentityRaw(
-    DeviceIdentity& out,
-    bool* nackTerminatedCleanly) {
-  return _readAndValidateIdentity(
-      out, false, nackTerminatedCleanly);
+Status EE871::_readAndValidateIdentityRaw(DeviceIdentity& out) {
+  return _readAndValidateIdentity(out, false);
 }
 
 Status EE871::_readAndValidateIdentityTracked(DeviceIdentity& out) {
-  return _readAndValidateIdentity(out, true, nullptr);
+  return _readAndValidateIdentity(out, true);
 }
 
 Status EE871::_readAndValidateIdentity(
     DeviceIdentity& out,
-    bool tracked,
-    bool* nackTerminatedCleanly) {
+    bool tracked) {
   out = DeviceIdentity{};
-  if (nackTerminatedCleanly != nullptr) {
-    *nackTerminatedCleanly = false;
-  }
   auto readMain =
-      [this, tracked, nackTerminatedCleanly](
-          uint8_t mainCommand, uint8_t& value) {
+      [this, tracked](uint8_t mainCommand, uint8_t& value) {
         const uint8_t control =
             cmd::makeControlRead(mainCommand, _config.deviceAddress);
         if (tracked) {
           return _readControlByteTracked(control, value);
         }
-        bool transactionTerminatedCleanly = false;
-        const Status readStatus = _readControlByteRaw(
-            control, value, &transactionTerminatedCleanly);
-        if (nackTerminatedCleanly != nullptr &&
-            readStatus.code == Err::NACK) {
-          *nackTerminatedCleanly = transactionTerminatedCleanly;
-        }
-        return readStatus;
+        return _readControlByteRaw(control, value);
       };
 
   uint8_t groupLow = 0;
@@ -1230,6 +1273,154 @@ Status EE871::_readAndValidateIdentity(
   return Status::Ok();
 }
 
+Status EE871::_validateCapabilityValue(
+    uint8_t address, uint8_t value) {
+  uint8_t reservedMask = 0;
+  switch (address) {
+    case cmd::CUSTOM_ADJUSTMENT_SUPPORT:
+      reservedMask = cmd::CUSTOM_ADJUSTMENT_SUPPORT_RESERVED_MASK;
+      break;
+    case cmd::CUSTOM_ADJUSTMENT_POINT_SUPPORT:
+      reservedMask =
+          cmd::CUSTOM_ADJUSTMENT_POINT_SUPPORT_RESERVED_MASK;
+      break;
+    case cmd::CUSTOM_ADJUSTMENT_TIME_GENERAL_SUPPORT:
+      reservedMask =
+          cmd::CUSTOM_ADJUSTMENT_TIME_GENERAL_SUPPORT_RESERVED_MASK;
+      break;
+    case cmd::CUSTOM_ADJUSTMENT_TIME_SUPPORT:
+      reservedMask =
+          cmd::CUSTOM_ADJUSTMENT_TIME_SUPPORT_RESERVED_MASK;
+      break;
+    case cmd::CUSTOM_OPERATING_FUNCTIONS:
+      reservedMask = cmd::OPERATING_FUNCTIONS_RESERVED_MASK;
+      break;
+    case cmd::CUSTOM_OPERATING_MODE_SUPPORT:
+      reservedMask = cmd::OPERATING_MODE_SUPPORT_RESERVED_MASK;
+      break;
+    case cmd::CUSTOM_SPECIAL_FEATURES:
+      reservedMask = cmd::SPECIAL_FEATURES_RESERVED_MASK;
+      break;
+    default:
+      return Status::Error(
+          Err::INVALID_PARAM, "Not a capability address", address);
+  }
+
+  if ((value & reservedMask) != 0U) {
+    return Status::Error(
+        Err::NOT_SUPPORTED,
+        "Capability reserved bit set",
+        cmd::makeCapabilityValidationDetail(address, value));
+  }
+  return Status::Ok();
+}
+
+Status EE871::_validateBusAddressValue(uint8_t address) {
+  if (address > cmd::BUS_ADDRESS_MAX) {
+    return Status::Error(
+        Err::OUT_OF_RANGE, "Bus address out of range", address);
+  }
+  return Status::Ok();
+}
+
+Status EE871::_validateIntervalValue(uint16_t intervalDeciSeconds) {
+  if (intervalDeciSeconds < cmd::INTERVAL_MIN_DECISEC ||
+      intervalDeciSeconds > cmd::INTERVAL_MAX_DECISEC) {
+    return Status::Error(
+        Err::OUT_OF_RANGE,
+        "Interval must be 150-36000 (15-3600s)",
+        intervalDeciSeconds);
+  }
+  return Status::Ok();
+}
+
+Status EE871::_validateIntervalFactorValue(int8_t factor) {
+  if (factor == 0) {
+    return Status::Error(
+        Err::OUT_OF_RANGE, "Interval factor must be nonzero", 0);
+  }
+  return Status::Ok();
+}
+
+Status EE871::_validateOperatingModeValue(uint8_t mode) const {
+  if ((mode & cmd::OPERATING_MODE_RESERVED_MASK) != 0U) {
+    return Status::Error(
+        Err::OUT_OF_RANGE, "Operating mode reserved bit set", mode);
+  }
+  if ((mode & cmd::OPERATING_MODE_MEASUREMODE_MASK) != 0U &&
+      !hasLowPowerMode()) {
+    return Status::Error(
+        Err::NOT_SUPPORTED, "Low power mode not supported", mode);
+  }
+  if ((mode & cmd::OPERATING_MODE_E2_PRIORITY_MASK) != 0U &&
+      !hasE2Priority()) {
+    return Status::Error(
+        Err::NOT_SUPPORTED, "E2 priority mode not supported", mode);
+  }
+  return Status::Ok();
+}
+
+Status EE871::_validateAutoAdjustRaw(uint8_t raw) {
+  if ((raw & cmd::AUTO_ADJUST_RESERVED_MASK) != 0U) {
+    return Status::Error(
+        Err::OUT_OF_RANGE, "Auto-adjust reserved bit set", raw);
+  }
+  return Status::Ok();
+}
+
+Status EE871::_validateMutationObservation(
+    MutationTarget target,
+    const uint8_t* values,
+    uint8_t elementCount) const {
+  if (values == nullptr || elementCount == 0U) {
+    return Status::Error(
+        Err::INVALID_PARAM, "Invalid mutation observation");
+  }
+  switch (target) {
+    case MutationTarget::BUS_ADDRESS:
+      return _validateBusAddressValue(values[0]);
+    case MutationTarget::GLOBAL_INTERVAL:
+      if (elementCount < 2U) {
+        return Status::Error(
+            Err::INVALID_PARAM, "Interval observation is incomplete");
+      }
+      return _validateIntervalValue(
+          static_cast<uint16_t>(values[0]) |
+          (static_cast<uint16_t>(values[1]) << 8));
+    case MutationTarget::CO2_INTERVAL_FACTOR:
+      return _validateIntervalFactorValue(
+          signedByteFromRaw(values[0]));
+    case MutationTarget::OPERATING_MODE:
+      return _validateOperatingModeValue(values[0]);
+    case MutationTarget::AUTO_ADJUST:
+      return _validateAutoAdjustRaw(values[0]);
+    case MutationTarget::NONE:
+    case MutationTarget::RAW_CUSTOM_BYTE:
+    case MutationTarget::PART_NAME:
+    case MutationTarget::CO2_FILTER:
+    case MutationTarget::CO2_OFFSET:
+    case MutationTarget::CO2_GAIN:
+      return Status::Ok();
+  }
+  return Status::Error(
+      Err::INVALID_PARAM, "Invalid mutation target");
+}
+
+Status EE871::_readValidatedCapability(
+    uint8_t address, uint8_t& out) {
+  uint8_t candidate = 0;
+  Status st = customRead(address, candidate);
+  if (!st.ok()) {
+    return st;
+  }
+  st = _validateCapabilityValue(address, candidate);
+  if (!st.ok()) {
+    return st;
+  }
+  out = candidate;
+  return Status::Ok();
+}
+
 Status EE871::_readCapabilitiesRaw(CapabilitySnapshot& out) {
   return _readCapabilities(out, false);
 }
@@ -1258,6 +1449,16 @@ Status EE871::_readCapabilities(
     st = tracked
              ? _readControlByteTracked(control, values[i])
              : _readControlByteRaw(control, values[i]);
+    if (!st.ok()) {
+      return st;
+    }
+  }
+
+  for (uint8_t i = 0; i < 7U; ++i) {
+    st = _validateCapabilityValue(
+        static_cast<uint8_t>(
+            cmd::CUSTOM_ADJUSTMENT_SUPPORT + i),
+        values[i]);
     if (!st.ok()) {
       return st;
     }
@@ -1377,6 +1578,10 @@ Status EE871::_resyncUnresolvedMutation() {
     _mutationDiagnostic.elementsObserved = 1;
     _mutationDiagnostic.observedValue = observed;
     _mutationDiagnostic.observedValueValid = true;
+    st = _validateAutoAdjustRaw(observed);
+    if (!st.ok()) {
+      return st;
+    }
     const bool running =
         (observed & cmd::AUTO_ADJUST_RUNNING_MASK) != 0U;
     if (running &&
@@ -1406,35 +1611,19 @@ Status EE871::_resyncUnresolvedMutation() {
     ++_mutationDiagnostic.elementsObserved;
     _mutationDiagnostic.observedValue = observed[i];
     _mutationDiagnostic.observedValueValid = true;
-    if (observed[i] == _mutationIntent.values[i]) {
-      ++_mutationDiagnostic.elementsMatched;
-    }
   }
 
-  if (_mutationIntent.target == MutationTarget::GLOBAL_INTERVAL) {
-    const uint16_t interval =
-        static_cast<uint16_t>(observed[0]) |
-        (static_cast<uint16_t>(observed[1]) << 8);
-    if (interval < cmd::INTERVAL_MIN_DECISEC ||
-        interval > cmd::INTERVAL_MAX_DECISEC) {
-      return Status::Error(
-          Err::OUT_OF_RANGE, "Interval out of range", interval);
-    }
-  } else if (_mutationIntent.target == MutationTarget::BUS_ADDRESS) {
-    if (observed[0] > cmd::BUS_ADDRESS_MAX) {
-      return Status::Error(
-          Err::OUT_OF_RANGE, "Bus address out of range", observed[0]);
-    }
-  } else if (_mutationIntent.target == MutationTarget::OPERATING_MODE) {
-    if (observed[0] > 0x03U ||
-        ((observed[0] & cmd::OPERATING_MODE_MEASUREMODE_MASK) != 0U &&
-         !hasLowPowerMode()) ||
-        ((observed[0] & cmd::OPERATING_MODE_E2_PRIORITY_MASK) != 0U &&
-         !hasE2Priority())) {
-      return Status::Error(
-          Err::NOT_SUPPORTED,
-          "Observed operating mode is not supported",
-          observed[0]);
+  st = _validateMutationObservation(
+      _mutationIntent.target,
+      observed,
+      _mutationIntent.elementCount);
+  if (!st.ok()) {
+    return st;
+  }
+
+  for (uint8_t i = 0; i < _mutationIntent.elementCount; ++i) {
+    if (observed[i] == _mutationIntent.values[i]) {
+      ++_mutationDiagnostic.elementsMatched;
     }
   }
 
@@ -1447,82 +1636,65 @@ Status EE871::_resyncUnresolvedMutation() {
 }
 
 Status EE871::_resyncAllSupportedPersistentConfig() {
-  Status st = Status::Ok();
-  uint8_t bytes[cmd::CUSTOM_PART_NAME_LEN] = {};
+  Status st;
 
   if (hasPartName()) {
-    st = customRead(
-        cmd::CUSTOM_PART_NAME_START,
-        bytes,
-        cmd::CUSTOM_PART_NAME_LEN);
+    uint8_t bytes[cmd::CUSTOM_PART_NAME_LEN] = {};
+    st = readPartName(bytes);
     if (!st.ok()) {
       return st;
     }
   }
   if (hasAddressConfig()) {
-    st = customRead(cmd::CUSTOM_BUS_ADDRESS, bytes[0]);
+    uint8_t address = 0;
+    st = readBusAddress(address);
     if (!st.ok()) {
       return st;
-    }
-    if (bytes[0] > cmd::BUS_ADDRESS_MAX) {
-      return Status::Error(
-          Err::OUT_OF_RANGE, "Bus address out of range", bytes[0]);
     }
   }
   if (hasGlobalInterval()) {
-    st = customRead(cmd::CUSTOM_INTERVAL_L, bytes, 2U);
+    uint16_t interval = 0;
+    st = readMeasurementInterval(interval);
     if (!st.ok()) {
       return st;
     }
-    const uint16_t interval =
-        static_cast<uint16_t>(bytes[0]) |
-        (static_cast<uint16_t>(bytes[1]) << 8);
-    if (interval < cmd::INTERVAL_MIN_DECISEC ||
-        interval > cmd::INTERVAL_MAX_DECISEC) {
-      return Status::Error(
-          Err::OUT_OF_RANGE, "Interval out of range", interval);
-    }
   }
   if (hasSpecificInterval()) {
-    st = customRead(cmd::CUSTOM_CO2_INTERVAL_FACTOR, bytes[0]);
+    int8_t factor = 0;
+    st = readCo2IntervalFactor(factor);
     if (!st.ok()) {
       return st;
     }
   }
   if (hasFilterConfig()) {
-    st = customRead(cmd::CUSTOM_FILTER_CO2, bytes[0]);
+    uint8_t filter = 0;
+    st = readCo2Filter(filter);
     if (!st.ok()) {
       return st;
     }
   }
   if (hasLowPowerMode() || hasE2Priority()) {
-    st = customRead(cmd::CUSTOM_OPERATING_MODE, bytes[0]);
+    uint8_t mode = 0;
+    st = readOperatingMode(mode);
     if (!st.ok()) {
       return st;
     }
-    if (bytes[0] > 0x03U ||
-        ((bytes[0] & cmd::OPERATING_MODE_MEASUREMODE_MASK) != 0U &&
-         !hasLowPowerMode()) ||
-        ((bytes[0] & cmd::OPERATING_MODE_E2_PRIORITY_MASK) != 0U &&
-         !hasE2Priority())) {
-      return Status::Error(
-          Err::NOT_SUPPORTED,
-          "Observed operating mode is not supported",
-          bytes[0]);
-    }
   }
   if (hasAutoAdjust()) {
-    st = customRead(cmd::CUSTOM_AUTO_ADJUST, bytes[0]);
+    bool running = false;
+    st = readAutoAdjustStatus(running);
     if (!st.ok()) {
       return st;
     }
   }
   if (hasCo2OffsetGain()) {
-    st = customRead(cmd::CUSTOM_CO2_OFFSET_L, bytes, 2U);
+    int16_t offset = 0;
+    st = readCo2Offset(offset);
     if (!st.ok()) {
       return st;
     }
-    st = customRead(cmd::CUSTOM_CO2_GAIN_L, bytes, 2U);
+    uint16_t gain = 0;
+    st = readCo2Gain(gain);
     if (!st.ok()) {
       return st;
     }
@@ -1703,11 +1875,9 @@ Status EE871::_writeMeasurementIntervalDirect(
   if (!guard.ok()) {
     return guard;
   }
-  // Validate range: 15.0s - 3600.0s (150 - 36000 deciseconds)
-  if (intervalDeciSeconds < cmd::INTERVAL_MIN_DECISEC ||
-      intervalDeciSeconds > cmd::INTERVAL_MAX_DECISEC) {
-    return Status::Error(Err::OUT_OF_RANGE, "Interval must be 150-36000 (15-3600s)",
-                         intervalDeciSeconds);
+  Status st = _validateIntervalValue(intervalDeciSeconds);
+  if (!st.ok()) {
+    return st;
   }
   if (!hasGlobalInterval()) {
     return Status::Error(Err::NOT_SUPPORTED, "Global interval not supported");
@@ -1716,7 +1886,7 @@ Status EE871::_writeMeasurementIntervalDirect(
   const uint8_t values[2] = {
       static_cast<uint8_t>(intervalDeciSeconds & 0xFFU),
       static_cast<uint8_t>(intervalDeciSeconds >> 8)};
-  Status st = _beginMutation(
+  st = _beginMutation(
       MutationTarget::GLOBAL_INTERVAL,
       cmd::CUSTOM_INTERVAL_L,
       values,
@@ -1886,15 +2056,18 @@ Status EE871::readE2SpecVersion(uint8_t& version) {
 // ============================================================================
 
 Status EE871::readOperatingFunctions(uint8_t& bits) {
-  return customRead(cmd::CUSTOM_OPERATING_FUNCTIONS, bits);
+  return _readValidatedCapability(
+      cmd::CUSTOM_OPERATING_FUNCTIONS, bits);
 }
 
 Status EE871::readOperatingModeSupport(uint8_t& bits) {
-  return customRead(cmd::CUSTOM_OPERATING_MODE_SUPPORT, bits);
+  return _readValidatedCapability(
+      cmd::CUSTOM_OPERATING_MODE_SUPPORT, bits);
 }
 
 Status EE871::readSpecialFeatures(uint8_t& bits) {
-  return customRead(cmd::CUSTOM_SPECIAL_FEATURES, bits);
+  return _readValidatedCapability(
+      cmd::CUSTOM_SPECIAL_FEATURES, bits);
 }
 
 // ============================================================================
@@ -1968,7 +2141,17 @@ Status EE871::readBusAddress(uint8_t& address) {
   if (!hasAddressConfig()) {
     return Status::Error(Err::NOT_SUPPORTED, "Address config not supported");
   }
-  return customRead(cmd::CUSTOM_BUS_ADDRESS, address);
+  uint8_t candidate = 0;
+  Status st = customRead(cmd::CUSTOM_BUS_ADDRESS, candidate);
+  if (!st.ok()) {
+    return st;
+  }
+  st = _validateBusAddressValue(candidate);
+  if (!st.ok()) {
+    return st;
+  }
+  address = candidate;
+  return Status::Ok();
 }
 
 Status EE871::writeBusAddress(uint8_t address) {
@@ -1980,13 +2163,14 @@ Status EE871::_writeBusAddressDirect(uint8_t address) {
   if (!guard.ok()) {
     return guard;
   }
-  if (address > cmd::BUS_ADDRESS_MAX) {
-    return Status::Error(Err::OUT_OF_RANGE, "Address must be 0-7", address);
+  Status st = _validateBusAddressValue(address);
+  if (!st.ok()) {
+    return st;
   }
   if (!hasAddressConfig()) {
     return Status::Error(Err::NOT_SUPPORTED, "Address config not supported");
   }
-  Status st = _beginMutation(
+  st = _beginMutation(
       MutationTarget::BUS_ADDRESS,
       cmd::CUSTOM_BUS_ADDRESS,
       &address,
@@ -2034,9 +2218,14 @@ Status EE871::readMeasurementInterval(uint16_t& intervalDeciSeconds) {
   if (!st.ok()) {
     return st;
   }
-  intervalDeciSeconds =
+  const uint16_t candidate =
       static_cast<uint16_t>(values[0]) |
       (static_cast<uint16_t>(values[1]) << 8);
+  st = _validateIntervalValue(candidate);
+  if (!st.ok()) {
+    return st;
+  }
+  intervalDeciSeconds = candidate;
   return Status::Ok();
 }
 
@@ -2056,7 +2245,12 @@ Status EE871::readCo2IntervalFactor(int8_t& factor) {
   if (!st.ok()) {
     return st;
   }
-  factor = signedByteFromRaw(raw);
+  const int8_t candidate = signedByteFromRaw(raw);
+  st = _validateIntervalFactorValue(candidate);
+  if (!st.ok()) {
+    return st;
+  }
+  factor = candidate;
   return Status::Ok();
 }
 
@@ -2068,6 +2262,10 @@ Status EE871::_writeCo2IntervalFactorDirect(int8_t factor) {
   Status guard = _mutationAdmissionGuard();
   if (!guard.ok()) {
     return guard;
+  }
+  Status st = _validateIntervalFactorValue(factor);
+  if (!st.ok()) {
+    return st;
   }
   if (!hasSpecificInterval()) {
     return Status::Error(Err::NOT_SUPPORTED, "Specific interval not supported");
@@ -2128,7 +2326,17 @@ Status EE871::readOperatingMode(uint8_t& mode) {
   if (!hasLowPowerMode() && !hasE2Priority()) {
     return Status::Error(Err::NOT_SUPPORTED, "Operating mode not supported");
   }
-  return customRead(cmd::CUSTOM_OPERATING_MODE, mode);
+  uint8_t candidate = 0;
+  Status st = customRead(cmd::CUSTOM_OPERATING_MODE, candidate);
+  if (!st.ok()) {
+    return st;
+  }
+  st = _validateOperatingModeValue(candidate);
+  if (!st.ok()) {
+    return st;
+  }
+  mode = candidate;
+  return Status::Ok();
 }
 
 Status EE871::writeOperatingMode(uint8_t mode) {
@@ -2140,19 +2348,12 @@ Status EE871::_writeOperatingModeDirect(uint8_t mode) {
   if (!guard.ok()) {
     return guard;
   }
-  // Only bits 0 and 1 are valid.
-  if (mode > 0x03) {
-    return Status::Error(Err::OUT_OF_RANGE, "Invalid mode bits", mode);
+  Status st = _validateOperatingModeValue(mode);
+  if (!st.ok()) {
+    return st;
   }
   if (!hasLowPowerMode() && !hasE2Priority()) {
     return Status::Error(Err::NOT_SUPPORTED, "Operating mode not supported");
-  }
-  // Check if requested mode bits are supported
-  if ((mode & cmd::OPERATING_MODE_MEASUREMODE_MASK) && !hasLowPowerMode()) {
-    return Status::Error(Err::NOT_SUPPORTED, "Low power mode not supported");
-  }
-  if ((mode & cmd::OPERATING_MODE_E2_PRIORITY_MASK) && !hasE2Priority()) {
-    return Status::Error(Err::NOT_SUPPORTED, "E2 priority not supported");
   }
   return _writeVerifiedBytes(
       MutationTarget::OPERATING_MODE,
@@ -2181,6 +2382,10 @@ Status EE871::readAutoAdjustStatus(bool& running) {
   if (!st.ok()) {
     return st;
   }
+  st = _validateAutoAdjustRaw(raw);
+  if (!st.ok()) {
+    return st;
+  }
   running = (raw & cmd::AUTO_ADJUST_RUNNING_MASK) != 0;
   return Status::Ok();
 }
@@ -2200,6 +2405,10 @@ Status EE871::_startAutoAdjustDirect() {
 
   uint8_t preObserved = 0;
   Status st = customRead(cmd::CUSTOM_AUTO_ADJUST, preObserved);
+  if (!st.ok()) {
+    return st;
+  }
+  st = _validateAutoAdjustRaw(preObserved);
   if (!st.ok()) {
     return st;
   }
@@ -2243,6 +2452,15 @@ Status EE871::_startAutoAdjustDirect() {
   _mutationDiagnostic.elementsObserved = 1;
   _mutationDiagnostic.observedValue = observed;
   _mutationDiagnostic.observedValueValid = true;
+  st = _validateAutoAdjustRaw(observed);
+  if (!st.ok()) {
+    if (_mutationDiagnostic.cause.ok()) {
+      _mutationDiagnostic.cause = st;
+    }
+    _mutationDiagnostic.effect = MutationEffect::ACKNOWLEDGED;
+    _mutationDiagnostic.unresolved = true;
+    return st;
+  }
   if ((observed & cmd::AUTO_ADJUST_RUNNING_MASK) != 0U) {
     _mutationDiagnostic.elementsMatched = 1;
     _resolveMutation(MutationEffect::VERIFIED);
@@ -2383,8 +2601,7 @@ Status EE871::_busResetRaw() {
     _delayUs(_config, _config.clockLowUs);
     setScl(_config, true);
     ByteDeadline pulseWait{0, _config.bitTimeoutUs};
-    Status st = _waitSclHigh(
-        _config, ClockWaitClass::NORMAL_BIT, pulseWait);
+    Status st = _waitSclHigh(_config, pulseWait);
     if (!st.ok()) {
       return Status::Error(
           Err::BUS_STUCK, "SCL stuck during reset", st.detail);
@@ -2439,23 +2656,15 @@ Status EE871::checkBusIdle() {
 
 Status EE871::_readControlByteRaw(
     uint8_t controlByte,
-    uint8_t& data,
-    bool* transactionTerminatedCleanly) {
-  if (transactionTerminatedCleanly != nullptr) {
-    *transactionTerminatedCleanly = false;
-  }
+    uint8_t& data) {
   Status st = _e2Start(_config);
   if (!st.ok()) {
     return st;
   }
 
-  auto cleanup = [this, transactionTerminatedCleanly](
-                     const Status& primary) {
+  auto cleanup = [this](const Status& primary) {
     const Status cleanupStatus =
         _e2Stop(_config, ClockWaitClass::NORMAL_BIT, nullptr);
-    if (transactionTerminatedCleanly != nullptr) {
-      *transactionTerminatedCleanly = cleanupStatus.ok();
-    }
     return primary.ok() ? cleanupStatus : primary;
   };
 
@@ -2503,9 +2712,6 @@ Status EE871::_readControlByteRaw(
           : Status::Error(Err::PEC_MISMATCH, "PEC mismatch", pec);
   const Status stopStatus =
       _e2Stop(_config, ClockWaitClass::NORMAL_BIT, nullptr);
-  if (transactionTerminatedCleanly != nullptr) {
-    *transactionTerminatedCleanly = stopStatus.ok();
-  }
   if (!pecStatus.ok()) {
     return pecStatus;
   }
@@ -2612,7 +2818,9 @@ Status EE871::_writeCommandRaw(
 
   ByteDeadline completionDeadline{
       hasLongCompletion ? 0U : pecDeadline.elapsedUs,
-      completionLimitUs};
+      hasLongCompletion ? _config.byteTimeoutUs : completionLimitUs};
+  CompletionBudget completionBudget{
+      0U, hasLongCompletion ? completionLimitUs : 0U};
   bool acked = false;
   bool finalAckObserved = false;
   st = _readAck(
@@ -2620,45 +2828,54 @@ Status EE871::_writeCommandRaw(
       acked,
       completionClass,
       completionDeadline,
-      &finalAckObserved);
+      &finalAckObserved,
+      hasLongCompletion ? &completionBudget : nullptr);
   progress.finalAckObserved = finalAckObserved;
   progress.requestAcknowledged = finalAckObserved && acked;
   if (!st.ok()) {
     const Status cleanupStatus =
-        _e2Stop(_config, completionClass, &completionDeadline);
+        _e2Stop(
+            _config,
+            completionClass,
+            hasLongCompletion ? &completionBudget : nullptr);
     (void)cleanupStatus;
-    progress.completionElapsedUs = completionDeadline.elapsedUs;
+    progress.completionElapsedUs =
+        hasLongCompletion
+            ? completionBudget.consumedUs
+            : completionDeadline.elapsedUs;
     publishProgress(progress);
     return st;
   }
   if (!acked) {
     const Status cleanupStatus = hasLongCompletion
-        ? _e2Stop(_config, completionClass, &completionDeadline)
+        ? _e2Stop(_config, completionClass, &completionBudget)
         : _e2Stop(_config, ClockWaitClass::NORMAL_BIT, nullptr);
-    progress.completionElapsedUs = completionDeadline.elapsedUs;
+    progress.completionElapsedUs =
+        hasLongCompletion
+            ? completionBudget.consumedUs
+            : completionDeadline.elapsedUs;
     progress.stopCompleted = cleanupStatus.ok();
     publishProgress(progress);
     return Status::Error(Err::NACK, "PEC NACK");
   }
 
   st = _e2Stop(
-      _config, completionClass, &completionDeadline);
-  progress.completionElapsedUs = completionDeadline.elapsedUs;
+      _config,
+      completionClass,
+      hasLongCompletion ? &completionBudget : nullptr);
+  progress.completionElapsedUs =
+      hasLongCompletion
+          ? completionBudget.consumedUs
+          : completionDeadline.elapsedUs;
   if (!st.ok()) {
     publishProgress(progress);
     return st;
   }
   progress.stopCompleted = true;
 
-  if (hasLongCompletion &&
-      completionDeadline.elapsedUs < completionDeadline.limitUs) {
-    const uint32_t remainingUs =
-        completionDeadline.limitUs - completionDeadline.elapsedUs;
-    _delayLongMs(_config, remainingUs / 1000U);
-    const uint32_t remainderUs = remainingUs % 1000U;
-    if (remainderUs != 0U) {
-      _delayUs(_config, remainderUs);
-    }
+  if (hasLongCompletion) {
+    _finishCompletionBudget(_config, completionBudget);
+    progress.completionElapsedUs = completionBudget.consumedUs;
   }
 
   publishProgress(progress);

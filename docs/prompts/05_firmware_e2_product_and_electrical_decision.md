@@ -97,7 +97,8 @@ Read completely:
 - `include/TunnelMonitor/BoardPins.h`;
 - selected build-profile headers;
 - `platformio.ini`;
-- the EE871 audit and Prompt 04 release handoff in sibling `EE871-E2`.
+- the EE871 audit, Prompt 04 release handoff, and corrective Prompt 04A-04C
+  handoffs in sibling `EE871-E2`.
 
 Record branch, commit, dirty state, the current Co2Control reservation, and the
 currently selected production product/profile facts.
@@ -230,10 +231,11 @@ unchanged.
 
 ### Dependency
 
-Verify that the separately authorized release operation used Prompt 04's
-release-ready source, and that the exact remote tag resolves to the specified
-commit. Record whether the remote immutable tag actually exists. Prompt 04
-itself does not commit, tag, or push.
+Verify that the separately authorized release operation used the corrected
+source produced by Prompt 04 and completed corrective Prompts 04A-04C, and that
+the exact remote tag resolves to the specified commit. Record whether the
+remote immutable tag actually exists. Prompts 04-04C do not themselves
+authorize a commit, tag, or push.
 Do not pin a mutable branch, local path, or unpushed commit in production.
 Authorize this dependency only for Co2Control production and explicit E2
 validation environments. Every non-Co2Control production dependency graph must

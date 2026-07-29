@@ -40,7 +40,10 @@ START = BT + 2*SH + L
 STOP = SETUP + BT + 2*PH
 READ = START + 3*BY + STOP
 NORMAL_WRITE = START + 4*BY + STOP
-COMPLETION_WRITE(delayMs) = START + 4*BY + 1000*delayMs
+ACK_TAIL = SETUP + H + L
+COMPLETION_STOP_TAIL = SETUP + 2*PH
+COMPLETION_WRITE(delayMs) =
+    START + 4*BY + 1000*delayMs + ACK_TAIL + COMPLETION_STOP_TAIL
 RESET = 9*(L + BT + H) + L + SETUP + BT + 2*PH
 ```
 
@@ -56,8 +59,12 @@ I = COMPLETION_WRITE(ID)  // committing interval high byte
 
 `READ` contains the control/ACK, data/master-ACK, and PEC/master-NACK byte
 deadlines. `NORMAL_WRITE` contains four ordinary byte deadlines and an ordinary
-STOP. For completion writes, the completion window replaces separate final
-ACK/STOP/quiet terms: it is one total budget beginning after the PEC byte.
+STOP. For completion writes, `delayMs` is one cumulative sensor allowance
+beginning after the PEC byte. Final-ACK and STOP SCL-low polling consume that
+shared allowance; the quiet wait consumes only its remainder. `ACK_TAIL` and
+`COMPLETION_STOP_TAIL` conservatively cover the deterministic, validated master
+waveform without reducing the legal sensor allowance. The formula includes the
+allowance only once.
 
 ## Operation Formulas
 
@@ -98,8 +105,9 @@ The lifecycle formulas reserve four reads for group low/high, subgroup, and
 available-measurements validation. Begin and recovery then reserve one pointer
 write plus seven auto-incrementing reads for capability bytes `0x03..0x09`.
 `BEGIN_ALLOW_ABSENT` uses the same conservative bound as strict begin even
-though definite absence returns sooner. `PROBE_IDENTITY` does not load or
-publish capabilities.
+though an authoritative `DEVICE_NOT_FOUND` would return sooner. The current
+GPIO E2 path cannot produce that classification. `PROBE_IDENTITY` does not
+load or publish capabilities.
 
 Each checked CO2 bound reserves two value reads, one side-effecting status read,
 and the worst-case capability-gated error-code pointer plus data read. The
@@ -117,6 +125,16 @@ Auto-adjust includes a pre-write status observation, one effectful write, and a
 post-write status observation. Address change includes only the effectful write:
 it intentionally performs no unsafe old-address readback or hidden address
 scan.
+
+`BEGIN_ALLOW_ABSENT` retains the strict conservative bound, but the current
+GPIO E2 path does not classify NACK as physical absence. An identity NACK
+returns immediately after bounded cleanup, with no retry, capability pointer
+write, or long completion delay, and leaves the driver uninitialized.
+
+Typed argument/capability rejections perform no E2 I/O and therefore consume
+none of the listed bus bound. Typed observed-value validation happens only
+after the already bounded read/post-read procedure; it adds fixed CPU work and
+does not add transactions or waits.
 
 ## Exhaustive Public Bus-Method Map
 
@@ -179,7 +197,10 @@ represents one public declaration; overloads therefore have separate rows.
 address classifier routes admitted special addresses to the typed algorithm
 shown above and rejects unsafe pair, calibration, and documented read-only
 addresses before line I/O. All other admitted writable bytes use
-`CUSTOM_BYTE_WRITE_VERIFY`.
+`CUSTOM_BYTE_WRITE_VERIFY` as an expert maintenance operation. Address
+semantics and restoration must come from authoritative vendor documentation;
+neither the library nor the HIL runner treats a raw 256-byte image as a
+restorable write plan.
 
 ## Explicit Non-I/O Public Methods
 
@@ -233,17 +254,17 @@ and 150/300 ms completion windows, the published bounds are:
 | One custom byte read | 471 ms |
 | Three-byte custom block read | 781 ms |
 | Custom byte write plus verify | 786 ms |
-| Interval pair write plus verify | 1281 ms |
-| Complete 16-byte part-name write plus per-element verify | 12566 ms |
+| Interval pair write plus verify | 1282 ms |
+| Complete 16-byte part-name write plus per-element verify | 12573 ms |
 | Raw two-byte CO2 read | 311 ms |
 | Bus reset | 252 ms |
 | Strict or optional begin | 2274 ms |
 | Full identity probe | 621 ms |
 | Identity-and-capability recovery | 2274 ms |
 | Checked average or fast CO2 sample | 936 ms |
-| Two-byte persistent block write plus per-element verify | 1571 ms |
-| Complete capability-aware persistent resync | 7025 ms |
-| Auto-adjust maintenance procedure | 1256 ms |
+| Two-byte persistent block write plus per-element verify | 1572 ms |
+| Complete capability-aware persistent resync | 7027 ms |
+| Auto-adjust maintenance procedure | 1257 ms |
 | Bus-address write completion | 316 ms |
 
 Multi-byte helpers can therefore have substantially larger admission bounds

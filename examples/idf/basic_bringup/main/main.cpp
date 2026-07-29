@@ -780,7 +780,7 @@ void printHelp() {
   printHelpItem("sampleavg", "Checked MV4 + status; may trigger next measurement");
   printHelpItem("error", "Read error code (if status indicates error)");
   printHelpItem("reg read <addr>", "Read custom register (0x00..0xFF)");
-  printHelpItem("reg write <addr> <value>", "Write persistent custom register (bench only)");
+  printHelpItem("reg write <addr> <value>", "Expert raw maintenance; vendor address/restore rules required");
   printHelpItem("reg dump [start] [len]", "Dump custom registers (default all)");
   printHelpItem("ctrl <main_nibble>", "Raw readControlByte(main_nibble)");
   printHelpItem("u16 <main_lo> <main_hi>", "Raw readU16(main_lo, main_hi)");
@@ -803,9 +803,9 @@ void printHelp() {
   printHelpItem("interval", "Read measurement interval");
   printHelpItem("interval <dec>", "Write persistent interval (150..36000 ds)");
   printHelpItem("factor", "Read CO2 interval factor");
-  printHelpItem("factor <val>", "Write persistent CO2 interval factor");
-  printHelpItem("filter", "Read CO2 filter setting");
-  printHelpItem("filter <val>", "Write persistent CO2 filter");
+  printHelpItem("factor <val>", "Write nonzero persistent CO2 interval factor");
+  printHelpItem("filter", "Read opaque vendor-defined CO2 filter");
+  printHelpItem("filter <val>", "Write opaque vendor-defined persistent CO2 filter");
   printHelpItem("mode", "Read operating mode");
   printHelpItem("mode <val>", "Write persistent operating mode (0..3)");
 

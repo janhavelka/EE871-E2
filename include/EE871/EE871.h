@@ -71,7 +71,7 @@ struct CapabilitySnapshot {
   uint8_t operatingFunctions{0};           ///< Custom byte 0x07.
   uint8_t operatingModeSupport{0};         ///< Custom byte 0x08.
   uint8_t specialFeatures{0};              ///< Custom byte 0x09.
-  bool valid{false};                       ///< True only after all seven bytes load.
+  bool valid{false};                       ///< True only after all seven bytes load and validate.
 };
 
 /// @brief EE871 CO2 measured-value source selected by a checked read.
@@ -235,10 +235,10 @@ public:
   /// begin() validates timing and callbacks, normalizes configuration, validates
   /// the complete EE871 CO2 identity, and atomically caches custom-memory
   /// capabilities 0x03..0x09. REQUIRE_PRESENT fails closed on any discovery
-  /// error. ALLOW_ABSENT accepts only a cleanly terminated identity NACK or
-  /// definite DEVICE_NOT_FOUND and initializes a latched OFFLINE session;
-  /// responding incompatible devices, cleanup failures, and partial capability
-  /// reads still fail.
+  /// error. ALLOW_ABSENT accepts only DEVICE_NOT_FOUND produced by an
+  /// authoritative presence mechanism. The GPIO E2 transport cannot make that
+  /// distinction, so its NACK remains NACK and leaves the driver uninitialized.
+  /// Responding incompatible devices and partial capability reads also fail.
   ///
   /// The driver does not configure GPIO, pins, pull-ups, tasks, locks, or
   /// framework handles.
@@ -336,14 +336,14 @@ public:
   DriverState healthState() const { return _driverState; }
 
   /// Check whether begin() has completed successfully.
-  /// @return true after successful begin(), including accepted optional
-  /// absence, and before end().
+  /// @return true after successful begin(), including any authoritative
+  /// optional-absence result, and before end().
   /// @note Timing contract: NO_E2_IO.
   bool isInitialized() const { return _initialized; }
 
   /// Check if driver is ready for operations.
-  /// @return true when the driver is READY or DEGRADED. Accepted optional
-  /// absence is initialized but returns false because it is OFFLINE.
+  /// @return true when the driver is READY or DEGRADED. Any authoritative
+  /// accepted absence is initialized but returns false because it is OFFLINE.
   /// @note Timing contract: NO_E2_IO.
   bool isOnline() const {
     return _driverState == DriverState::READY ||
@@ -435,8 +435,9 @@ public:
 
   /// Consecutive failures since last success.
   ///
-  /// Accepted absence and semantic recovery incompatibility normalize this to
-  /// offlineThreshold() as a state latch without inventing transport failures.
+  /// Authoritative accepted absence and semantic recovery incompatibility
+  /// normalize this to offlineThreshold() as a state latch without inventing
+  /// transport failures.
   /// @return Current tracked failure streak or normalized OFFLINE latch.
   /// @note Timing contract: NO_E2_IO.
   uint8_t consecutiveFailures() const { return _consecutiveFailures; }
@@ -544,7 +545,9 @@ public:
   /// Known typed targets use their capability and semantic checks. Unsafe
   /// interval/calibration halves and documented read-only addresses are
   /// rejected before line I/O. Remaining writable bytes use immediate equality
-  /// verification as RAW_CUSTOM_BYTE.
+  /// verification as RAW_CUSTOM_BYTE. That fallback is an expert maintenance
+  /// operation: derive address semantics and restoration from authoritative
+  /// vendor documentation, and never restore by replaying a raw memory dump.
   /// @param address Custom-memory address.
   /// @param value Byte to write.
   /// @return Status::Ok() when target-specific verification succeeds, or a
@@ -595,7 +598,10 @@ public:
   /// @note Timing contract: BUS CUSTOM_BLOCK_READ.
   Status readFirmwareVersion(uint8_t& main, uint8_t& sub);
 
-  /// Read E2 specification version implemented by device
+  /// Read the diagnostic E2 specification version recorded by the device.
+  ///
+  /// This evidence does not gate begin(), probe(), or recover(); the available
+  /// documentation defines no safe compatibility table for that policy.
   /// @param[out] version E2 specification version byte.
   /// @return Status::Ok() when the byte is read.
   /// @note Timing contract: BUS CUSTOM_BYTE_READ.
@@ -607,21 +613,27 @@ public:
 
   /// Read operating functions bitfield (0x07)
   /// @param[out] bits Feature flags from custom memory 0x07.
-  /// @return Status::Ok() when the byte is read.
+  /// @return Status::Ok() when the byte validates; NOT_SUPPORTED with packed
+  /// address/raw detail when a reserved bit is set. Output is unchanged on
+  /// failure.
   /// @see cmd::FEATURE_* constants for bit meanings
   /// @note Timing contract: BUS CUSTOM_BYTE_READ.
   Status readOperatingFunctions(uint8_t& bits);
 
   /// Read operating mode support bitfield (0x08)
   /// @param[out] bits Operating-mode support flags from custom memory 0x08.
-  /// @return Status::Ok() when the byte is read.
+  /// @return Status::Ok() when the byte validates; NOT_SUPPORTED with packed
+  /// address/raw detail when a reserved bit is set. Output is unchanged on
+  /// failure.
   /// @see cmd::MODE_SUPPORT_* constants
   /// @note Timing contract: BUS CUSTOM_BYTE_READ.
   Status readOperatingModeSupport(uint8_t& bits);
 
   /// Read special features bitfield (0x09)
   /// @param[out] bits Special-feature flags from custom memory 0x09.
-  /// @return Status::Ok() when the byte is read.
+  /// @return Status::Ok() when the byte validates; NOT_SUPPORTED with packed
+  /// address/raw detail when a reserved bit is set. Output is unchanged on
+  /// failure.
   /// @see cmd::SPECIAL_FEATURE_* constants
   /// @note Timing contract: BUS CUSTOM_BYTE_READ.
   Status readSpecialFeatures(uint8_t& bits);
@@ -730,8 +742,9 @@ public:
 
   /// Read current bus address (0xC0).
   /// @param[out] address Current E2 device address.
-  /// @return Status::Ok() when the byte is read; NOT_SUPPORTED before I/O
-  /// when cached capabilities do not advertise address configuration.
+  /// @return Status::Ok() for 0..7; OUT_OF_RANGE with raw detail for an invalid
+  /// persisted byte; NOT_SUPPORTED before I/O when cached capabilities do not
+  /// advertise address configuration. Output is unchanged on failure.
   /// @note Timing contract: BUS CUSTOM_BYTE_READ.
   Status readBusAddress(uint8_t& address);
 
@@ -755,23 +768,26 @@ public:
 
   /// Read global measurement interval
   /// @param intervalDeciSeconds Interval in 0.1 s units
-  /// @return Status::Ok() when both bytes are read; NOT_SUPPORTED before I/O
-  /// when cached capabilities do not advertise a global interval.
+  /// @return Status::Ok() for 150..36000; OUT_OF_RANGE with assembled raw
+  /// detail otherwise; NOT_SUPPORTED before I/O when cached capabilities do
+  /// not advertise a global interval. Output is unchanged on failure.
   /// @note Timing contract: BUS CUSTOM_BLOCK_READ.
   Status readMeasurementInterval(uint16_t& intervalDeciSeconds);
 
   /// Read CO2-specific interval factor (0xCB)
   /// Positive = multiplier, Negative = divider
   /// @param[out] factor Signed interval factor.
-  /// @return Status::Ok() when the byte is read; NOT_SUPPORTED before I/O
-  /// when cached capabilities do not advertise a specific interval.
+  /// @return Status::Ok() for any nonzero signed factor; OUT_OF_RANGE for zero;
+  /// NOT_SUPPORTED before I/O when cached capabilities do not advertise a
+  /// specific interval. Output is unchanged on failure.
   /// @note Timing contract: BUS CUSTOM_BYTE_READ.
   Status readCo2IntervalFactor(int8_t& factor);
 
   /// Write CO2-specific interval factor (0xCB).
   /// @param factor Signed interval factor.
-  /// @return Status::Ok() when the byte verifies; NOT_SUPPORTED before I/O
-  /// without cached support. This is a persistent single-byte write.
+  /// @return Status::Ok() when a nonzero byte verifies; OUT_OF_RANGE for zero;
+  /// NOT_SUPPORTED before I/O without cached support. This is a persistent
+  /// single-byte write.
   /// @note Timing contract: BUS CUSTOM_BYTE_WRITE_VERIFY.
   Status writeCo2IntervalFactor(int8_t factor);
 
@@ -779,24 +795,29 @@ public:
   // Filter / Operating Mode
   // =========================================================================
 
-  /// Read CO2 filter setting (0xD3).
-  /// @param[out] filter Filter setting byte.
+  /// Read opaque vendor-defined CO2 filter setting (0xD3).
+  /// @param[out] filter Raw product-specific filter byte.
   /// @return Status::Ok() when the byte is read; NOT_SUPPORTED before I/O
-  /// when cached capabilities do not advertise filter configuration.
+  /// when cached capabilities do not advertise filter configuration. Success
+  /// does not semantically qualify the product-specific value.
   /// @note Timing contract: BUS CUSTOM_BYTE_READ.
   Status readCo2Filter(uint8_t& filter);
 
-  /// Write CO2 filter setting (0xD3).
-  /// @param filter Filter setting byte.
+  /// Write opaque vendor-defined CO2 filter setting (0xD3).
+  /// @param filter Raw product-specific filter byte from authoritative device
+  /// documentation.
   /// @return Status::Ok() when the byte verifies; NOT_SUPPORTED before I/O
-  /// without cached support. This is a persistent single-byte write.
+  /// without cached support. This is a persistent single-byte write; equality
+  /// verification does not semantically qualify the product-specific value.
   /// @note Timing contract: BUS CUSTOM_BYTE_WRITE_VERIFY.
   Status writeCo2Filter(uint8_t filter);
 
   /// Read operating mode (0xD8)
   /// @param[out] mode Operating-mode byte.
-  /// @return Status::Ok() when the byte is read; NOT_SUPPORTED before I/O
-  /// when cached capabilities advertise neither supported mode bit.
+  /// @return Status::Ok() when reserved bits are clear and every set mode bit
+  /// is advertised; OUT_OF_RANGE for reserved bits; NOT_SUPPORTED for an
+  /// unadvertised defined bit or when the entire feature is absent. Output is
+  /// unchanged on failure.
   /// @see cmd::OPERATING_MODE_* constants
   /// @note Timing contract: BUS CUSTOM_BYTE_READ.
   Status readOperatingMode(uint8_t& mode);
@@ -806,8 +827,9 @@ public:
   /// bit0: 0=freerunning, 1=low power. bit1: 0=measurement priority,
   /// 1=E2 priority.
   /// @param mode Operating-mode byte.
-  /// @return Status::Ok() when the byte verifies; NOT_SUPPORTED before I/O
-  /// when no requested/supported mode is advertised.
+  /// @return Status::Ok() when the validated byte verifies; OUT_OF_RANGE for
+  /// reserved bits; NOT_SUPPORTED for an unadvertised defined bit or when the
+  /// entire feature is absent.
   /// @note Timing contract: BUS CUSTOM_BYTE_WRITE_VERIFY.
   Status writeOperatingMode(uint8_t mode);
 
@@ -817,8 +839,9 @@ public:
 
   /// Check if auto adjustment is running (0xD9 bit0).
   /// @param[out] running true when auto adjustment is running.
-  /// @return Status::Ok() when the byte is read; NOT_SUPPORTED before I/O
-  /// when cached capabilities do not advertise auto-adjust.
+  /// @return Status::Ok() when reserved bits are clear; OUT_OF_RANGE with raw
+  /// detail otherwise; NOT_SUPPORTED before I/O when cached capabilities do
+  /// not advertise auto-adjust. Output is unchanged on failure.
   /// @note Timing contract: BUS CUSTOM_BYTE_READ.
   Status readAutoAdjustStatus(bool& running);
 
@@ -990,6 +1013,11 @@ private:
     uint32_t limitUs{0};
   };
 
+  struct CompletionBudget {
+    uint32_t consumedUs{0};
+    uint32_t limitUs{0};
+  };
+
   struct MutationProgress {
     bool pecTransferred{false};
     bool finalAckObserved{false};
@@ -1021,18 +1049,22 @@ private:
   static Status _delayWithinDeadline(
       const Config& config,
       uint32_t us,
-      ClockWaitClass waitClass,
       ByteDeadline& deadline);
   static void _delayLongMs(const Config& config, uint32_t totalMs);
+  static void _finishCompletionBudget(
+      const Config& config, CompletionBudget& budget);
   static Status _waitSclHigh(
       const Config& config,
-      ClockWaitClass waitClass,
       ByteDeadline& deadline);
+  static Status _waitSclHighCompletion(
+      const Config& config,
+      ClockWaitClass waitClass,
+      CompletionBudget& completionBudget);
   static Status _e2Start(const Config& config);
   static Status _e2Stop(
       const Config& config,
       ClockWaitClass waitClass,
-      ByteDeadline* deadline = nullptr);
+      CompletionBudget* completionBudget = nullptr);
   static Status _writeBit(
       const Config& config, bool bit, ByteDeadline& deadline);
   static Status _readBit(
@@ -1046,7 +1078,8 @@ private:
       bool& acked,
       ClockWaitClass waitClass,
       ByteDeadline& deadline,
-      bool* observed = nullptr);
+      bool* observed = nullptr,
+      CompletionBudget* completionBudget = nullptr);
   static Status _sendAck(
       const Config& config, bool ack, ByteDeadline& deadline);
 
@@ -1057,8 +1090,7 @@ private:
 
   Status _readControlByteRaw(
       uint8_t controlByte,
-      uint8_t& data,
-      bool* transactionTerminatedCleanly = nullptr);
+      uint8_t& data);
   Status _readControlByteTracked(uint8_t controlByte, uint8_t& data);
 
   Status _writeCommandRaw(uint8_t controlByte, uint8_t addressByte, uint8_t dataByte,
@@ -1105,16 +1137,25 @@ private:
       uint16_t value);
   Status _resyncUnresolvedMutation();
   Status _resyncAllSupportedPersistentConfig();
-  Status _readAndValidateIdentityRaw(
-      DeviceIdentity& out,
-      bool* nackTerminatedCleanly = nullptr);
+  static Status _validateCapabilityValue(
+      uint8_t address, uint8_t value);
+  static Status _validateBusAddressValue(uint8_t address);
+  static Status _validateIntervalValue(uint16_t intervalDeciSeconds);
+  static Status _validateIntervalFactorValue(int8_t factor);
+  Status _validateOperatingModeValue(uint8_t mode) const;
+  static Status _validateAutoAdjustRaw(uint8_t raw);
+  Status _validateMutationObservation(
+      MutationTarget target,
+      const uint8_t* values,
+      uint8_t elementCount) const;
+  Status _readValidatedCapability(uint8_t address, uint8_t& out);
+  Status _readAndValidateIdentityRaw(DeviceIdentity& out);
   Status _readCapabilitiesRaw(CapabilitySnapshot& out);
   Status _readAndValidateIdentityTracked(DeviceIdentity& out);
   Status _readCapabilitiesTracked(CapabilitySnapshot& out);
   Status _readAndValidateIdentity(
       DeviceIdentity& out,
-      bool tracked,
-      bool* nackTerminatedCleanly);
+      bool tracked);
   Status _readCapabilities(
       CapabilitySnapshot& out, bool tracked);
   void _publishIdentityAndCapabilities(

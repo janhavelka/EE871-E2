@@ -236,21 +236,25 @@ startup succeeds only after the driver validates group `0x0367`, subgroup
 `0x09`, the advertised CO2 measurement bit, and all seven capability bytes
 from custom memory `0x03..0x09`.
 
-For a product where the sensor is genuinely optional, set
-`BeginPolicy::ALLOW_ABSENT`. Only a cleanly terminated identity-read `NACK` or
-definite `DEVICE_NOT_FOUND` is accepted; a failed cleanup STOP is rejected even
-when the primary transfer result remains NACK. The driver then returns success
-from `begin()` but remains initialized and latched `OFFLINE`; identity and
-capability caches stay invalid. The accepted discovery status is available as
-`SettingsSnapshot::beginProbeStatus`. `consecutiveFailures` is normalized to
-the configured offline threshold to preserve the four-state invariant; this
-is a state latch, not invented failed wire traffic, so lifetime failure
-counters and transport timestamps remain unchanged.
+For a product where the sensor is genuinely optional,
+`BeginPolicy::ALLOW_ABSENT` may accept only `DEVICE_NOT_FOUND` from an
+authoritative presence mechanism. The current GPIO E2 transport has no such
+mechanism. An identity-stage `NACK` therefore remains `NACK` under both begin
+policies, performs no hidden retry or long wait, and leaves the driver
+`UNINIT`. This matters because the E2 specification permits a responsive
+sensor to NACK while measurement has priority; a clean STOP does not prove
+physical absence.
 
-Timeout, stuck bus, PEC mismatch, incompatible group/subgroup, missing CO2
-support, and any partial capability-read failure still fail `begin()` and
-leave the driver uninitialized. A responding but incompatible device is never
-treated as absent.
+If a future transport can authoritatively report `DEVICE_NOT_FOUND`, accepted
+optional absence initializes a latched `OFFLINE` session with invalid
+identity/capability caches and cache-only `beginProbeStatus` evidence. Until
+then, an optional-device owner keeps its module alive after failed begin and
+uses an explicit later begin attempt according to application retry policy.
+
+Timeout, stuck bus, NACK, PEC mismatch, incompatible group/subgroup, missing
+CO2 support, and any partial or semantically invalid capability read fail
+`begin()` and leave the driver uninitialized. A responding but incompatible
+device is never treated as absent.
 
 While `OFFLINE`, normal reads and writes return `Err::OFFLINE` without touching
 the E2 lines or changing health counters. `probe()` remains a raw,
@@ -271,6 +275,14 @@ library operation. Ordinary bit and byte stretches retain the E2 limits of
 consume the separate write-completion window. The first interval byte is
 staged with ordinary timing; its high-byte commit uses the separate
 interval-pair window.
+
+Each completion window is one cumulative sensor allowance. SCL-low polling at
+the final PEC ACK and STOP consumes that allowance, and the cooperative wait
+after STOP uses only its remainder. The fixed, configuration-bounded master
+ACK/STOP waveform is additional protocol tail, so a legal device-held-low
+interval of exactly 150 ms or 300 ms remains valid. A split stretch across ACK
+and STOP does not receive a second allowance, and a fully consumed allowance
+does not cause another quiet wait.
 
 `writeDelayMs` values below 150 ms normalize to 150 ms, and
 `intervalWriteDelayMs` values below 300 ms normalize to 300 ms. Those values
@@ -348,9 +360,28 @@ Bus-address change and auto-adjust have deliberately stricter procedures:
 Typed optional-setting reads and writes fail bus-silently when the validated
 cached capabilities do not advertise their register. This includes part name,
 address, interval, filter, operating mode, auto-adjust, and calibration
-offset/gain. Raw `customRead()` remains the explicit untyped diagnostic path;
-raw `customWrite()` cannot bypass typed address, interval, calibration,
-auto-adjust, or read-only-register safety rules.
+offset/gain. Capability bytes `0x03..0x09` must also have every reserved bit
+clear before the seven-byte snapshot is published. A capability error returns
+`NOT_SUPPORTED` with `Status::detail = (address << 8) | raw`; `0x07 == 0x55`
+is valid because its reserved bit is clear. `0x02` remains a diagnostic E2
+version read and is not a lifecycle compatibility gate.
+
+Typed persisted reads validate the observed hardware value before publishing
+it to the caller: address `0..7`, global interval `150..36000` deciseconds,
+nonzero signed interval factor, D8 reserved/capability bits, and D9 reserved
+bits. Failure leaves the output unchanged and retains the raw value in
+`Status::detail`. The same validators govern typed writes, post-write
+observations, unresolved-target resync, and full coherence resync. These
+semantic results follow successful bus traffic, so they do not invent
+transport failures. The CO2 filter stays opaque because its values are
+product-specific.
+
+Raw `customRead()` remains the explicit untyped diagnostic path.
+`customWrite()` is an expert maintenance API: callers must derive address
+semantics and restoration from authoritative vendor documentation. Its
+protected dispatch prevents raw bypass of typed address, interval,
+calibration, mode, factor, auto-adjust, and read-only-register safety, and a
+raw memory dump must never be replayed as restoration.
 
 Unresolved evidence survives `end()`, failed/repeated `begin()`, and a later
 successful `begin()` on the same object. Destroying the object or losing
@@ -374,9 +405,11 @@ persistent state.
 
 Treat persistent writes such as measurement interval, part name, CO2 offset,
 and CO2 gain as maintenance operations. The CLI `reg write <addr> <value>`
-command can write arbitrary custom memory, including persistent/configuration
-addresses, and is bench-only. These operations can have longer latency than
-normal reads and may have sensor flash/endurance implications.
+command reaches only otherwise-unclassified writable bytes after protected
+typed, paired, and read-only dispatch. It is an expert maintenance operation:
+use it only with authoritative address/restoration semantics, never replay a
+raw memory image, and account for sensor flash/endurance and longer write
+latency.
 
 ## Threading, ISR, And Callback Contract
 

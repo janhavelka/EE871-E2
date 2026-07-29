@@ -24,6 +24,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `ALLOW_ABSENT` now accepts only authoritative `DEVICE_NOT_FOUND`; GPIO E2
+  identity NACK remains NACK under both policies and leaves the driver
+  uninitialized because measurement-priority NACK cannot prove absence.
+- Capability bytes `0x03..0x09` now validate their documented reserved-zero
+  masks before atomic publication. Recovery semantic incompatibility clears
+  live claims and latches `OFFLINE` from READY, DEGRADED, or OFFLINE.
+- Typed address, interval, factor, operating-mode, and auto-adjust procedures
+  now share fail-closed validators across normal reads, writes, post-write
+  observations, unresolved-target resync, and full resync. Filter remains an
+  opaque vendor-specific byte.
+- Diagnostic CLI help now labels arbitrary custom-memory writes as expert
+  maintenance requiring authoritative address and restoration semantics.
 - Persistent runner tests now use typed test/readback/diagnostic, complete
   post-test image, restore, and final-image sequences; raw memory is never
   replayed.
@@ -35,6 +47,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Invalid persisted typed values no longer publish to caller outputs or settle
+  mutation uncertainty. Semantic failures preserve raw detail and original
+  mutation cause without being counted as transport failures.
+- Zero CO2 interval factor, D8/D9 reserved bits, and unadvertised defined D8
+  modes now fail before unsafe mutation; protected `customWrite()` routing
+  cannot bypass these checks.
+- Exact documented 150 ms `0x10`/`0x50` and 300 ms interval-commit
+  device-held-low completion limits now succeed; final-ACK and STOP polling
+  share one sensor allowance while their bounded master waveform is accounted
+  separately in public blocking bounds.
 - Diagnostic CLI persistent numeric input now rejects malformed and
   out-of-range values instead of converting them to zero or wrapping before a
   typed write.

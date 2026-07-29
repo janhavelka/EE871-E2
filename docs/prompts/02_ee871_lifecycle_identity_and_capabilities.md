@@ -37,8 +37,8 @@ Implement one coherent lifecycle suitable for both simple applications and a
 dedicated firmware owner:
 
 1. a strict default startup that requires a verified EE871;
-2. an explicit optional-device startup mode that retains a configured but
-   offline driver only for definite absence;
+2. an explicit optional-device startup mode that may retain a configured but
+   offline driver only for authoritative `DEVICE_NOT_FOUND`;
 3. full group/subgroup/CO2-capability validation;
 4. atomic capability caching;
 5. normal-operation fast-fail while offline;
@@ -240,8 +240,14 @@ timing query uses the same validation.
 `BeginPolicy::ALLOW_ABSENT` follows the same procedure, with exactly one narrow
 exception:
 
-- `Err::NACK` or a definite `Err::DEVICE_NOT_FOUND` during identity presence
-  reads may be accepted as absent.
+- only `Err::DEVICE_NOT_FOUND` from an authoritative presence mechanism may be
+  accepted as absent.
+
+The current GPIO E2 path has no authoritative physical-presence mechanism.
+Identity NACK therefore remains NACK under both policies, performs no retry or
+long delay, clears stopped/cache state, and leaves `UNINIT`. A clean STOP does
+not change this: D8 measurement-priority operation permits a responsive slave
+to NACK while measuring.
 
 Do not accept any of these as absence:
 
@@ -249,6 +255,7 @@ Do not accept any of these as absence:
 - `BUS_STUCK`;
 - `TIMEOUT`;
 - `PEC_MISMATCH`;
+- `NACK`;
 - `NOT_SUPPORTED`;
 - a capability-read failure after identity responded;
 - any cleanup or internal error not proving absence.
@@ -262,7 +269,7 @@ On accepted absent startup:
 - set normalized `consecutiveFailures` to `offlineThreshold`;
 - keep `totalFailures==0`;
 - keep transport `lastError`/`lastErrorMs` unchanged;
-- store the accepted NACK/absence in `beginProbeStatus`;
+- store the accepted authoritative absence in `beginProbeStatus`;
 - perform no retry.
 
 This policy is reusable optional-device lifecycle behavior. Do not add an
@@ -368,7 +375,7 @@ because an earlier sub-transfer succeeded.
 
 - `_updateHealth()` remains called only inside tracked transport wrappers.
 - begin's pre-initialization raw work does not increment lifetime counters.
-- accepted absent startup does not increment counters.
+- authoritative accepted absent startup does not increment counters.
 - probe remains health-neutral.
 - tracked recovery transport success/failure updates health.
 - offline-guard rejection itself is not a new transport failure.
@@ -408,9 +415,10 @@ Add tests for:
 2. public enum numeric values are stable;
 3. an invalid cast `BeginPolicy` is `INVALID_CONFIG` with zero line I/O;
 4. strict begin with absent fake fails and remains `UNINIT`;
-5. allow-absent begin with NACK succeeds initialized/offline;
-6. accepted absence leaves counters zero and caches invalid;
-7. `beginProbeStatus` retains the accepted NACK;
+5. allow-absent begin with NACK preserves NACK and remains `UNINIT`;
+6. strict and optional NACK perform one attempt with no hidden retry/long wait;
+7. authoritative `DEVICE_NOT_FOUND`, only if an injectable mechanism exists,
+   is the sole accepted absence;
 8. allow-absent rejects timeout;
 9. allow-absent rejects SCL/SDA bus stuck;
 10. allow-absent rejects PEC mismatch;
@@ -425,11 +433,11 @@ Add tests for:
 17. successful begin publishes identity and all seven capabilities atomically;
 18. cache-only identity/capability/settings access performs zero line I/O;
 19. normal reads/writes while offline return `OFFLINE` with zero line I/O;
-20. offline reached through health failures has the same latch behavior as
-    accepted absence;
+20. offline reached through health failures has the same latch behavior as any
+    authoritative accepted absence;
 21. probe while offline works and changes no health/cache state;
-22. successful recover from absent startup publishes fresh identity/features
-    and enters `READY`;
+22. a later explicit begin after an uninitialized NACK can publish fresh
+    identity/features; recover remains for initialized sessions;
 23. failed bus reset in recovery entered from offline returns immediately and
     remains offline;
 24. failure at every identity/capability stage in recovery entered from
@@ -457,7 +465,8 @@ Update:
 Explain:
 
 - strict versus optional-device startup;
-- only NACK/definite absence is accepted offline;
+- only authoritative `DEVICE_NOT_FOUND` can be accepted offline;
+- E2 NACK is not physical-absence evidence and leaves begin uninitialized;
 - responding incompatible devices and partial capability reads fail closed;
 - `OFFLINE` is latched and explicit recovery is required;
 - probe is diagnostic/raw and non-mutating;
@@ -497,7 +506,7 @@ and explicit deferrals.
 ## Acceptance Criteria
 
 - default begin remains strict;
-- optional begin accepts only definite absence/NACK;
+- optional begin accepts only authoritative `DEVICE_NOT_FOUND`;
 - all responding devices require full EE871 CO2 identity;
 - all seven capabilities publish atomically;
 - feature-read failure cannot produce READY;

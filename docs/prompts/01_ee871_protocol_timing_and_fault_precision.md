@@ -237,6 +237,13 @@ per-byte limits. Do not globally raise those values to 150/300 ms.
 
 ## Correct `0x10` / `0x50` Completion
 
+> **Superseded timing detail:** Prompt 04A supersedes only the accounting in
+> steps 2-4 below. Final-ACK and STOP SCL-low polling share one cumulative
+> sensor-completion allowance, while deterministic master ACK/STOP waveform
+> delays are bounded separately and do not reduce the legal 150/300 ms
+> device-held-low duration. After STOP, wait only the allowance remainder.
+> Use Prompt 04A for implementation and exact-boundary acceptance criteria.
+
 The write-command helper must accept an explicit completion class or completion
 timeout. Required mappings:
 
@@ -259,11 +266,11 @@ Use one total completion budget, not a long stretch plus a second full delay:
 1. start the selected 150/300/configured completion budget when the complete
    PEC has been transferred;
 2. only the final PEC ACK and the final STOP SCL-high wait may use the
-   write-specific stretch limit; all driver-requested delays and polling
-   increments from the budget start through completed STOP consume the one
-   total budget;
-3. record that saturating driver-accounted protocol elapsed time in
-   `WriteProgress`;
+   write-specific stretch limit; only SCL-low polling increments consume the
+   one cumulative sensor-completion allowance;
+3. account deterministic DATA setup, clock-high/low, and STOP setup/hold as a
+   separate, configuration-bounded master protocol tail, and record completion
+   allowance consumption in `WriteProgress`;
 4. after STOP, cooperatively wait only the remaining completion budget;
 5. if the eligible phases already consume the budget, do not add another full
    wait;

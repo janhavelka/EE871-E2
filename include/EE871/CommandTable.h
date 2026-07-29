@@ -120,6 +120,36 @@ static constexpr uint8_t CUSTOM_OPERATING_FUNCTIONS = 0x07;    ///< Feature-supp
 static constexpr uint8_t CUSTOM_OPERATING_MODE_SUPPORT = 0x08; ///< Operating-mode support flags address.
 static constexpr uint8_t CUSTOM_SPECIAL_FEATURES = 0x09;       ///< Special-feature support flags address.
 
+// Reserved-bit masks for capability bytes 0x03..0x09.
+static constexpr uint8_t CUSTOM_ADJUSTMENT_SUPPORT_RESERVED_MASK =
+    0xF0; ///< Reserved bits in 0x03.
+static constexpr uint8_t CUSTOM_ADJUSTMENT_POINT_SUPPORT_RESERVED_MASK =
+    0xF0; ///< Reserved bits in 0x04.
+static constexpr uint8_t
+    CUSTOM_ADJUSTMENT_TIME_GENERAL_SUPPORT_RESERVED_MASK =
+        0xFE; ///< Reserved bits in 0x05.
+static constexpr uint8_t CUSTOM_ADJUSTMENT_TIME_SUPPORT_RESERVED_MASK =
+    0xF0; ///< Reserved bits in 0x06.
+static constexpr uint8_t OPERATING_FUNCTIONS_RESERVED_MASK =
+    0x08; ///< Reserved bit in 0x07.
+static constexpr uint8_t OPERATING_MODE_SUPPORT_RESERVED_MASK =
+    0xFC; ///< Reserved bits in 0x08.
+static constexpr uint8_t SPECIAL_FEATURES_RESERVED_MASK =
+    0xFE; ///< Reserved bits in 0x09.
+
+/// Pack a capability address and observed byte into Status::detail.
+///
+/// The custom-memory address occupies bits 15..8 and the raw byte occupies
+/// bits 7..0.
+/// @param address Capability custom-memory address.
+/// @param raw Raw capability byte read from the device.
+/// @return Packed address/raw diagnostic detail.
+static constexpr int32_t makeCapabilityValidationDetail(
+    uint8_t address, uint8_t raw) {
+  return static_cast<int32_t>(
+      (static_cast<uint16_t>(address) << 8) | raw);
+}
+
 static constexpr uint8_t CUSTOM_CO2_OFFSET_L = 0x58;   ///< CO2 offset low byte, signed ppm.
 static constexpr uint8_t CUSTOM_CO2_OFFSET_H = 0x59;   ///< CO2 offset high byte, signed ppm.
 static constexpr uint8_t CUSTOM_CO2_GAIN_L = 0x5A;     ///< CO2 gain low byte, raw gain value.
@@ -236,9 +266,13 @@ static constexpr uint8_t SPECIAL_FEATURE_AUTO_ADJUST = 0x01; ///< Auto-adjust su
 // CUSTOM_OPERATING_MODE (0xD8)
 static constexpr uint8_t OPERATING_MODE_MEASUREMODE_MASK = 0x01; ///< Runtime mode bit: low-power vs freerunning.
 static constexpr uint8_t OPERATING_MODE_E2_PRIORITY_MASK = 0x02; ///< Runtime mode bit: E2 priority vs measurement priority.
+static constexpr uint8_t OPERATING_MODE_RESERVED_MASK =
+    0xFC; ///< Reserved runtime mode bits in 0xD8.
 
 // CUSTOM_AUTO_ADJUST (0xD9)
 static constexpr uint8_t AUTO_ADJUST_RUNNING_MASK = 0x01; ///< Auto-adjust running bit in 0xD9.
+static constexpr uint8_t AUTO_ADJUST_RESERVED_MASK =
+    0xFE; ///< Reserved auto-adjust bits in 0xD9.
 
 } // namespace cmd
 } // namespace EE871

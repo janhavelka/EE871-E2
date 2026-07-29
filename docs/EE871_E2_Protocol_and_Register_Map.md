@@ -107,10 +107,12 @@ whole write frame. EE871 write commands have a separate completion phase:
 - the low interval byte is only a staged ordinary write.
 
 The completion budget starts after the full PEC byte is transferred. Only the
-final PEC ACK and final STOP SCL-high wait may use it. Their polling and
-driver-requested delays consume the same total budget; after STOP, the master
-waits only the remainder. This is deliberately distinct from adding a full
-quiet delay after a full long stretch.
+final PEC ACK and final STOP SCL-high polling may consume it. Those two waits
+share one sensor-completion allowance; after STOP, the master cooperatively
+waits only its unused remainder. Deterministic DATA setup, clock-high/low, and
+STOP setup/hold delays form a separate bounded master protocol tail. Thus an
+exact 150/300 ms sensor-held-low interval remains valid without granting a
+second completion window or adding a full quiet delay after a full stretch.
 
 The library accepts configured completion windows through 5000 ms for source
 compatibility, normalizes values below 150/300 ms upward, and recommends the
@@ -125,6 +127,12 @@ compatibility, normalizes values below 150/300 ms upward, and recommends the
 - Each byte is followed by an **ACK/NACK 9th bit**:
   - **ACK** = receiver pulls DATA LOW
   - **NACK** = receiver leaves DATA HIGH
+
+An E2 NACK is not authoritative physical-absence evidence. In particular,
+operating mode D8 bit1=0 gives measurement priority and the slave may NACK
+during measurement. The library therefore preserves identity-stage NACK under
+both begin policies; clean STOP completion does not remap it to
+`DEVICE_NOT_FOUND`.
 
 ### 4.2 Control Byte structure
 The first transmitted byte is always the **Control Byte** sent **master -> slave**.
@@ -271,6 +279,24 @@ Key bytes:
 - **0x08** Operating mode supported bits (see Sec. 7.4.2)
 - **0x09** Special features supported bits (see Sec. 7.4.3)
 
+The driver validates every reserved bit before atomically publishing this
+seven-byte snapshot:
+
+| Address | Reserved-zero mask |
+| --- | --- |
+| `0x03` | `0xF0` |
+| `0x04` | `0xF0` |
+| `0x05` | `0xFE` |
+| `0x06` | `0xF0` |
+| `0x07` | `0x08` |
+| `0x08` | `0xFC` |
+| `0x09` | `0xFE` |
+
+A violation returns `NOT_SUPPORTED` with deterministic detail
+`(address << 8) | raw`. This is bit-mask validation, not a blanket sentinel
+rule: `0x07 == 0x55` is valid. Custom byte `0x02` remains diagnostic version
+information and does not gate begin, probe, or recover.
+
 ### 7.2 Firmware / spec identification
 - `0x00` Firmware-Version main
 - `0x01` Firmware-Version sub
@@ -326,6 +352,9 @@ Specific interval factors (signed 8-bit convention described as):
 - `0xCB` Specific interval CO2: Positive = global interval multiplier; Negative = global interval divider  
 (Other quantities are at 0xC8..0xCA; usually irrelevant for EE871 CO2-only.)
 
+The typed library contract accepts every nonzero signed factor (`-128..-1`,
+`1..127`) and rejects zero as `OUT_OF_RANGE`.
+
 #### 7.4.7 Measurement value filtering
 - `0xD3` Filter CO2 (details product-specific; see device addendum / datasheet)
 
@@ -333,6 +362,7 @@ Specific interval factors (signed 8-bit convention described as):
 - `0xD8` Operating mode (bitfield):
   - bit0 Measuremode: 0 = freerunning/trigger mode, 1 = low power mode (measure after status read)
   - bit1 E2 priority: 0 = measurement priority (NACK during measurement), 1 = communication priority
+  - bits2..7 are reserved and must be zero
 
 #### 7.4.9 Special features register
 - `0xD9` Auto adjustment control/status:
@@ -340,6 +370,15 @@ Specific interval factors (signed 8-bit convention described as):
   - set=1 -> start auto adjustment
   - set=0 -> cannot stop/interrupt
   - During auto adjustment, measurement values are held at last value.
+  - bits1..7 are reserved and must be zero
+
+Typed persisted reads publish only validated observations. Invalid address,
+interval, factor, D8, or D9 data returns `OUT_OF_RANGE` (or `NOT_SUPPORTED`
+for a defined D8 bit not advertised by capability byte `0x08`), leaves the
+caller output unchanged, and retains the observed raw value in
+`Status::detail`. The same validators are reused for write admission,
+post-write observation, unresolved-target resync, and full resync. Filter D3
+remains opaque because its value set is product-specific.
 
 #### 7.4.10 Address pointer visibility
 - `0xFE` Address pointer low byte
@@ -446,8 +485,10 @@ Steps:
    - AddressByte = 0x00 (pointer high for 8-bit addresses)
    - DataByte = A (pointer low)
    - PEC = (CB + Addr + Data) & 0xFF
-   - Final ACK and STOP share one total 150 ms completion window that starts
-     after PEC; delay only the unused remainder of that window
+   - Final ACK and STOP SCL-high waits share one 150 ms sensor-completion
+     allowance that starts after PEC; delay only its unused remainder
+   - Complete the fixed, bounded master ACK/STOP waveform outside that sensor
+     allowance
 2) Read with ControlByte 0x51:
    - START
    - ControlByte = 0x51 with bus address (read)
@@ -464,12 +505,14 @@ For reading multi-byte blocks (like 0xA0..0xAF), do step (1) once, then repeat (
 3) AddressByte = A
 4) DataByte = value
 5) PEC = (CB + Addr + Data) & 0xFF
-6) Complete final ACK and STOP within one total completion window that starts
-   after PEC: 150 ms for ordinary writes, or 300 ms for the committing `0xC7`
-   byte of the interval pair
-7) Delay only the unused remainder of that same window; do not add a second
+6) Let final-ACK and STOP SCL-high polling share one sensor-completion
+   allowance that starts after PEC: 150 ms for ordinary writes, or 300 ms for
+   the committing `0xC7` byte of the interval pair
+7) Complete the fixed, bounded master ACK/STOP waveform without subtracting it
+   from that sensor allowance
+8) Delay only the unused remainder of the same allowance; do not add a second
    full post-STOP delay
-8) Read back to verify.
+9) Read back to verify.
 
 ---
 
@@ -681,8 +724,10 @@ Minimum API to implement:
 - For `0x10` and pointer-setting `0x50` transactions, finish the one selected
   completion window before starting a dependent transaction; only persistent
   `0x10` writes require value readback
-- Use a 150 ms total completion window for ordinary writes and a 300 ms window
-  only for the committing `0xC7` byte of the interval pair
+- Use one 150 ms sensor-completion allowance for ordinary writes and one 300 ms
+  allowance only for the committing `0xC7` byte of the interval pair. Final-ACK
+  and STOP SCL-high polling share it; the bounded master waveform does not
+  reduce it.
 
 ---
 

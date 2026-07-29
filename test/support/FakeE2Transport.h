@@ -72,6 +72,9 @@ public:
     _dropWriteAddress = 0;
     _dropNextWriteEnabled = false;
     _dropNextWriteAddress = 0;
+    _replaceNextWriteEnabled = false;
+    _replaceNextWriteAddress = 0;
+    _replacementWriteValue = 0;
     _statusByte = 0;
     _mv3 = 600;
     _mv4 = 650;
@@ -82,6 +85,8 @@ public:
     _stretchSequenceCount = 0;
     _stretchSequenceIndex = 0;
     _activeStretchRemainingUs = 0;
+    _completionFinalAckStretchUs = 0;
+    _completionStopStretchUs = 0;
     _pointerCompletionDelayUs =
         EE871::cmd::WRITE_DELAY_PROTOCOL_MIN_MS * 1000U;
     _pointerCompletionRemainingUs = 0;
@@ -132,6 +137,7 @@ public:
         static_cast<uint8_t>(EE871::cmd::INTERVAL_MIN_DECISEC & 0xFF);
     _memory[EE871::cmd::CUSTOM_INTERVAL_H] =
         static_cast<uint8_t>(EE871::cmd::INTERVAL_MIN_DECISEC >> 8);
+    _memory[EE871::cmd::CUSTOM_CO2_INTERVAL_FACTOR] = 1;
     _memory[EE871::cmd::CUSTOM_BUS_ADDRESS] =
         EE871::cmd::DEFAULT_DEVICE_ADDRESS;
   }
@@ -375,6 +381,15 @@ public:
     _stretchSequenceCount = 0;
     _stretchSequenceIndex = 0;
     _activeStretchRemainingUs = 0;
+    _completionFinalAckStretchUs = 0;
+    _completionStopStretchUs = 0;
+  }
+
+  void setCompletionStretches(
+      uint32_t finalAckUs, uint32_t stopUs) {
+    clearStretch();
+    _completionFinalAckStretchUs = finalAckUs;
+    _completionStopStretchUs = stopUs;
   }
 
   void setPointerCompletionDelayUs(uint32_t durationUs) {
@@ -401,6 +416,13 @@ public:
   void dropNextWriteCommitToAddress(uint8_t address) {
     _dropNextWriteAddress = address;
     _dropNextWriteEnabled = true;
+  }
+
+  void replaceNextWriteCommitToAddress(
+      uint8_t address, uint8_t replacementValue) {
+    _replaceNextWriteAddress = address;
+    _replacementWriteValue = replacementValue;
+    _replaceNextWriteEnabled = true;
   }
 
 private:
@@ -480,8 +502,22 @@ private:
   }
 
   bool activateConfiguredStretch() {
+    const StretchPhase phase = currentStretchPhase();
+    if (phase == StretchPhase::FINAL_ACK &&
+        _completionFinalAckStretchUs != 0U) {
+      _activeStretchRemainingUs =
+          _completionFinalAckStretchUs;
+      _completionFinalAckStretchUs = 0;
+      return true;
+    }
+    if (phase == StretchPhase::STOP &&
+        _completionStopStretchUs != 0U) {
+      _activeStretchRemainingUs = _completionStopStretchUs;
+      _completionStopStretchUs = 0;
+      return true;
+    }
     if (_stretchPhase == StretchPhase::NONE ||
-        currentStretchPhase() != _stretchPhase) {
+        phase != _stretchPhase) {
       return false;
     }
     if (_stretchMatchesToSkip != 0U) {
@@ -924,6 +960,12 @@ private:
         _dropNextWriteEnabled = false;
         return;
       }
+      if (_replaceNextWriteEnabled &&
+          _address == _replaceNextWriteAddress) {
+        _replaceNextWriteEnabled = false;
+        _memory[_address] = _replacementWriteValue;
+        return;
+      }
       if (!(_dropWriteEnabled && _address == _dropWriteAddress)) {
         _memory[_address] = _data;
       }
@@ -987,6 +1029,9 @@ private:
   uint8_t _dropWriteAddress = 0;
   bool _dropNextWriteEnabled = false;
   uint8_t _dropNextWriteAddress = 0;
+  bool _replaceNextWriteEnabled = false;
+  uint8_t _replaceNextWriteAddress = 0;
+  uint8_t _replacementWriteValue = 0;
   uint8_t _statusByte = 0;
   uint16_t _mv3 = 0;
   uint16_t _mv4 = 0;
@@ -999,6 +1044,8 @@ private:
   uint8_t _stretchSequenceCount = 0;
   uint8_t _stretchSequenceIndex = 0;
   uint32_t _activeStretchRemainingUs = 0;
+  uint32_t _completionFinalAckStretchUs = 0;
+  uint32_t _completionStopStretchUs = 0;
   uint32_t _pointerCompletionDelayUs = 0;
   uint32_t _pointerCompletionRemainingUs = 0;
   uint8_t _pointerCompletionDelaysUntilStart = 0;

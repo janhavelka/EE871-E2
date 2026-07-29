@@ -397,8 +397,10 @@ Freeze roles:
 Keep domains separate:
 
 - absent/present belongs to device presence;
-- accepted `ALLOW_ABSENT` NACK/device-not-found is device absence and does not
-  fault the E2 resource;
+- only authoritative accepted `DEVICE_NOT_FOUND` is device absence and does
+  not fault the E2 resource;
+- NACK remains exact device transport context, is not proof of physical
+  absence, and may reflect measurement-priority operation;
 - timeout/stuck/PEC/backend/protocol faults affect the E2 resource and device
   transport health;
 - other NACK outcomes retain exact device transport context without turning an
@@ -518,8 +520,8 @@ Add cross-layer tests for:
 2. binding coverage and counts;
 3. exact pins and uniqueness checks;
 4. owner/module/backend startup order;
-5. optional absence does not fail boot;
-6. absent at boot then hotplug/recover/warm-up/valid sample;
+5. optional-device NACK or authoritative absence does not fail boot;
+6. NACK at boot then explicit begin/recover, warm-up, and valid sample;
 7. wrong identity never publishes a sample;
 8. timeout/NACK/stuck/PEC and explicit recovery backoff;
 9. disabled device has zero line activity;

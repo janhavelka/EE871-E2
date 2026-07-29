@@ -56,7 +56,7 @@ using E2YieldFn = void (*)(void* user);
 /// @brief Device-presence policy applied by begin().
 enum class BeginPolicy : uint8_t {
   REQUIRE_PRESENT = 0, ///< Startup succeeds only after full EE871 validation.
-  ALLOW_ABSENT = 1,   ///< Cleanly terminated definite absence may latch OFFLINE.
+  ALLOW_ABSENT = 1,   ///< Only authoritative DEVICE_NOT_FOUND may be accepted.
 };
 
 /// @brief Configuration for EE871 driver.
@@ -91,11 +91,13 @@ struct Config {
   uint32_t bitTimeoutUs = 25000;  ///< Clock-stretch timeout per bit, must be > 0.
   uint32_t byteTimeoutUs = 35000; ///< Clock-stretch timeout per byte, must be >= bitTimeoutUs.
 
-  /// Total 0x10/0x50 completion window; recommended 150 ms, max 5000 ms.
-  /// Values below 150 ms normalize to 150 ms.
+  /// Sensor 0x10/0x50 completion allowance; recommended 150 ms, max 5000 ms.
+  /// Values below 150 ms normalize to 150 ms. The bounded master ACK/STOP
+  /// waveform is additional to this sensor-held-low/quiet allowance.
   uint32_t writeDelayMs = 150;
-  /// Total 0xC6/0xC7 commit window; recommended 300 ms, max 5000 ms.
-  /// Values below 300 ms normalize to 300 ms.
+  /// Sensor 0xC6/0xC7 commit allowance; recommended 300 ms, max 5000 ms.
+  /// Values below 300 ms normalize to 300 ms. The bounded master ACK/STOP
+  /// waveform is additional to this sensor-held-low/quiet allowance.
   uint32_t intervalWriteDelayMs = 300;
 
   // === Health Tracking ===
@@ -107,7 +109,7 @@ struct Config {
   uint8_t longDelaySliceMs = 1;   ///< Long-wait slice, normalized from zero to 1 ms; maximum 50 ms.
 
   // === Startup policy ===
-  BeginPolicy beginPolicy = BeginPolicy::REQUIRE_PRESENT; ///< Strict by default; optional absence must terminate cleanly.
+  BeginPolicy beginPolicy = BeginPolicy::REQUIRE_PRESENT; ///< Strict by default; E2 NACK never proves absence.
 };
 
 } // namespace EE871
