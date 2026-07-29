@@ -8,6 +8,7 @@ not flash firmware and it does not claim hardware success from dry-runs.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import re
 import subprocess
@@ -19,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 
-SCRIPT_VERSION = "2.1"
+SCRIPT_VERSION = "2.2"
 DEFAULT_BAUD = 115200
 DEFAULT_TIMEOUT_S = 8.0
 DEFAULT_COMMAND_TIMEOUT_S = 20.0
@@ -43,7 +44,7 @@ POWER_CYCLE_CONFIRM_TEXT = "I UNDERSTAND EE871 SENSOR POWER CYCLE"
 POWER_CYCLE_RUNTIME_CONFIRM_TEXT = "RUN EE871 SENSOR POWER CYCLE"
 
 CUSTOM_MEMORY_SIZE = 256
-CUSTOM_MEMORY_VOLATILE_ADDRESSES = frozenset({0xC1, 0xD9, 0xFE, 0xFF})
+CUSTOM_MEMORY_VOLATILE_ADDRESSES = frozenset({0xC1, 0xFE, 0xFF})
 
 RESULT_PASS = "PASS"
 RESULT_FAIL = "FAIL"
@@ -174,6 +175,12 @@ def parse_version(text: str) -> dict[str, Any]:
         parsed["library_commit"] = match.group(1)
         if match.group(2):
             parsed["library_git_status"] = match.group(2)
+    match = last_match(r"\bFirmware:\s*([0-9]+\.[0-9]+)", clean, re.IGNORECASE)
+    if match:
+        parsed["device_firmware_version"] = match.group(1)
+    match = last_match(r"\bE2 spec version:\s*(\d+)", clean, re.IGNORECASE)
+    if match:
+        parsed["e2_spec_version"] = int(match.group(1))
     return parsed
 
 
@@ -553,6 +560,7 @@ def expected_token_present(clean: str, spec: CommandSpec) -> bool:
 def validate_checked_sample(
     parsed: dict[str, Any],
     expected_kind: str,
+    state: dict[str, Any] | None = None,
 ) -> tuple[list[str], list[str]]:
     failures: list[str] = []
     reviews: list[str] = []
@@ -643,44 +651,69 @@ def validate_checked_sample(
         if top.get("name") != "OK" or top.get("code") != 0:
             failures.append(f"clean checked sample returned {top.get('name')}")
     elif co2_error is True:
-        if parsed.get("checked_error_attempted") is not True:
-            failures.append("CO2 error did not attempt error-code read")
-        if parsed.get("checked_error_status") != "OK":
-            failures.append(
-                f"checked error-code status is {parsed.get('checked_error_status')}"
-            )
-        if parsed.get("checked_error_valid") is not True:
-            failures.append("CO2 error code is not valid")
-        if parsed.get("checked_sensor_error") == "NONE":
-            failures.append("CO2 error did not preserve sensor-domain evidence")
-        error_code = parsed.get("checked_error_code")
-        if not isinstance(error_code, int):
-            failures.append("CO2 error code value was not parsed")
-        expected_sensor = {
-            1: ("SUPPLY_VOLTAGE_LOW", 1),
-            200: ("SENSOR_COUNTS_LOW", 200),
-            201: ("SENSOR_COUNTS_HIGH", 201),
-            202: ("SUPPLY_VOLTAGE_BREAKDOWN_AT_PEAK", 202),
-        }.get(error_code, ("UNKNOWN", 255))
-        if (
-            parsed.get("checked_sensor_error"),
-            parsed.get("checked_sensor_error_value"),
-        ) != expected_sensor:
-            failures.append(
-                "sensor-error enum/name is inconsistent with "
-                f"error code {error_code}"
-            )
-        if top.get("name") != "CO2_SENSOR_ERROR":
-            failures.append(f"CO2 sensor error returned {top.get('name')}")
-        elif isinstance(error_code, int) and top.get("detail") != error_code:
-            failures.append(
-                f"CO2 sensor status detail {top.get('detail')} != error code {error_code}"
-            )
+        operating_functions = (state or {}).get("operating_functions")
+        if not isinstance(operating_functions, int):
+            reviews.append("error-code capability was not recorded before checked sample")
+            return failures, reviews
+        has_error_code = bool(operating_functions & 0x80)
+        if has_error_code:
+            if parsed.get("checked_error_attempted") is not True:
+                failures.append("CO2 error did not attempt advertised error-code read")
+            if parsed.get("checked_error_status") != "OK":
+                failures.append(
+                    f"checked error-code status is {parsed.get('checked_error_status')}"
+                )
+            if parsed.get("checked_error_valid") is not True:
+                failures.append("CO2 error code is not valid")
+            error_code = parsed.get("checked_error_code")
+            if not isinstance(error_code, int):
+                failures.append("CO2 error code value was not parsed")
+            expected_sensor = {
+                1: ("SUPPLY_VOLTAGE_LOW", 1),
+                200: ("SENSOR_COUNTS_LOW", 200),
+                201: ("SENSOR_COUNTS_HIGH", 201),
+                202: ("SUPPLY_VOLTAGE_BREAKDOWN_AT_PEAK", 202),
+            }.get(error_code, ("UNKNOWN", 255))
+            if (
+                parsed.get("checked_sensor_error"),
+                parsed.get("checked_sensor_error_value"),
+            ) != expected_sensor:
+                failures.append(
+                    "sensor-error enum/name is inconsistent with "
+                    f"error code {error_code}"
+                )
+            if top.get("name") != "CO2_SENSOR_ERROR":
+                failures.append(f"CO2 sensor error returned {top.get('name')}")
+            elif isinstance(error_code, int) and top.get("detail") != error_code:
+                failures.append(
+                    f"CO2 sensor status detail {top.get('detail')} != error code {error_code}"
+                )
         else:
-            failures.append(
-                f"sensor reported {parsed.get('checked_sensor_error')} "
-                f"(code={parsed.get('checked_error_code')})"
+            if parsed.get("checked_error_attempted") is not False:
+                failures.append("unadvertised error-code read was attempted")
+            if parsed.get("checked_error_valid") is not False:
+                failures.append("unadvertised error code was marked valid")
+            if "checked_error_code" in parsed:
+                failures.append("unadvertised detailed error code was emitted")
+            if (
+                parsed.get("checked_sensor_error"),
+                parsed.get("checked_sensor_error_value"),
+            ) != ("UNKNOWN", 255):
+                failures.append("unsupported detailed-error path did not report UNKNOWN (255)")
+            if top.get("name") != "CO2_SENSOR_ERROR":
+                failures.append(f"CO2 sensor error returned {top.get('name')}")
+            elif isinstance(status_byte, int) and top.get("detail") != status_byte:
+                failures.append(
+                    f"CO2 sensor status detail {top.get('detail')} != status byte {status_byte}"
+                )
+        failures.append(
+            f"sensor reported {parsed.get('checked_sensor_error')}"
+            + (
+                f" (code={parsed.get('checked_error_code')})"
+                if "checked_error_code" in parsed
+                else f" (status=0x{status_byte:02X})" if isinstance(status_byte, int) else ""
             )
+        )
     return failures, reviews
 
 
@@ -688,6 +721,7 @@ def custom_memory_diff(
     baseline: list[int],
     current: list[int],
     allowed_nonvolatile: frozenset[int] = frozenset(),
+    mutation_target: str | None = None,
 ) -> tuple[list[dict[str, int]], list[dict[str, int]]]:
     expected: list[dict[str, int]] = []
     unexpected: list[dict[str, int]] = []
@@ -697,7 +731,11 @@ def custom_memory_diff(
         if before == after:
             continue
         item = {"address": address, "before": before, "after": after}
-        if address in CUSTOM_MEMORY_VOLATILE_ADDRESSES or address in allowed_nonvolatile:
+        target_allows_address = (
+            address in allowed_nonvolatile
+            and (address != 0xD9 or mutation_target == "AUTO_ADJUST")
+        )
+        if address in CUSTOM_MEMORY_VOLATILE_ADDRESSES or target_allows_address:
             expected.append(item)
         else:
             unexpected.append(item)
@@ -712,11 +750,22 @@ def validate_parsed(
     failures: list[str] = []
     reviews: list[str] = []
     context = state or {}
+    status = parsed.get("status") or {}
+    optional_not_supported = (
+        "status_optional" in spec.validators
+        and status.get("name") == "NOT_SUPPORTED"
+    )
 
     for validator in spec.validators:
         if validator == "version":
             if not parsed.get("library_version"):
                 reviews.append("library version not parsed")
+        elif validator == "device_fw_read":
+            if not parsed.get("device_firmware_version"):
+                reviews.append("device firmware version not parsed")
+        elif validator == "e2spec_read":
+            if not parsed.get("e2_spec_version"):
+                reviews.append("E2 specification version not parsed")
         elif validator == "status_ok":
             status = parsed.get("status")
             if not status:
@@ -748,11 +797,11 @@ def validate_parsed(
             if "co2_fast_ppm" not in parsed:
                 reviews.append("CO2 fast value not parsed")
         elif validator == "checked_fast":
-            checked_failures, checked_reviews = validate_checked_sample(parsed, "FAST")
+            checked_failures, checked_reviews = validate_checked_sample(parsed, "FAST", context)
             failures.extend(checked_failures)
             reviews.extend(checked_reviews)
         elif validator == "checked_average":
-            checked_failures, checked_reviews = validate_checked_sample(parsed, "AVERAGE")
+            checked_failures, checked_reviews = validate_checked_sample(parsed, "AVERAGE", context)
             failures.extend(checked_failures)
             reviews.extend(checked_reviews)
         elif validator == "bus_idle":
@@ -771,8 +820,8 @@ def validate_parsed(
         elif validator == "levels_scl_low":
             if "scl_high" not in parsed or "sda_high" not in parsed:
                 reviews.append("SCL/SDA levels not parsed")
-            elif parsed.get("scl_high") is not False:
-                failures.append("fault jig did not show SCL low")
+            elif parsed.get("scl_high") is not False or parsed.get("sda_high") is not True:
+                failures.append("fault jig did not show SCL low and SDA high")
         elif validator == "features":
             for key in ("operating_functions", "operating_mode_support", "special_features"):
                 if key not in parsed:
@@ -858,6 +907,24 @@ def validate_parsed(
                 reviews.append("resync-needed flag not parsed")
             elif parsed.get("resync_needed") is not False:
                 failures.append("resync is needed")
+            if "mutation_unresolved" not in parsed:
+                reviews.append("mutation unresolved flag not parsed")
+            elif parsed.get("mutation_unresolved") is not False:
+                failures.append("mutation is unresolved")
+            dirty_error = parsed.get("persistent_config_dirty_error")
+            if not isinstance(dirty_error, dict):
+                reviews.append("persistent dirty error not parsed")
+            elif (
+                parsed.get("mutation_unresolved") is False
+                and (
+                    dirty_error.get("name") != "OK"
+                    or dirty_error.get("code") != 0
+                    or dirty_error.get("detail") != 0
+                )
+            ):
+                failures.append(
+                    "resolved mutation state has non-OK persistent dirty error"
+                )
         elif validator == "dirty_state":
             required_dirty = (
                 "persistent_config_dirty",
@@ -888,32 +955,125 @@ def validate_parsed(
                     + ", ".join(missing)
                 )
         elif validator == "interval_read":
-            if "measurement_interval_ds" not in parsed:
+            if not optional_not_supported and "measurement_interval_ds" not in parsed:
                 reviews.append("measurement interval not parsed")
         elif validator == "offset_read":
-            if "co2_offset_ppm" not in parsed:
+            if not optional_not_supported and "co2_offset_ppm" not in parsed:
                 reviews.append("CO2 offset not parsed")
         elif validator == "gain_read":
-            if "co2_gain" not in parsed:
+            if not optional_not_supported and "co2_gain" not in parsed:
                 reviews.append("CO2 gain not parsed")
         elif validator == "factor_read":
-            if "co2_interval_factor" not in parsed:
+            if not optional_not_supported and "co2_interval_factor" not in parsed:
                 reviews.append("CO2 interval factor not parsed")
         elif validator == "filter_read":
-            if "co2_filter" not in parsed:
+            if not optional_not_supported and "co2_filter" not in parsed:
                 reviews.append("CO2 filter not parsed")
         elif validator == "mode_read":
-            if "operating_mode" not in parsed:
+            if not optional_not_supported and "operating_mode" not in parsed:
                 reviews.append("operating mode not parsed")
         elif validator == "part_name_hex_read":
-            if "part_name_hex" not in parsed:
+            if not optional_not_supported and "part_name_hex" not in parsed:
                 reviews.append("exact part name not parsed")
         elif validator == "address_read":
             if "device_address" not in parsed:
                 reviews.append("bus address not parsed")
+        elif validator == "address_matches_configured":
+            configured = context.get("configured_device_address")
+            actual = parsed.get("device_address")
+            if not isinstance(configured, int):
+                reviews.append("configured device address not recorded")
+            elif not isinstance(actual, int):
+                reviews.append("persistent bus address not parsed")
+            elif actual != configured:
+                failures.append(
+                    f"persistent bus address {actual} != configured address {configured}"
+                )
+        elif validator == "calpoints_read":
+            if not optional_not_supported and "co2_cal_points" not in parsed:
+                reviews.append("CO2 calibration points not parsed")
+        elif validator == "typed_capability_baseline":
+            capability_map: dict[str, tuple[bool | None, str]] = {
+                "partnamehex": (
+                    bool(context.get("operating_functions", 0) & 0x02)
+                    if isinstance(context.get("operating_functions"), int)
+                    else None,
+                    "part_name_hex",
+                ),
+                "addr": (
+                    bool(context.get("operating_functions", 0) & 0x04)
+                    if isinstance(context.get("operating_functions"), int)
+                    else None,
+                    "device_address",
+                ),
+                "interval": (
+                    bool(context.get("operating_functions", 0) & 0x10)
+                    if isinstance(context.get("operating_functions"), int)
+                    else None,
+                    "measurement_interval_ds",
+                ),
+                "factor": (
+                    bool(context.get("operating_functions", 0) & 0x20)
+                    if isinstance(context.get("operating_functions"), int)
+                    else None,
+                    "co2_interval_factor",
+                ),
+                "filter": (
+                    bool(context.get("operating_functions", 0) & 0x40)
+                    if isinstance(context.get("operating_functions"), int)
+                    else None,
+                    "co2_filter",
+                ),
+                "mode": (
+                    bool(context.get("operating_mode_support", 0) & 0x03)
+                    if isinstance(context.get("operating_mode_support"), int)
+                    else None,
+                    "operating_mode",
+                ),
+            }
+            advertised, value_key = capability_map.get(
+                spec.command, (None, "")
+            )
+            if not isinstance(advertised, bool):
+                reviews.append(
+                    f"capability evidence for {spec.command} was not recorded"
+                )
+            elif advertised:
+                if status.get("name") != "OK" or value_key not in parsed:
+                    failures.append(
+                        f"advertised {spec.command} baseline was not read successfully"
+                    )
+            elif status.get("name") != "NOT_SUPPORTED":
+                failures.append(
+                    f"unadvertised {spec.command} baseline did not return NOT_SUPPORTED"
+                )
+            elif value_key in parsed:
+                failures.append(
+                    f"unadvertised {spec.command} returned contradictory typed state"
+                )
         elif validator == "auto_adjust_read":
-            if "auto_adjust_running" not in parsed:
+            if not optional_not_supported and "auto_adjust_running" not in parsed:
                 reviews.append("auto-adjust status not parsed")
+        elif validator == "auto_adjust_preflight":
+            special = context.get("special_features")
+            if not isinstance(special, int):
+                reviews.append("special-features byte not recorded before auto-adjust preflight")
+            elif special & 0x01:
+                if status.get("name") != "OK":
+                    failures.append(
+                        f"advertised auto-adjust status is {status.get('name')}"
+                    )
+                elif parsed.get("auto_adjust_running") is not False:
+                    failures.append("advertised auto-adjust is not proven idle")
+            else:
+                if status.get("name") != "NOT_SUPPORTED":
+                    failures.append(
+                        "unadvertised auto-adjust did not return clean NOT_SUPPORTED"
+                    )
+                if "auto_adjust_running" in parsed:
+                    failures.append(
+                        "unadvertised auto-adjust returned contradictory typed state"
+                    )
         elif validator == "auto_adjust_idle":
             if "auto_adjust_running" not in parsed:
                 reviews.append("auto-adjust status not parsed")
@@ -942,14 +1102,12 @@ def validate_parsed(
                 failures.append(f"CO2 gain readback {actual} != expected {expected}")
         elif validator in {
             "factor_expected",
-            "filter_expected",
             "mode_expected",
             "part_name_hex_expected",
             "address_expected",
         }:
             field_map = {
                 "factor_expected": ("expected_co2_interval_factor", "co2_interval_factor", "CO2 interval factor"),
-                "filter_expected": ("expected_co2_filter", "co2_filter", "CO2 filter"),
                 "mode_expected": ("expected_operating_mode", "operating_mode", "operating mode"),
                 "part_name_hex_expected": ("expected_part_name_hex", "part_name_hex", "part name"),
                 "address_expected": ("expected_device_address", "device_address", "bus address"),
@@ -1001,6 +1159,7 @@ def validate_parsed(
                     baseline,
                     current,
                     allowed,
+                    context.get("expected_mutation_target"),
                 )
                 parsed["custom_memory_expected_diff"] = expected_diff
                 parsed["custom_memory_unexpected_diff"] = unexpected_diff
@@ -1100,18 +1259,35 @@ def validate_parsed(
                 failures.append(
                     f"auto-adjust mutation evidence is effect={effect}, unresolved={unresolved}"
                 )
-        elif validator == "health_faulted":
+        elif validator in {"health_faulted", "health_faulted_since_pre"}:
             driver_state = parsed.get("driver_state")
             consecutive = parsed.get("consecutive_failures")
             online = parsed.get("online")
+            before_failures = context.get("fault_pre_total_failures")
+            after_failures = parsed.get("total_failures")
             if not driver_state:
                 reviews.append("driver state not parsed")
             if not isinstance(consecutive, int):
                 reviews.append("consecutive failures not parsed")
             if "online" not in parsed:
                 reviews.append("online flag not parsed")
-            if driver_state == "READY" and consecutive == 0 and online is True:
-                failures.append("driver health did not reflect induced fault")
+            if validator == "health_faulted_since_pre":
+                if not isinstance(before_failures, int):
+                    reviews.append("pre-fault total-failure counter not recorded")
+                elif not isinstance(after_failures, int):
+                    reviews.append("in-fault total-failure counter not parsed")
+                elif after_failures <= before_failures:
+                    failures.append(
+                        f"transport failures did not increase: {before_failures} -> {after_failures}"
+                    )
+            if isinstance(consecutive, int) and consecutive < 1:
+                failures.append("in-fault consecutive failures is less than one")
+            if driver_state == "DEGRADED" and online is not True:
+                failures.append("DEGRADED driver is not online")
+            elif driver_state == "OFFLINE" and online is not False:
+                failures.append("OFFLINE driver is still online")
+            elif driver_state in {"READY", "UNINIT"}:
+                failures.append(f"in-fault driver state is {driver_state}")
         elif validator == "expected_failure":
             status = parsed.get("status")
             if not status:
@@ -1122,12 +1298,40 @@ def validate_parsed(
             status = parsed.get("status")
             if not status:
                 reviews.append("fault status line not parsed")
-            elif status.get("name") not in {"BUS_STUCK", "TIMEOUT"}:
+            elif status.get("name") != "BUS_STUCK":
                 failures.append(f"fault status is {status.get('name')}")
         else:
             reviews.append(f"unknown validator {validator}")
 
     return failures, reviews
+
+
+def status_is_intentionally_accepted(
+    spec: CommandSpec,
+    parsed: dict[str, Any],
+) -> bool:
+    status = parsed.get("status")
+    if not isinstance(status, dict):
+        return False
+    name = status.get("name")
+    validators = set(spec.validators)
+    if name == "NOT_SUPPORTED" and "status_optional" in validators:
+        return True
+    if (
+        name == "PERSISTENT_STATE_UNCERTAIN"
+        and "status_address_uncertain" in validators
+    ):
+        return True
+    if (
+        name in {"OK", "PERSISTENT_STATE_UNCERTAIN"}
+        and "status_auto_adjust_start" in validators
+    ):
+        return True
+    if "expected_failure" in validators and name != "OK":
+        return True
+    if "fault_bus_line" in validators and name == "BUS_STUCK":
+        return True
+    return False
 
 
 def classify_response(
@@ -1146,12 +1350,18 @@ def classify_response(
     if not clean.strip():
         return RESULT_OPERATOR, "no serial response captured"
 
-    if not expected_token_present(clean, spec):
-        return RESULT_OPERATOR, "expected output token missing"
-
     failures, reviews = validate_parsed(spec, parsed, state)
     if failures:
         return RESULT_FAIL, "; ".join(failures)
+    status = parsed.get("status")
+    if (
+        isinstance(status, dict)
+        and status.get("name") != "OK"
+        and not status_is_intentionally_accepted(spec, parsed)
+    ):
+        return RESULT_FAIL, f"status is {status.get('name')}"
+    if not expected_token_present(clean, spec):
+        return RESULT_OPERATOR, "expected output token missing"
     if reviews:
         return RESULT_OPERATOR, "; ".join(reviews)
     return RESULT_PASS, ""
@@ -1196,7 +1406,7 @@ def response_has_completion(command: str, text: str) -> bool:
         "fw", "e2spec", "interval", "factor", "filter", "mode", "offset",
         "gain", "addr", "partnamehex", "autoadj", "buscheck", "libreset",
     } or command.startswith(
-        ("interval ", "factor ", "filter ", "mode ", "offset ", "gain ",
+        ("interval ", "factor ", "mode ", "offset ", "gain ",
          "addr ", "partnamehex ", "autoadj ")
     ):
         return "Status:" in clean
@@ -1259,13 +1469,13 @@ def extended_specs(read_count: int, cycle_count: int) -> list[CommandSpec]:
         CommandSpec("status", "Read side-effecting EE871 status.", group="complete-safe", expected_any=("hasCo2Error():",), validators=("status_ok",)),
         CommandSpec("co2fast", "Read raw MV3 fast-response CO2.", group="complete-safe", expected_any=("CO2 fast:",), validators=("status_ok", "co2_fast")),
         CommandSpec("co2avg", "Read raw MV4 averaged CO2.", group="complete-safe", expected_any=("CO2 avg:",), validators=("status_ok", "co2_avg")),
+        CommandSpec("features", "Read all feature bytes before checked-sample validation.", group="complete-safe", expected_any=("Operating functions (0x07):",), validators=("status_ok", "features"), capture=("operating_functions", "operating_mode_support", "special_features")),
+        CommandSpec("caps", "Compare cached capabilities with feature bytes.", group="complete-safe", expected_any=("Capabilities",), validators=("caps_consistent",)),
         CommandSpec("drv", "Capture transport health immediately before checked samples.", group="complete-safe", expected_any=("Driver Health",), validators=("health_ready",)),
         CommandSpec("samplefast", "Run checked MV3 value/status/error procedure.", group="complete-safe", expected_any=("Sample kind:", "Sensor error:"), validators=("checked_fast",)),
         CommandSpec("drv", "Prove the checked MV3 procedure did not invent a transport failure.", group="complete-safe", expected_any=("Driver Health",), validators=("health_ready", "health_failures_unchanged")),
         CommandSpec("sampleavg", "Run checked MV4 value/status/error procedure.", group="complete-safe", expected_any=("Sample kind:", "Sensor error:"), validators=("checked_average",)),
         CommandSpec("drv", "Prove the checked MV4 procedure did not invent a transport failure.", group="complete-safe", expected_any=("Driver Health",), validators=("health_ready", "health_failures_unchanged")),
-        CommandSpec("features", "Read all feature bytes.", group="complete-safe", expected_any=("Operating functions (0x07):",), validators=("status_ok", "features"), capture=("operating_functions", "operating_mode_support", "special_features")),
-        CommandSpec("caps", "Compare cached capabilities with feature bytes.", group="complete-safe", expected_any=("Capabilities",), validators=("caps_consistent",)),
         CommandSpec("fw", "Read device firmware version.", group="complete-safe", expected_any=("Firmware:",), validators=("status_ok",)),
         CommandSpec("e2spec", "Read device E2 specification version.", group="complete-safe", expected_any=("E2 spec version:",), validators=("status_ok",)),
         CommandSpec("stress_mix 100", "Exercise the full mixed safe-read stress row.", group="complete-safe", expected_any=("stress_mix summary",), validators=("stress",), timeout_s=300.0),
@@ -1295,21 +1505,23 @@ def extended_specs(read_count: int, cycle_count: int) -> list[CommandSpec]:
 
 def baseline_specs(group: str, opt_in: str) -> list[CommandSpec]:
     return [
+        CommandSpec("fw", "Record device firmware version before maintenance.", group=group, expected_any=("Firmware:",), validators=("status_ok", "device_fw_read"), requires_opt_in=opt_in, capture=("device_firmware_version",)),
+        CommandSpec("e2spec", "Record diagnostic E2 specification version before maintenance.", group=group, expected_any=("E2 spec version:",), validators=("status_ok", "e2spec_read"), requires_opt_in=opt_in, capture=("e2_spec_version",)),
         CommandSpec("features", "Record feature bytes before maintenance.", group=group, expected_any=("Operating functions (0x07):",), validators=("status_ok", "features"), requires_opt_in=opt_in, capture=("operating_functions", "operating_mode_support", "special_features")),
         CommandSpec("caps", "Record cached capability booleans.", group=group, expected_any=("Capabilities",), validators=("caps_consistent",), requires_opt_in=opt_in),
         CommandSpec("dirty", "Require a fresh clean mutation diagnostic.", group=group, expected_any=("mutation.target",), validators=("dirty_clean", "dirty_state"), requires_opt_in=opt_in),
         CommandSpec("reg dump 0 256", "Capture the complete pre-write custom-memory image.", group=group, expected_any=("Custom Register Dump",), validators=("custom_memory_complete",), timeout_s=90.0, requires_opt_in=opt_in, capture=("custom_memory",)),
         CommandSpec("serial", "Record sensor serial bytes.", group=group, expected_any=("Status:",), validators=("status_optional",), requires_opt_in=opt_in),
-        CommandSpec("partnamehex", "Record exact 16-byte part-name baseline.", group=group, expected_any=("Status:",), validators=("status_optional",), requires_opt_in=opt_in, capture=("part_name_hex",)),
-        CommandSpec("addr", "Record bus-address baseline.", group=group, expected_any=("Status:",), validators=("status_optional",), requires_opt_in=opt_in, capture=("device_address",)),
-        CommandSpec("interval", "Record global-interval baseline.", group=group, expected_any=("Status:",), validators=("status_optional",), requires_opt_in=opt_in, capture=("measurement_interval_ds",)),
-        CommandSpec("factor", "Record specific-interval factor baseline.", group=group, expected_any=("Status:",), validators=("status_optional",), requires_opt_in=opt_in, capture=("co2_interval_factor",)),
-        CommandSpec("filter", "Record CO2-filter baseline.", group=group, expected_any=("Status:",), validators=("status_optional",), requires_opt_in=opt_in, capture=("co2_filter",)),
-        CommandSpec("mode", "Record operating-mode baseline.", group=group, expected_any=("Status:",), validators=("status_optional",), requires_opt_in=opt_in, capture=("operating_mode",)),
-        CommandSpec("offset", "Record CO2-offset baseline.", group=group, expected_any=("Status:",), validators=("status_optional",), requires_opt_in=opt_in, capture=("co2_offset_ppm",)),
-        CommandSpec("gain", "Record CO2-gain baseline.", group=group, expected_any=("Status:",), validators=("status_optional",), requires_opt_in=opt_in, capture=("co2_gain",)),
-        CommandSpec("calpoints", "Record calibration-point baseline.", group=group, expected_any=("Status:",), validators=("status_optional",), requires_opt_in=opt_in, capture=("co2_cal_points",)),
-        CommandSpec("autoadj", "Record auto-adjust baseline.", group=group, expected_any=("Status:",), validators=("status_optional",), requires_opt_in=opt_in, capture=("auto_adjust_running",)),
+        CommandSpec("partnamehex", "Record exact 16-byte part-name baseline.", group=group, expected_any=("Status:",), validators=("status_optional", "part_name_hex_read", "typed_capability_baseline"), requires_opt_in=opt_in, capture=("part_name_hex",)),
+        CommandSpec("addr", "Record and match the persistent bus-address baseline.", group=group, expected_any=("Status:",), validators=("status_ok", "address_read", "typed_capability_baseline", "address_matches_configured"), requires_opt_in=opt_in, capture=("device_address",)),
+        CommandSpec("interval", "Record global-interval baseline.", group=group, expected_any=("Status:",), validators=("status_optional", "interval_read", "typed_capability_baseline"), requires_opt_in=opt_in, capture=("measurement_interval_ds",)),
+        CommandSpec("factor", "Record specific-interval factor baseline.", group=group, expected_any=("Status:",), validators=("status_optional", "factor_read", "typed_capability_baseline"), requires_opt_in=opt_in, capture=("co2_interval_factor",)),
+        CommandSpec("filter", "Record read-only CO2-filter evidence.", group=group, expected_any=("Status:",), validators=("status_optional", "filter_read", "typed_capability_baseline"), requires_opt_in=opt_in, capture=("co2_filter",)),
+        CommandSpec("mode", "Record operating-mode baseline.", group=group, expected_any=("Status:",), validators=("status_optional", "mode_read", "typed_capability_baseline"), requires_opt_in=opt_in, capture=("operating_mode",)),
+        CommandSpec("offset", "Record CO2-offset baseline.", group=group, expected_any=("Status:",), validators=("status_optional", "offset_read"), requires_opt_in=opt_in, capture=("co2_offset_ppm",)),
+        CommandSpec("gain", "Record CO2-gain baseline.", group=group, expected_any=("Status:",), validators=("status_optional", "gain_read"), requires_opt_in=opt_in, capture=("co2_gain",)),
+        CommandSpec("calpoints", "Record calibration-point baseline.", group=group, expected_any=("Status:",), validators=("status_optional", "calpoints_read"), requires_opt_in=opt_in, capture=("co2_cal_points",)),
+        CommandSpec("autoadj", "Prove capability-aware auto-adjust preflight.", group=group, expected_any=("Status:",), validators=("status_optional", "auto_adjust_read", "auto_adjust_preflight"), requires_opt_in=opt_in, capture=("auto_adjust_running",)),
     ]
 
 
@@ -1353,6 +1565,15 @@ def reversible_target_specs(
         CommandSpec(f"{read_command} <recorded-baseline>", f"Restore the recorded {target} baseline.", group=group, expected_any=("Status:",), validators=("status_ok",), destructive=True, requires_opt_in=opt_in, dynamic=dynamic_restore, notes="Never sent after any failed or uncertain maintenance step."),
         CommandSpec(read_command, f"Observe {target} after the restoration attempt (forensic read if restoration was blocked).", group=group, expected_any=("Status:",), validators=("status_ok", *read_validators), requires_opt_in=opt_in),
         CommandSpec("dirty", f"Verify exact {target} restoration evidence.", group=group, expected_any=("mutation.elements",), validators=("dirty_clean", "dirty_state", "mutation_verified"), requires_opt_in=opt_in, notes=f"Expected mutation element count: {count}."),
+        CommandSpec(
+            "reg dump 0 256",
+            f"Verify the complete image after restoring {target}.",
+            group=group,
+            expected_any=("Custom Register Dump",),
+            validators=("custom_memory_complete", "custom_memory_restored"),
+            timeout_s=90.0,
+            requires_opt_in=opt_in,
+        ),
     ]
 
 
@@ -1378,7 +1599,6 @@ def maintenance_specs(args: argparse.Namespace) -> list[CommandSpec]:
         ))
         optional_targets = (
             (args.write_interval_factor, "factor", "CO2 interval factor", "factor_baseline", ("factor_read", "factor_expected"), 1),
-            (args.write_co2_filter, "filter", "CO2 filter", "filter_baseline", ("filter_read", "filter_expected"), 1),
             (args.write_operating_mode, "mode", "operating mode", "mode_baseline", ("mode_read", "mode_expected"), 1),
             (args.write_part_name_hex, "partnamehex", "exact part name", "part_name_hex_baseline", ("part_name_hex_read", "part_name_hex_expected"), 16),
         )
@@ -1476,6 +1696,14 @@ def address_change_specs(args: argparse.Namespace) -> list[CommandSpec]:
                 group="address-candidate",
                 expected_any=("Bus address:",),
                 validators=("status_ok", "address_read", "address_expected"),
+                requires_opt_in=opt_in,
+            ),
+            CommandSpec(
+                "dirty",
+                "Capture fresh resolved mutation evidence before address restoration.",
+                group="address-candidate",
+                expected_any=("mutation.target",),
+                validators=("dirty_clean", "dirty_state", "mutation_address_reconciled"),
                 requires_opt_in=opt_in,
             ),
             CommandSpec(
@@ -1619,15 +1847,6 @@ def auto_adjust_specs(args: argparse.Namespace) -> list[CommandSpec]:
                 requires_opt_in=opt_in,
             ),
             CommandSpec(
-                "resync",
-                "Run the read-only auto-adjust reconciliation path if needed.",
-                group="auto-adjust",
-                expected_any=("Persistent Config Resync",),
-                validators=("status_ok",),
-                timeout_s=90.0,
-                requires_opt_in=opt_in,
-            ),
-            CommandSpec(
                 "dirty",
                 "Capture final auto-adjust evidence without acknowledging or restoring it.",
                 group="auto-adjust",
@@ -1669,10 +1888,12 @@ def operator_fault_specs(args: argparse.Namespace) -> list[CommandSpec]:
             specs.extend(
                 [
                     CommandSpec("levels", f"Record idle levels before the {line}-low fault.", group=group, expected_any=("SCL:", "SDA:"), validators=("levels_idle",), requires_opt_in="--include-stuck-line"),
+                    CommandSpec("drv", f"Capture health before the {line}-low fault.", group=group, expected_any=("Driver Health",), validators=("health_ready",), requires_opt_in="--include-stuck-line"),
                     CommandSpec(f"operator: apply {line}-low jig", f"Apply the reviewed open-drain/current-limited {line}-low fault jig; never force a line high.", group=group, send=False, operator_required=True, requires_opt_in="--include-stuck-line"),
                     CommandSpec("levels", f"Record line levels during the {line}-low fault.", group=group, expected_any=("SCL:", "SDA:"), validators=(level_validator,), requires_opt_in="--include-stuck-line"),
                     CommandSpec("buscheck", f"Capture bounded raw bus-idle failure during {line}-low.", group=group, expected_any=("Status:",), validators=("fault_bus_line",), timeout_s=30.0, requires_opt_in="--include-stuck-line"),
                     CommandSpec("status", f"Capture bounded tracked status failure during {line}-low.", group=group, expected_any=("Status:",), validators=("fault_bus_line",), timeout_s=30.0, requires_opt_in="--include-stuck-line"),
+                    CommandSpec("drv", f"Capture tracked health while the {line}-low jig remains applied.", group=group, expected_any=("Driver Health",), validators=("health_faulted_since_pre",), requires_opt_in="--include-stuck-line"),
                     CommandSpec("libreset", f"Capture bounded library reset behavior during {line}-low.", group=group, expected_any=("Status:",), validators=("fault_bus_line",), timeout_s=30.0, requires_opt_in="--include-stuck-line"),
                     CommandSpec(f"operator: release {line}-low jig", f"Release the {line}-low jig and confirm pull-ups/level shifter are not back-powering the sensor.", group=group, send=False, operator_required=True, requires_opt_in="--include-stuck-line"),
                     CommandSpec("levels", f"Confirm both lines recover after {line}-low.", group=group, expected_any=("SCL:", "SDA:"), validators=("levels_idle",), requires_opt_in="--include-stuck-line"),
@@ -1771,7 +1992,6 @@ def resolve_dynamic_command(spec: CommandSpec, state: dict[str, Any]) -> tuple[s
     baseline_dynamic = {
         "interval_baseline": ("interval", "baseline_measurement_interval_ds"),
         "factor_baseline": ("factor", "baseline_co2_interval_factor"),
-        "filter_baseline": ("filter", "baseline_co2_filter"),
         "mode_baseline": ("mode", "baseline_operating_mode"),
         "part_name_hex_baseline": ("partnamehex", "baseline_part_name_hex"),
         "offset_baseline": ("offset", "baseline_co2_offset_ppm"),
@@ -1852,10 +2072,15 @@ def maintenance_write_block_reason(spec: CommandSpec, state: dict[str, Any]) -> 
         return "not sent: the complete required baseline preflight did not pass"
     if state.get("baseline_custom_memory_complete") is not True:
         return "not sent: complete custom-memory baseline was not checkpointed"
+    if not isinstance(state.get("baseline_custom_memory_captured_utc"), str):
+        return "not sent: immutable custom-memory capture time was not recorded"
+    if state.get("baseline_device_address") != state.get("configured_device_address"):
+        return "not sent: persistent bus-address baseline does not match configured address"
+    if state.get("baseline_auto_adjust_preflight_complete") is not True:
+        return "not sent: capability-aware auto-adjust idle preflight did not pass"
     target_baselines = {
         "maintenance-interval": "baseline_measurement_interval_ds",
         "maintenance-factor": "baseline_co2_interval_factor",
-        "maintenance-filter": "baseline_co2_filter",
         "maintenance-mode": "baseline_operating_mode",
         "maintenance-partnamehex": "baseline_part_name_hex",
         "maintenance-calibration-offset": "baseline_co2_offset_ppm",
@@ -1878,6 +2103,14 @@ def maintenance_write_block_reason(spec: CommandSpec, state: dict[str, Any]) -> 
         baseline_interval = state.get("baseline_measurement_interval_ds")
         if not isinstance(baseline_interval, int) or not 150 <= baseline_interval <= 36000:
             return "not sent: recorded interval baseline is outside the typed restore range 150..36000"
+    if spec.group.startswith("maintenance-factor"):
+        baseline_factor = state.get("baseline_co2_interval_factor")
+        if (
+            not isinstance(baseline_factor, int)
+            or not -128 <= baseline_factor <= 127
+            or baseline_factor == 0
+        ):
+            return "not sent: recorded factor baseline is outside the nonzero typed restore range"
     if spec.group.startswith("address"):
         baseline_address = state.get("baseline_device_address")
         if not isinstance(baseline_address, int) or not 0 <= baseline_address <= 7:
@@ -1885,7 +2118,6 @@ def maintenance_write_block_reason(spec: CommandSpec, state: dict[str, Any]) -> 
     restore_dynamics = {
         "interval_baseline",
         "factor_baseline",
-        "filter_baseline",
         "mode_baseline",
         "part_name_hex_baseline",
         "offset_baseline",
@@ -1896,7 +2128,6 @@ def maintenance_write_block_reason(spec: CommandSpec, state: dict[str, Any]) -> 
         no_op_fields = {
             "interval": "baseline_measurement_interval_ds",
             "factor": "baseline_co2_interval_factor",
-            "filter": "baseline_co2_filter",
             "mode": "baseline_operating_mode",
             "partnamehex": "baseline_part_name_hex",
             "offset": "baseline_co2_offset_ppm",
@@ -1920,6 +2151,8 @@ def maintenance_write_block_reason(spec: CommandSpec, state: dict[str, Any]) -> 
         return "not sent: persistent state was not parsed as clean before write"
     if state.get("resync_needed") is not False:
         return "not sent: resync-needed state was not parsed as clean before write"
+    if state.get("mutation_unresolved") is not False:
+        return "not sent: mutation state was not explicitly parsed as resolved"
     if spec.group.startswith("address-restore") and state.get("address_restore_authorized") is not True:
         return "not sent: recorded-address restoration was not independently authorized"
     return None
@@ -2017,6 +2250,9 @@ def run_serial_command(
 
 def update_state(state: dict[str, Any], row: dict[str, Any]) -> None:
     parsed = row.get("parsed") or {}
+    group = str(row.get("group", ""))
+    planned_command = str(row.get("planned_command", ""))
+    result = row.get("result")
     for key in (
         "firmware_build",
         "library_version",
@@ -2024,6 +2260,8 @@ def update_state(state: dict[str, Any], row: dict[str, Any]) -> None:
         "library_build",
         "library_commit",
         "library_git_status",
+        "device_firmware_version",
+        "e2_spec_version",
         "driver_state",
         "online",
         "consecutive_failures",
@@ -2043,6 +2281,7 @@ def update_state(state: dict[str, Any], row: dict[str, Any]) -> None:
         "operating_functions",
         "operating_mode_support",
         "special_features",
+        "capabilities",
         "mutation_unresolved",
         "mutation_target",
         "mutation_effect",
@@ -2062,13 +2301,23 @@ def update_state(state: dict[str, Any], row: dict[str, Any]) -> None:
                     state["final_custom_memory_complete"] = parsed.get("custom_memory_complete")
                 continue
             if capture in parsed:
-                state.setdefault(f"baseline_{capture}", parsed[capture])
+                captured_value = copy.deepcopy(parsed[capture])
+                state.setdefault(f"baseline_{capture}", captured_value)
                 if capture == "custom_memory":
                     state.setdefault(
                         "baseline_custom_memory_complete",
                         parsed.get("custom_memory_complete") is True,
                     )
-        if "persistent_config_dirty" in parsed and "resync_needed" in parsed:
+                    state.setdefault(
+                        "baseline_custom_memory_captured_utc",
+                        iso_timestamp(),
+                    )
+        if (
+            planned_command == "dirty"
+            and "persistent_config_dirty" in parsed
+            and "resync_needed" in parsed
+            and "mutation_unresolved" in parsed
+        ):
             state["dirty_observation_epoch"] = state.get("mutation_epoch", 0)
     elif row.get("planned_command") in {"dirty", "resync"}:
         state["dirty_observation_epoch"] = -1
@@ -2092,17 +2341,46 @@ def update_state(state: dict[str, Any], row: dict[str, Any]) -> None:
         and parsed.get("operator_confirmed") is True
     ):
         state["auto_adjust_authorized"] = True
-    group = str(row.get("group", ""))
-    planned_command = str(row.get("planned_command", ""))
-    result = row.get("result")
     if group.endswith("-baseline"):
+        typed_commands = {
+            "partnamehex",
+            "addr",
+            "interval",
+            "factor",
+            "filter",
+            "mode",
+            "offset",
+            "gain",
+            "calpoints",
+            "autoadj",
+        }
+        if planned_command in typed_commands and result == RESULT_PASS:
+            typed_results = state.setdefault("baseline_typed_results", {})
+            if planned_command not in typed_results:
+                typed_results[planned_command] = {
+                    "status": copy.deepcopy(parsed.get("status") or {}),
+                    "supported": (parsed.get("status") or {}).get("name") == "OK",
+                    "value": copy.deepcopy({
+                        key: value
+                        for key, value in parsed.items()
+                        if key not in {"command", "statuses", "status"}
+                    }),
+                }
         if result != RESULT_PASS:
             state["baseline_failure_latched"] = True
         if planned_command == "autoadj":
+            state["baseline_auto_adjust_preflight_complete"] = result == RESULT_PASS
             state["baseline_complete"] = (
                 result == RESULT_PASS
                 and state.get("baseline_failure_latched") is not True
             )
+    if (
+        group.startswith("fault-")
+        and planned_command == "drv"
+        and "before the" in str(row.get("description", "")).lower()
+        and result == RESULT_PASS
+    ):
+        state["fault_pre_total_failures"] = parsed.get("total_failures")
     if group == "address-candidate" and planned_command == "dirty" and result == RESULT_PASS:
         state["address_candidate_diagnostic_passed"] = True
     if (
@@ -2148,6 +2426,7 @@ def record_persistent_write_expectation(row: dict[str, Any], state: dict[str, An
     state["dirty_observation_epoch"] = -1
     state["persistent_config_dirty"] = None
     state["resync_needed"] = None
+    state["mutation_unresolved"] = None
     if str(row.get("group", "")).startswith("maintenance"):
         state["maintenance_destructive_started"] = True
     if str(row.get("group", "")).startswith("address"):
@@ -2170,9 +2449,6 @@ def record_persistent_write_expectation(row: dict[str, Any], state: dict[str, An
     elif match := re.fullmatch(r"factor\s+(-?\d+)", command):
         state["expected_co2_interval_factor"] = int(match.group(1))
         expect("CO2_INTERVAL_FACTOR", 1, 0xCB, 0xCB)
-    elif match := re.fullmatch(r"filter\s+(\d+)", command):
-        state["expected_co2_filter"] = int(match.group(1))
-        expect("CO2_FILTER", 1, 0xD3, 0xD3)
     elif match := re.fullmatch(r"mode\s+(\d+)", command):
         state["expected_operating_mode"] = int(match.group(1))
         expect("OPERATING_MODE", 1, 0xD8, 0xD8)
@@ -2267,7 +2543,7 @@ def metadata(
         "fixture_id": args.fixture_id,
         "power_procedure": args.power_procedure,
         "electrical_authority": args.electrical_authority,
-        "expected_device_address": args.device_address,
+        "configured_device_address": args.device_address,
         "git_branch": git_branch,
         "git_commit": git_commit,
         "git_worktree": "unknown" if git_status == "unknown" else ("clean" if not git_status else "dirty"),
@@ -2280,7 +2556,8 @@ def write_transcript(path: Path, meta: dict[str, Any], initial_output: str, resu
         for key in (
             "timestamp_utc", "port", "baud", "dry_run", "board", "target_name",
             "operator", "sensor_id", "fixture_id", "power_procedure",
-            "electrical_authority", "git_branch", "git_commit", "git_worktree",
+            "electrical_authority", "configured_device_address", "git_branch",
+            "git_commit", "git_worktree",
         ):
             fh.write(f"{key}={meta.get(key)}\n")
         fh.write("\n")
@@ -2341,7 +2618,7 @@ def write_summary_md(
         fh.write(f"Final verdict: `{final}`\n\n")
         fh.write("PASS is limited to the selected automated serial EE871 CLI command groups. It does not prove CO2 accuracy, warm-up suitability, persistent-write safety, fault tolerance, long-soak stability, calibration validity, or production readiness.\n\n")
         fh.write("## Run Metadata\n\n")
-        for key in ("timestamp_utc", "port", "baud", "dry_run", "board", "target_name", "operator", "sensor_id", "fixture_id", "power_procedure", "electrical_authority", "expected_device_address", "git_branch", "git_commit", "git_worktree"):
+        for key in ("timestamp_utc", "port", "baud", "dry_run", "board", "target_name", "operator", "sensor_id", "fixture_id", "power_procedure", "electrical_authority", "configured_device_address", "git_branch", "git_commit", "git_worktree"):
             fh.write(f"- {key}: `{meta.get(key)}`\n")
         fh.write("\n## Counts\n\n")
         for key in (RESULT_PASS, RESULT_FAIL, RESULT_SKIP, RESULT_OPERATOR):
@@ -2378,6 +2655,9 @@ def write_checkpoint(
     checkpoint = {
         "metadata": meta,
         "updated_utc": iso_timestamp(),
+        "baseline_custom_memory_captured_utc": state.get(
+            "baseline_custom_memory_captured_utc"
+        ),
         "in_flight_destructive": state.get("in_flight_destructive"),
         "parsed_state": state,
         "commands": results,
@@ -2391,9 +2671,11 @@ def write_checkpoint(
         return
     baseline_payload = {
         "metadata": meta,
-        "captured_utc": iso_timestamp(),
+        "captured_utc": state.get("baseline_custom_memory_captured_utc"),
+        "updated_utc": checkpoint["updated_utc"],
         "size": CUSTOM_MEMORY_SIZE,
-        "bytes": baseline,
+        "bytes": list(baseline),
+        "typed_baselines": state.get("baseline_typed_results", {}),
         "addresses": {
             f"0x{address:02X}": value
             for address, value in enumerate(baseline)
@@ -2467,8 +2749,13 @@ def open_serial(args: argparse.Namespace) -> object:
     return ser
 
 
+def meaningful_metadata(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip()) and value.strip().lower() != "unspecified"
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--version", action="version", version=f"%(prog)s {SCRIPT_VERSION}")
     parser.add_argument("--port", help="Serial port, for example COM5 or /dev/ttyUSB0.")
     parser.add_argument("--baud", type=int, default=DEFAULT_BAUD)
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_S, help="Startup/initial serial drain timeout in seconds.")
@@ -2492,8 +2779,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument("--maintenance-interval", type=int, help="Measurement interval test value; defaults to a one-step safe alternate. Restore is sent only after verified-clean evidence.")
-    parser.add_argument("--write-interval-factor", type=int, help="Optional factor test value; restore requires verified-clean evidence.")
-    parser.add_argument("--write-co2-filter", type=int, help="Optional filter test value; restore requires verified-clean evidence.")
+    parser.add_argument("--write-interval-factor", type=int, help="Optional nonzero factor test value (-128..-1 or 1..127); restore requires verified-clean evidence.")
     parser.add_argument("--write-operating-mode", type=int, help="Optional mode test value; restore requires verified-clean evidence.")
     parser.add_argument("--write-part-name-hex", help="Optional exact 32-hex-digit part-name test value; exact restore requires verified-clean evidence.")
     parser.add_argument("--include-calibration-writes", action="store_true")
@@ -2560,7 +2846,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     persistent_values = (
         args.maintenance_interval,
         args.write_interval_factor,
-        args.write_co2_filter,
         args.write_operating_mode,
         args.write_part_name_hex,
     )
@@ -2574,10 +2859,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         parser.error("--write-co2-offset must be -32768..32767")
     if args.write_co2_gain is not None and not (0 <= args.write_co2_gain <= 65535):
         parser.error("--write-co2-gain must be 0..65535")
-    if args.write_interval_factor is not None and not (-128 <= args.write_interval_factor <= 127):
-        parser.error("--write-interval-factor must be -128..127")
-    if args.write_co2_filter is not None and not (0 <= args.write_co2_filter <= 255):
-        parser.error("--write-co2-filter must be 0..255")
+    if (
+        args.write_interval_factor is not None
+        and (
+            not -128 <= args.write_interval_factor <= 127
+            or args.write_interval_factor == 0
+        )
+    ):
+        parser.error("--write-interval-factor must be -128..-1 or 1..127")
     if args.write_operating_mode is not None and not (0 <= args.write_operating_mode <= 3):
         parser.error("--write-operating-mode must be 0..3")
     if args.write_part_name_hex is not None:
@@ -2596,7 +2885,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             parser.error("--include-calibration-writes requires an explicit offset and/or gain test value")
         if any(value is not None for value in persistent_values):
             parser.error(
-                "run calibration writes separately from interval, factor, filter, "
+                "run calibration writes separately from interval, factor, "
                 "mode, and part-name configuration tests"
             )
     elif args.write_co2_offset is not None or args.write_co2_gain is not None:
@@ -2661,7 +2950,23 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         }
         if args.include_address_change or args.include_power_cycle:
             required_metadata["--power-procedure"] = args.power_procedure
-        missing = [flag for flag, value in required_metadata.items() if value == "unspecified"]
+        for attribute in (
+            "board",
+            "target_name",
+            "operator",
+            "sensor_id",
+            "fixture_id",
+            "electrical_authority",
+            "power_procedure",
+        ):
+            value = getattr(args, attribute)
+            if isinstance(value, str):
+                setattr(args, attribute, value.strip())
+        missing = [
+            flag
+            for flag, value in required_metadata.items()
+            if not meaningful_metadata(value)
+        ]
         if missing:
             parser.error(f"hazardous live plans require structured metadata: {', '.join(missing)}")
     return args
@@ -2681,6 +2986,7 @@ def main(argv: list[str] | None = None) -> int:
         "mutation_epoch": 0,
         "dirty_observation_epoch": -1,
         "candidate_address": args.candidate_address,
+        "configured_device_address": args.device_address,
     }
     initial_output = ""
 

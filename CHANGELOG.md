@@ -24,6 +24,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- HIL runner 2.2 now admits a destructive command only after a complete
+  immutable 256-byte/typed baseline, fresh explicitly resolved mutation
+  evidence, configured-address agreement, and capability-aware idle
+  auto-adjust evidence.
+- Checked-sample HIL now consumes feature/capability evidence first and
+  validates both supported and unsupported detailed-error shapes without
+  recasting coherent sensor faults as transport failures.
+- Stuck-line plans now prove the selected single held-low line, exact
+  `BUS_STUCK` from all three fault commands, tracked health movement while the
+  jig remains applied, and explicit READY recovery.
+- CO2 filter remains read-only runner evidence; filter-write HIL is deferred
+  until an authoritative numeric table and reviewed restoration procedure
+  exist. Explicit interval-factor HIL values must be nonzero.
 - `ALLOW_ABSENT` now accepts only authoritative `DEVICE_NOT_FOUND`; GPIO E2
   identity NACK remains NACK under both policies and leaves the driver
   uninitialized because measurement-priority NACK cannot prove absence.
@@ -47,6 +60,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- HIL response classification no longer degrades definite non-OK statuses or
+  semantic validator failures to operator review when success text is absent.
+- D9 is no longer globally ignored in custom-memory comparisons; it is allowed
+  only for the explicitly selected auto-adjust action target. Baseline bytes,
+  typed values, and their original capture time now remain immutable across
+  checkpoint updates.
+- Hazardous live-plan metadata now rejects trimmed empty, whitespace-only, and
+  case-insensitive `unspecified` values.
 - Invalid persisted typed values no longer publish to caller outputs or settle
   mutation uncertainty. Semantic failures preserve raw detail and original
   mutation cause without being counted as transport failures.

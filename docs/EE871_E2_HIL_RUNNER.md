@@ -33,17 +33,20 @@ complete/extended plan. In addition to the quick plan it covers:
 - `buscheck` and released-line `levels`;
 - side-effecting `status`;
 - raw `co2fast` and `co2avg`;
+- `features` and cached `caps` before checked-sample validation;
 - semantically checked `samplefast` and `sampleavg`, with `drv` immediately
   before and after each procedure to compare transport-failure counters;
-- `features`, cached `caps`, `fw`, and `e2spec`;
+- `fw` and diagnostic `e2spec`;
 - `stress_mix 100`, `stress 500`, repeated reads and lifecycle cycles;
 - explicit `recover`, full capability-aware `resync`, health, and dirty state.
 
 Checked-sample validation parses every value/status/error attempt and validity
 field, enforces FAST/MV3 and AVERAGE/MV4 identity, status-bit consistency, and
-clean/error enum coherence. A coherent sensor-domain error remains
-distinguishable from a transport failure, but it is not reported as a
-healthy-bench PASS.
+clean/error enum coherence. With detailed error-code capability, a CO2 error
+must contain the validated detail read and mapping. Without it, the result must
+preserve `UNKNOWN (255)`, omit raw detail, and use the status byte as top-level
+detail. Either coherent sensor-domain error is a truthful healthy-bench
+`FAIL`, not an invented transport failure.
 
 “Complete safe” means the complete non-destructive Prompt 04 command surface;
 it does not include power-up warm-up or stale-measurement timing observation.
@@ -61,11 +64,21 @@ Every destructive plan first records:
 
 - exact build/commit and structured board, operator, sensor, fixture, electrical
   authority, and applicable power-procedure metadata;
+- device firmware and diagnostic E2 specification versions;
 - feature bytes and cached capabilities;
-- a fresh complete mutation diagnostic;
+- a fresh complete mutation diagnostic proving
+  `persistentConfigDirty=false`, `resyncNeeded=false`, and
+  `mutation.unresolved=false`, with the legacy dirty error `OK`;
 - all 256 custom-memory bytes using `reg dump 0 256`;
 - semantic reads for serial, exact part-name bytes, address, interval, factor,
   filter, mode, offset, gain, calibration points, and auto-adjust state.
+
+Before any write, the complete baseline group must pass, the persistent
+address must equal the immutable command-line `--device-address`, and
+auto-adjust must be capability-consistent and idle. Advertised auto-adjust
+requires a parsed idle result; unadvertised auto-adjust requires clean
+`NOT_SUPPORTED`. Running, missing, corrupt, or contradictory evidence blocks
+every unrelated write.
 
 The runner calls these values the **recorded baseline**. It never claims they
 are factory defaults unless an independent factory record says so.
@@ -88,6 +101,11 @@ entry is cleared only after the result is captured and checkpointed. If a
 process, serial, or power failure leaves it in flight, treat the mutation
 outcome as unknown: do not write or restore until read-only inspection and
 explicit recovery establish the actual state.
+
+The first accepted image fixes
+`baseline_custom_memory_captured_utc`, its bytes, and all typed baseline
+values. Later checkpoints update only `updated_utc`; they do not relabel or
+replace the original baseline. The `.hex` artifact remains stable raw bytes.
 
 An unexpected serial or parser exception produces a `FAIL` transcript,
 summary, and checkpoint instead of escaping without final artifacts. Any
@@ -121,10 +139,13 @@ chooses one adjacent valid decisecond value, verifies it, and restores the
 recorded baseline. Optional explicit test values are:
 
 - `--maintenance-interval 150..36000`
-- `--write-interval-factor -128..127`
-- `--write-co2-filter 0..255`
+- `--write-interval-factor -128..-1` or `1..127`
 - `--write-operating-mode 0..3`
 - `--write-part-name-hex <exactly 32 hex digits>`
+
+CO2 filter remains baseline/read-only evidence. The runner deliberately
+offers no filter-write option because this repository has no authoritative
+numeric value table and reviewed restoration procedure for that setting.
 
 For each selected target the sequence is:
 
@@ -157,17 +178,19 @@ The mutation diagnostic and pre-restore image use these exact allowlists:
 | Bus address | `0xC0` |
 | Global interval | `0xC6..0xC7` |
 | CO2 interval factor | `0xCB` |
-| CO2 filter | `0xD3` |
 | Operating mode | `0xD8` |
 | Auto-adjust | `0xD9` |
 
 Only the selected range and documented volatile/read-dependent addresses
-`0xC1`, `0xD9`, `0xFE`, and `0xFF` may differ in a pre-restore comparison.
+`0xC1`, `0xFE`, and `0xFF` may differ in a pre-restore comparison. `0xD9` is
+an action register accepted only for the explicit `AUTO_ADJUST` target. An
+unexpected D9 change fails interval, factor, mode, part-name, calibration,
+address, and final-restoration comparisons. D9 is never restored.
 
 If a destructive command, readback, or diagnostic is failed, missing, or
 uncertain, the runner latches the failure and sends no later write—including
-automatic restoration. Read-only evidence and an explicitly selected
-target-specific resync remain possible. An operator must then inspect the
+automatic restoration. Read-only forensic evidence remains possible. An
+operator must then inspect the
 checkpoint, establish actual state, and authorize a separate recovery run.
 This prevents a guessed “cleanup” write from compounding an unknown mutation.
 
@@ -192,7 +215,7 @@ RUN EE871 CALIBRATION WRITES
 The typed test/readback/diagnostic/restore procedure is the same as above, but
 restoring register values does not prove calibration accuracy. Run it only with
 approved reference conditions and calibration authority. Calibration runs
-reject interval, factor, filter, mode, and part-name test options; they do not
+reject interval, factor, mode, and part-name test options; they do not
 perform the default interval mutation.
 
 ## Bus-Address Candidate and Restoration
@@ -230,8 +253,9 @@ The runner:
 4. uses `addr rebegin <candidate>` to call `end()`, explicitly configure the
    retained candidate, `begin()`, and `resyncPersistentConfig()` without a
    scan;
-5. verifies the candidate and captures a complete pre-restore image that may
-   differ only at address register `0xC0` and documented volatile bytes;
+5. verifies the candidate, captures a fresh resolved `dirty` diagnostic, and
+   captures a complete pre-restore image that may differ only at address
+   register `0xC0` and documented volatile bytes;
 6. after independent restore authorization, repeats the full procedure back to
    the recorded address and compares the final snapshot.
 
@@ -266,9 +290,9 @@ The live phrase is:
 RUN EE871 AUTO ADJUST ONCE
 ```
 
-The plan requires an idle baseline, starts auto-adjust exactly once, records
-pre/post mutation evidence, observes status, runs read-only resync, and captures
-a final forensic image. It never retries, cancels, acknowledges uncertainty,
+The plan requires capability-aware idle evidence, starts auto-adjust exactly
+once, records pre/post mutation evidence, observes status, and captures a final
+forensic image. It never retries, cancels, resyncs, acknowledges uncertainty,
 or claims to restore calibration. The one-shot command is sent only after the
 operator enters the exact controlled-conditions phrase requested in sequence.
 
@@ -305,10 +329,15 @@ python tools/ee871_hil_runner.py --port COM7 `
   --electrical-authority "approved-procedure-id"
 ```
 
-The plan runs the two faults separately. Each phase records levels before,
-during, and after the fault; checks bounded `buscheck`, tracked `status`, and
-`libreset` results; releases the reviewed open-drain/current-limited jig; then
-recovers and checks health. Never force an E2 line high. A logic analyzer or
+The plan runs the two faults separately. Each phase records released levels
+and pre-fault health, then applies the jig. SDA-low must show SDA low/SCL high;
+SCL-low must show SCL low/SDA high. While the jig remains applied,
+`buscheck`, tracked `status`, and `libreset` must each report exact
+`BUS_STUCK`; generic `TIMEOUT` is rejected. In-fault `drv` must prove a
+transport-failure counter increase, at least one consecutive failure, and a
+coherent online `DEGRADED` or offline `OFFLINE` state. After release, both
+lines must be high; explicit `recover` must finish at READY, online, and zero
+consecutive failures. Never force an E2 line high. A logic analyzer or
 oscilloscope remains required to prove the millisecond timing bound.
 
 Operator steps remain `OPERATOR_REVIEW_REQUIRED`; parser success cannot replace
@@ -325,7 +354,8 @@ The runner rejects combinations of persistent, address, auto-adjust,
 unplug/replug, stuck-line, and power-cycle plans. Run one hazardous group at a
 time on dedicated hardware.
 
-Live hazardous runs require non-placeholder:
+Live hazardous runs trim these values and reject empty, whitespace-only, or
+case-insensitive `unspecified` metadata:
 
 - `--board`
 - `--target-name`
@@ -354,6 +384,13 @@ Verdicts:
 - `OPERATOR_REVIEW_REQUIRED`: physical/operator evidence is still required.
 - `INCOMPLETE`: dry run, skipped step, or no complete result.
 
+A parsed rejected status or failed semantic validator is always `FAIL`, even
+when success-only output text is absent. Missing or unparseable evidence with
+no definite failure remains `OPERATOR_REVIEW_REQUIRED`. Only documented
+optional `NOT_SUPPORTED`, address uncertainty, allowed auto-adjust-start
+uncertainty, unplug failure, and exact stuck-line `BUS_STUCK` contracts accept
+a deliberate non-OK result.
+
 Exit codes are `0`, `1`, `2`, and `3`, respectively.
 
 Parser and planner tests:
@@ -362,6 +399,7 @@ Parser and planner tests:
 python -m unittest discover -s test -p "*hil_runner_parser.py"
 ```
 
-No hardware, calibration, power-cycle, stuck-line, or auto-adjust result should
+No hardware or HIL was run while making the runner 2.2 source correction. No
+hardware, calibration, power-cycle, stuck-line, or auto-adjust result should
 be claimed unless the corresponding raw artifacts and physical evidence were
 actually captured.

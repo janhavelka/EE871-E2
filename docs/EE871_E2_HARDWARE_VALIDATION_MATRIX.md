@@ -29,6 +29,8 @@ Current evidence summary:
 - Power-cycle persistence and stuck-line fault/jig validation: not recorded.
 - No Prompt 04 checked-sample, mutation-effect/resync, bus-address,
   auto-adjust, or stopped-state persistence scenario was run on hardware.
+- Runner 2.2 source/parser corrections were validated without opening a serial
+  port; no new HIL result is claimed.
 
 Allowed statuses:
 
@@ -72,13 +74,13 @@ status
 read
 co2fast
 co2avg
+features
+caps
 drv
 samplefast
 drv
 sampleavg
 drv
-features
-caps
 fw
 e2spec
 selftest
@@ -141,7 +143,6 @@ addr <0-7>
 factor
 factor <value>
 filter
-filter <value>
 mode
 mode <0..3>
 reg write <addr> <value>
@@ -179,7 +180,9 @@ Warnings before persistent writes:
   tests one adjacent valid interval by default, verifies exact mutation
   evidence, and restores the immutable recorded baseline only from a fresh
   verified-clean state.
-- Factor, filter, mode, and exact part-name tests require explicit values.
+- Nonzero factor, mode, and exact part-name tests require explicit values.
+  Filter is read-only runner evidence; no filter-write row is offered without
+  an authoritative numeric value table and reviewed restoration procedure.
   Offset/gain additionally require the separate calibration opt-in and exact
   confirmation. A mode test is blocked if the recorded mode is outside the
   typed restore range `0..3`; the historical `0x55` baseline below is therefore
@@ -348,7 +351,7 @@ Run these only on a bench sensor after recording original values.
 | P-10 | Auto-adjust ambiguous operator acknowledgement | S2, S3 | Only after P-09 records successful post-failure not-running observation, call `acknowledgeAutoAdjustUncertainty()` from dedicated test firmware | Cache-only acknowledgement performs no E2 I/O, records `OPERATOR_ACKNOWLEDGED`, and clears only AUTO_ADJUST uncertainty. | NOT RUN | Line trace/counters and diagnostic before/after. |
 | P-11 | Uncertainty survives stopped/re-begin state | S2, S3 | Create approved unresolved state in dedicated test firmware, `end`, failed/repeated begin, successful candidate begin, inspect diagnostic, resync | Session/capability state resets but unresolved target/cause/intent survive on the same object until reconciliation. | NOT RUN | Diagnostic after each lifecycle transition and final resync. |
 | P-12 | Specific CO2 interval factor write/readback | S2, S3 | Full snapshot, typed factor test/verify, pre-restore snapshot, restore, final snapshot | Capability-supported one-byte value and exact `0xCB` mutation evidence match; only `0xCB` plus documented volatile bytes differ before restore; baseline is restored. | NOT RUN | Typed values, diagnostic, both full-image diffs. |
-| P-13 | CO2 filter write/readback | S2, S3 | Full snapshot, typed filter test/verify, pre-restore snapshot, restore, final snapshot | Capability-supported one-byte value and exact `0xD3` mutation evidence match; only `0xD3` plus documented volatile bytes differ before restore; baseline is restored. | NOT RUN | Typed values, diagnostic, both full-image diffs. |
+| P-13 | CO2 filter write/readback | S2, S3 | No runner procedure is available. Retain read-only typed baseline and full-memory forensic evidence. | Requires an authoritative numeric value table and reviewed typed restoration procedure before enablement. | BLOCKED | Intentionally unavailable in runner 2.2; no value is guessed. |
 | P-14 | Operating mode write/readback | S2, S3 | Full snapshot, approved mode test/verify, pre-restore snapshot, restore, final snapshot | Recorded mode must be typed-restorable in `0..3`; exact `0xD8` mutation evidence and baseline restoration match. The historical `0x55` sensor is skipped. | NOT RUN | Typed values, diagnostic, both full-image diffs or explicit preflight skip. |
 | P-15 | Full pre/post custom-memory forensic comparison | S2, S3 | `reg dump 0 256` before any write, after each test mutation before restore, and after verified restoration | Every byte is retained as evidence; the pre-restore image may change only the selected typed target plus documented volatile/read-dependent addresses; the final image may differ only at documented volatile/read-dependent addresses; the image is never replayed. | NOT RUN | Baseline JSON/hex, pre-restore/final images, categorized diffs. |
 
@@ -358,8 +361,8 @@ Run these only on a bench sensor after recording original values.
 | --- | --- | --- | --- | --- | --- | --- |
 | R-01 | Wrong wiring or no sensor | S2, S3 | Disconnect sensor, boot, `probe`, `status`, `drv` | Initialization or reads fail with bounded non-OK status; no hang. | NOT RUN | Boot log, command output, health counters. |
 | R-02 | Unplug/replug recovery | S2, S3 | Start connected, `read`, unplug, repeated `read`, replug, `recover`, `drv` | Tracked failures degrade/offline as configured; successful `recover` returns READY. | PASS | 2026-06-02 operator-confirmed manual physical unplug/replug recovery PASS on the ESP32-S3 bench setup. Evidence type: operator-confirmed manual test. No automated HIL transcript artifact exists; automated HIL evidence remains separate. |
-| R-03 | SDA stuck low | S2, S3 | `--include-stuck-line`: levels before/during/after reviewed SDA-low jig, `buscheck`, `status`, `libreset`, release, `recover`, `drv` | `BUS_STUCK` or precise bounded timeout; no unbounded wait; both lines recover high. | NOT RUN | Jig setup, runner artifacts, and logic-analyzer timing. |
-| R-04 | SCL stuck low / clock stretch timeout | S2, S3 | `--include-stuck-line`: levels before/during/after reviewed SCL-low jig, `buscheck`, `status`, `libreset`, release, `recover`, `drv` | Timeout or `BUS_STUCK` within configured deadline; no hang; both lines recover high. | NOT RUN | Jig setup, runner artifacts, and logic-analyzer timing. |
+| R-03 | SDA stuck low | S2, S3 | `--include-stuck-line`: released levels, pre-fault `drv`, SDA-low/SCL-high jig proof, `buscheck`, tracked `status`, in-fault `drv`, `libreset`, release, levels, `recover`, final `drv` | All three fault commands return exact `BUS_STUCK`; transport failures increase with coherent DEGRADED/OFFLINE health; both lines recover high and final health is READY/online/zero consecutive failures. | NOT RUN | Jig setup, runner artifacts, and logic-analyzer timing. |
+| R-04 | SCL stuck low / held-low fault | S2, S3 | `--include-stuck-line`: released levels, pre-fault `drv`, SCL-low/SDA-high jig proof, `buscheck`, tracked `status`, in-fault `drv`, `libreset`, release, levels, `recover`, final `drv` | All three fault commands return exact `BUS_STUCK`; transport failures increase with coherent DEGRADED/OFFLINE health; both lines recover high and final health is READY/online/zero consecutive failures. | NOT RUN | Jig setup, runner artifacts, and logic-analyzer timing. |
 | R-05 | SDA forced high/no ACK | S2, S3 | Use fault jig/open line, `probe`, `status` | NACK/no-response error is bounded and health rules match `probe` vs tracked reads. | NOT RUN | Command output. |
 | R-06 | Recovery clocks on stuck bus | S2, S3 | `busreset`, `libreset`, `buscheck` | Recovery clocks are issued and idle state is reported accurately. | NOT RUN | Output and line-level observation if available. |
 | R-07 | Timing sweep | S2, S3 | `timing` | Supported timing range is identified without hangs; failures are bounded. | NOT RUN | Timing table output. |

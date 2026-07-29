@@ -491,16 +491,21 @@ python tools/ee871_hil_runner.py --port COMx --include-persistent-writes --confi
 
 The default runner sequence is non-persistent and records `version`, `help`,
 `probe`, `read`, `selftest`, `drv`, `dirty`, `stress 50`, final `drv`, and
-final `dirty`. `--complete-safe` adds checked fast/average samples with adjacent
-health-counter evidence, complete feature/capability reads, bus/line checks,
+final `dirty`. `--complete-safe` captures feature/capability evidence before
+checked fast/average samples, validates both detailed-error capability shapes
+with adjacent health-counter evidence, and adds bus/line checks,
 `stress_mix 100`, recovery, and resync. Warm-up and stale-measurement timing
 remain separate controlled HIL rows.
 Destructive plans are isolated behind separate exact opt-ins. They checkpoint
-a complete 256-byte forensic baseline plus a pre-restore post-test image,
-restore only typed settings from verified-clean state, journal every write
-before transmission, and never replay raw custom memory. Dry-runs and
+a complete immutable 256-byte forensic baseline, require clean mutation state,
+matching configured address, and capability-aware idle auto-adjust evidence,
+then restore only typed settings after exact readback/memory-diff checks.
+Filter-write HIL is intentionally unavailable without an authoritative value
+table; interval-factor tests reject zero. Every write is journaled before
+transmission and raw custom memory is never replayed. Dry-runs and
 operator/fault steps are never reported as hardware `PASS`; see the runner
-guide for calibration, address, auto-adjust, power, and stuck-line procedures.
+guide for calibration, address, auto-adjust, power, and exact stuck-line
+procedures.
 
 ## Documentation
 
