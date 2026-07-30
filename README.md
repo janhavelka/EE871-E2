@@ -26,7 +26,9 @@ Recorded evidence:
 
 - Native tests: 31 passing.
 - Arduino PlatformIO builds: `ex_bringup_s3` and `ex_bringup_s2` pass locally
-  in the latest hardening/readiness runs.
+  with the TunnelMonitor-node platform stack: pioarduino
+  `platform-espressif32` `54.03.20`, Arduino-ESP32 `3.2.0`, and ESP-IDF
+  `5.4.1`.
 - ESP32-S3 safe default HIL: PASS on `COM17`.
 - ESP32-S3 extended safe HIL: PASS on `COM17`.
 - ESP32-S3 persistent measurement interval write/readback/restore: PASS on
@@ -253,6 +255,13 @@ on the same `EE871` instance recursively.
   uses GPIO-style E2 signaling, not ESP-IDF `driver/i2c_master` or hardware I2C.
 
 ## Building And Validation
+
+The repository's Arduino example environments exact-pin the same pioarduino
+`platform-espressif32` `54.03.20` release used by TunnelMonitor-node. Keeping
+the release archive URL in `platformio.ini` makes Arduino-ESP32 `3.2.0`,
+ESP-IDF `5.4.1`, and the GCC `14.2.0` toolchain reproducible. This pin applies
+to this repository's examples and HIL firmware; consuming applications retain
+control of their own platform pin.
 
 ```bash
 pio test -e native

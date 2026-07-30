@@ -7,7 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-No changes yet.
+### Changed
+
+- Exact-pinned the Arduino example and HIL environments to the same pioarduino
+  `platform-espressif32` `54.03.20` release used by TunnelMonitor-node
+  (Arduino-ESP32 `3.2.0`, ESP-IDF `5.4.1`, GCC `14.2.0`) instead of allowing
+  `platform = espressif32` to drift with the local PlatformIO installation.
+- Documented that the repository pin controls its example/HIL firmware while
+  consuming applications continue to own their platform version.
+
+### Validation
+
+- Native tests: 31 passing.
+- Arduino ESP32-S3 and ESP32-S2 example builds: passing with pioarduino
+  `54.03.20`.
+- Hardware HIL was not run for this compatibility-only change.
 
 ## [1.0.0] - 2026-06-02
 
