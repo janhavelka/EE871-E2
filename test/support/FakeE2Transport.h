@@ -36,6 +36,8 @@ public:
     _sdaStuckLow = false;
     _sdaStuckHigh = false;
     _corruptReadPec = false;
+    _corruptNextCustomReadPec = false;
+    _corruptNextCustomReadAddress = 0;
     _failNextWriteEnabled = false;
     _failNextWriteAddress = 0;
     _dropWriteEnabled = false;
@@ -101,6 +103,10 @@ public:
   void setSdaStuckLow(bool stuck) { _sdaStuckLow = stuck; }
   void setSdaStuckHigh(bool stuck) { _sdaStuckHigh = stuck; }
   void setCorruptReadPec(bool corrupt) { _corruptReadPec = corrupt; }
+  void corruptNextCustomReadPec(uint8_t address) {
+    _corruptNextCustomReadAddress = address;
+    _corruptNextCustomReadPec = true;
+  }
 
   void setMemory(uint8_t address, uint8_t value) { _memory[address] = value; }
   uint8_t memory(uint8_t address) const { return _memory[address]; }
@@ -359,10 +365,18 @@ private:
   }
 
   void prepareReadResponse() {
+    const uint8_t customReadAddress = _customPointer;
     _responseData = readValueForControl();
     _responsePec = static_cast<uint8_t>((_control + _responseData) & 0xFF);
-    if (_corruptReadPec) {
+    const bool corruptCustomRead =
+        _corruptNextCustomReadPec &&
+        mainCommand() == EE871::cmd::MAIN_CUSTOM_PTR &&
+        customReadAddress == _corruptNextCustomReadAddress;
+    if (_corruptReadPec || corruptCustomRead) {
       _responsePec = static_cast<uint8_t>(_responsePec ^ 0x01);
+    }
+    if (corruptCustomRead) {
+      _corruptNextCustomReadPec = false;
     }
   }
 
@@ -463,6 +477,8 @@ private:
   bool _sdaStuckLow = false;
   bool _sdaStuckHigh = false;
   bool _corruptReadPec = false;
+  bool _corruptNextCustomReadPec = false;
+  uint8_t _corruptNextCustomReadAddress = 0;
   bool _failNextWriteEnabled = false;
   uint8_t _failNextWriteAddress = 0;
   bool _dropWriteEnabled = false;

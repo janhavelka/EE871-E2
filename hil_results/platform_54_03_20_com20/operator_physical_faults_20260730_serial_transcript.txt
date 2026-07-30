@@ -1,0 +1,641 @@
+EE871-E2 COM20 OPERATOR-ASSISTED CLI TRANSCRIPT
+Date: 2026-07-30
+Port: COM20 at 115200 baud
+Firmware build: Jul 30 2026 13:06:41
+Library: 1.0.0 (1fbe7d8, 2026-07-30 13:06:39, dirty)
+
+This is the ANSI-stripped CLI transcript normalized from the interactive tool
+capture. Command durations are host-observed elapsed times. The interactive
+console did not expose wall-clock timestamps, so none are invented here. This
+is not a byte-for-byte serial capture.
+
+======================================================================
+PHASE 1 - SENSOR ABSENT AT MCU RESET
+======================================================================
+
+[OPERATOR] EE871 unplugged; ESP32-S3 remained connected.
+
+[RESET]
+rst:0x15 (USB_UART_CHIP_RESET),boot:0x8 (SPI_FAST_FLASH_BOOT)
+
+=== EE871 Bringup Example ===
+[I] E2 initialized (DATA=6, CLOCK=7)
+[E] Failed to initialize device
+  Status: NACK (code=8, detail=0)
+  Message: Control byte NACK
+
+[I] Running basic bus diagnostics...
+
+=== Bus Levels ===
+  SCL: HIGH (idle)
+  SDA: HIGH (idle)
+  OK: Bus idle (both HIGH)
+
+=== Pin Toggle Test ===
+SCL pin test:
+  Set HIGH -> Read: HIGH (OK)
+  Set LOW  -> Read: LOW (OK)
+SDA pin test:
+  Set HIGH -> Read: HIGH (OK)
+  Set LOW  -> Read: LOW (OK)
+Summary:
+  PASS: Both pins working correctly
+
+[COMMAND drv | 0.0 ms]
+=== Driver Health ===
+  State: UNINIT
+  Online: no
+  Consecutive failures: 0
+  Total success: 0
+  Total failures: 0
+  Last OK: never
+  Last error: never
+  persistentConfigDirty: no
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  resyncNeeded: no
+
+[COMMAND buscheck | 0.0 ms]
+  Status: NOT_INITIALIZED (code=1, detail=0)
+  Message: Driver not initialized
+
+[COMMAND probe | 0.0 ms]
+  Status: NOT_INITIALIZED (code=1, detail=0)
+  Message: Driver not initialized
+
+[COMMAND read | 0.0 ms]
+  Status: NOT_INITIALIZED (code=1, detail=0)
+  Message: Driver not initialized
+
+[COMMAND dirty | 0.0 ms]
+=== Persistent Config Dirty State ===
+  persistentConfigDirty: no
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  resyncNeeded: no
+
+======================================================================
+PHASE 2 - REPLUG, KNOWN-GOOD INITIALIZATION, AND NO-RESET ATTACH
+======================================================================
+
+[OPERATOR] EE871 replugged.
+
+[INTENTIONAL RESET]
+rst:0x15 (USB_UART_CHIP_RESET),boot:0x8 (SPI_FAST_FLASH_BOOT)
+
+=== EE871 Bringup Example ===
+[I] E2 initialized (DATA=6, CLOCK=7)
+[I] Device initialized successfully
+=== Driver Health ===
+  State: READY
+  Online: yes
+  Consecutive failures: 0
+  Total success: 0
+  Total failures: 0
+  persistentConfigDirty: no
+  resyncNeeded: no
+
+[COMMAND read | 16.0 ms]
+  Status: OK (code=0, detail=0)
+  Message: OK
+  CO2 avg: 694 ppm
+
+[COMMAND drv | 0.0 ms]
+=== Driver Health ===
+  State: READY
+  Online: yes
+  Consecutive failures: 0
+  Total success: 2
+  Total failures: 0
+  persistentConfigDirty: no
+  resyncNeeded: no
+
+[SERIAL REOPEN WITH DTR/RTS DEASSERTED]
+  RESET_OUTPUT_ON_OPEN: no
+  STARTUP_BYTES: 0
+
+[COMMAND drv | 0.0 ms]
+=== Driver Health ===
+  State: READY
+  Online: yes
+  Consecutive failures: 0
+  Total success: 2
+  Total failures: 0
+  persistentConfigDirty: no
+  resyncNeeded: no
+
+======================================================================
+PHASE 3 - HOT UNPLUG, OFFLINE THRESHOLD, AND REPLUG RECOVERY
+======================================================================
+
+[OPERATOR] EE871 unplugged while driver was READY.
+
+[SERIAL ATTACH]
+  RESET_OUTPUT_ON_OPEN: no
+  STARTUP_BYTES: 0
+
+[COMMAND drv | 0.0 ms]
+=== Driver Health ===
+  State: READY
+  Online: yes
+  Consecutive failures: 0
+  Total success: 2
+  Total failures: 0
+  persistentConfigDirty: no
+  resyncNeeded: no
+
+[COMMAND buscheck | 0.0 ms]
+  Status: OK (code=0, detail=0)
+  Message: OK
+  Bus is idle (both lines high)
+
+[COMMAND levels | 0.0 ms]
+=== Bus Levels ===
+  SCL: HIGH (idle)
+  SDA: HIGH (idle)
+  OK: Bus idle (both HIGH)
+
+[COMMAND probe | 15.0 ms]
+  Status: NACK (code=8, detail=0)
+  Message: Control byte NACK
+
+[COMMAND drv | 16.0 ms]
+=== Driver Health ===
+  State: READY
+  Online: yes
+  Consecutive failures: 0
+  Total success: 2
+  Total failures: 0
+  Last error: never
+
+[COMMAND read #1 | 16.0 ms]
+  Status: NACK (code=8, detail=0)
+  Message: Control byte NACK
+[COMMAND drv]
+  State: DEGRADED
+  Online: yes
+  Consecutive failures: 1
+  Total success: 2
+  Total failures: 1
+  Error code: NACK
+
+[COMMAND read #2 | 0.0 ms host resolution]
+  Status: NACK (code=8, detail=0)
+  Message: Control byte NACK
+[COMMAND drv]
+  State: DEGRADED
+  Consecutive failures: 2
+  Total success: 2
+  Total failures: 2
+
+[COMMAND read #3 | 0.0 ms host resolution]
+  Status: NACK (code=8, detail=0)
+  Message: Control byte NACK
+[COMMAND drv]
+  State: DEGRADED
+  Consecutive failures: 3
+  Total success: 2
+  Total failures: 3
+
+[COMMAND read #4 | 0.0 ms host resolution]
+  Status: NACK (code=8, detail=0)
+  Message: Control byte NACK
+[COMMAND drv]
+  State: DEGRADED
+  Consecutive failures: 4
+  Total success: 2
+  Total failures: 4
+
+[COMMAND read #5 | 0.0 ms host resolution]
+  Status: NACK (code=8, detail=0)
+  Message: Control byte NACK
+[COMMAND drv]
+  State: OFFLINE
+  Online: no
+  Consecutive failures: 5
+  Total success: 2
+  Total failures: 5
+  Error code: NACK
+  Error msg: Control byte NACK
+  persistentConfigDirty: no
+  resyncNeeded: no
+
+[COMMAND status while OFFLINE | 0.0 ms host resolution]
+  Status: NACK (code=8, detail=0)
+  Message: Control byte NACK
+
+[COMMAND drv]
+  State: OFFLINE
+  Online: no
+  Consecutive failures: 6
+  Total success: 2
+  Total failures: 6
+  Error code: NACK
+  persistentConfigDirty: no
+  resyncNeeded: no
+
+[OPERATOR] EE871 replugged for recovery.
+
+[SERIAL ATTACH]
+  RESET_OUTPUT_ON_OPEN: no
+  STARTUP_BYTES: 0
+
+[COMMAND drv]
+  State: OFFLINE
+  Online: no
+  Consecutive failures: 6
+  Total success: 2
+  Total failures: 6
+  Error code: NACK
+
+[COMMAND recover | 16.0 ms]
+  Status: OK (code=0, detail=0)
+  Message: OK
+=== Driver Health ===
+  State: READY
+  Online: yes
+  Consecutive failures: 0
+  Total success: 4
+  Total failures: 6
+  persistentConfigDirty: no
+  resyncNeeded: no
+
+[COMMAND read | 16.0 ms]
+  Status: OK (code=0, detail=0)
+  Message: OK
+  CO2 avg: 669 ppm
+
+[COMMAND selftest | 500.0 ms]
+Selftest result: pass=27 fail=0 skip=0
+
+[COMMAND stress_mix 100 | 1266.0 ms]
+=== stress_mix summary ===
+  Total: ok=100 fail=0 (100.00%)
+  Duration: 1269 ms
+  Health delta: success +187, failures +0
+
+[COMMAND drv]
+  State: READY
+  Online: yes
+  Consecutive failures: 0
+  Total success: 265
+  Total failures: 6
+  persistentConfigDirty: no
+  resyncNeeded: no
+
+======================================================================
+PHASE 4 - SDA STUCK LOW THROUGH 470 OHM
+======================================================================
+
+[OPERATOR] Connected 470 ohm from SDA/GPIO6 to common ground.
+
+[COMMAND levels | 0.0 ms]
+=== Bus Levels ===
+  SCL: HIGH (idle)
+  SDA: LOW (held)
+  WARNING: SDA held LOW - slave holding or stuck!
+
+[COMMAND drv]
+  State: READY
+  Consecutive failures: 0
+  Total success: 267
+  Total failures: 6
+
+[COMMAND buscheck | 0.0 ms]
+  Status: BUS_STUCK (code=11, detail=0)
+  Message: SDA stuck low
+
+[COMMAND probe | 0.0 ms]
+  Status: PEC_MISMATCH (code=7, detail=0)
+  Message: PEC mismatch
+
+[COMMAND drv]
+  State: READY
+  Consecutive failures: 0
+  Total success: 267
+  Total failures: 6
+
+[COMMAND read | 16.0 ms]
+  Status: PEC_MISMATCH (code=7, detail=0)
+  Message: PEC mismatch
+
+[COMMAND drv]
+  State: DEGRADED
+  Online: yes
+  Consecutive failures: 1
+  Total success: 267
+  Total failures: 7
+  Error code: PEC_MISMATCH
+  Error msg: PEC mismatch
+  persistentConfigDirty: no
+  resyncNeeded: no
+
+[COMMAND busreset | 0.0 ms]
+=== Bus Recovery (9 clocks) ===
+  Final: SCL=HIGH SDA=LOW
+
+[COMMAND libreset | 0.0 ms host resolution]
+  Status: BUS_STUCK (code=11, detail=0)
+  Message: Bus stuck after reset
+
+[COMMAND buscheck | 0.0 ms]
+  Status: BUS_STUCK (code=11, detail=0)
+  Message: SDA stuck low
+
+[COMMAND dirty | 0.0 ms]
+  persistentConfigDirty: no
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  resyncNeeded: no
+
+[OPERATOR] Removed SDA fault resistor.
+
+[COMMAND levels | 0.0 ms]
+  SCL: HIGH (idle)
+  SDA: HIGH (idle)
+  OK: Bus idle (both HIGH)
+
+[COMMAND drv]
+  State: DEGRADED
+  Consecutive failures: 1
+  Total success: 267
+  Total failures: 7
+  Error code: PEC_MISMATCH
+
+[COMMAND recover | 16.0 ms]
+  Status: OK (code=0, detail=0)
+=== Driver Health ===
+  State: READY
+  Online: yes
+  Consecutive failures: 0
+  Total success: 269
+  Total failures: 7
+
+[COMMAND read | 0.0 ms host resolution]
+  Status: OK (code=0, detail=0)
+  Message: OK
+  CO2 avg: 683 ppm
+
+======================================================================
+PHASE 5 - SCL STUCK LOW THROUGH 470 OHM
+======================================================================
+
+[OPERATOR] Connected 470 ohm from SCL/GPIO7 to common ground.
+
+[COMMAND levels | 0.0 ms]
+=== Bus Levels ===
+  SCL: LOW (held)
+  SDA: HIGH (idle)
+  WARNING: SCL held LOW - clock stretching or stuck!
+
+[COMMAND drv]
+  State: READY
+  Consecutive failures: 0
+  Total success: 271
+  Total failures: 7
+
+[COMMAND buscheck | 0.0 ms]
+  Status: BUS_STUCK (code=11, detail=0)
+  Message: SCL stuck low
+
+[COMMAND probe | 31.0 ms]
+  Status: TIMEOUT (code=4, detail=25000)
+  Message: Clock stretch timeout
+
+[COMMAND drv]
+  State: READY
+  Consecutive failures: 0
+  Total success: 271
+  Total failures: 7
+
+[COMMAND read | 32.0 ms]
+  Status: TIMEOUT (code=4, detail=25000)
+  Message: Clock stretch timeout
+
+[COMMAND drv]
+  State: DEGRADED
+  Online: yes
+  Consecutive failures: 1
+  Total success: 271
+  Total failures: 8
+  Error code: TIMEOUT
+  Error detail: 25000
+  Error msg: Clock stretch timeout
+  persistentConfigDirty: no
+  resyncNeeded: no
+
+[COMMAND busreset | 0.0 ms]
+=== Bus Recovery (9 clocks) ===
+  Final: SCL=LOW SDA=LOW
+
+[COMMAND libreset | 31.0 ms]
+  Status: BUS_STUCK (code=11, detail=0)
+  Message: SCL stuck during reset
+
+[COMMAND buscheck | 0.0 ms]
+  Status: BUS_STUCK (code=11, detail=0)
+  Message: Both SCL and SDA stuck low
+
+[COMMAND dirty | 0.0 ms]
+  persistentConfigDirty: no
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  resyncNeeded: no
+
+[OPERATOR] Removed SCL fault resistor.
+
+[COMMAND levels | 0.0 ms]
+  SCL: HIGH (idle)
+  SDA: HIGH (idle)
+  OK: Bus idle (both HIGH)
+
+[COMMAND drv]
+  State: DEGRADED
+  Consecutive failures: 1
+  Total success: 271
+  Total failures: 8
+  Error code: TIMEOUT
+  Error detail: 25000
+
+[COMMAND recover | 16.0 ms]
+  Status: OK (code=0, detail=0)
+=== Driver Health ===
+  State: READY
+  Online: yes
+  Consecutive failures: 0
+  Total success: 273
+  Total failures: 8
+
+[COMMAND read | 16.0 ms]
+  Status: OK (code=0, detail=0)
+  Message: OK
+  CO2 avg: 689 ppm
+
+[COMMAND selftest | 500.0 ms]
+Selftest result: pass=27 fail=0 skip=0
+
+[COMMAND stress_mix 100 | 1266.0 ms]
+=== stress_mix summary ===
+  Total: ok=100 fail=0 (100.00%)
+  Duration: 1269 ms
+  Health delta: success +187, failures +0
+
+[COMMAND drv]
+  State: READY
+  Online: yes
+  Consecutive failures: 0
+  Total success: 534
+  Total failures: 8
+  persistentConfigDirty: no
+  resyncNeeded: no
+
+======================================================================
+PHASE 6 - COMPLETE SENSOR/MCU POWER CYCLE AND INTERVAL PERSISTENCE
+======================================================================
+
+[OPERATOR] Approved temporary measurement-interval persistence write.
+
+[COMMAND drv]
+  State: READY
+  Online: yes
+  Consecutive failures: 0
+  Total success: 534
+  Total failures: 8
+  persistentConfigDirty: no
+  resyncNeeded: no
+
+[COMMAND interval | 31.0 ms]
+  Status: OK (code=0, detail=0)
+  Interval: 150 deciseconds (15.0 s)
+BASELINE_CHECK: PASS (150 ds)
+
+[COMMAND dirty | 0.0 ms]
+  persistentConfigDirty: no
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  resyncNeeded: no
+DIRTY_PRECHECK: PASS
+
+[COMMAND interval 160 | 344.0 ms]
+  Status: OK (code=0, detail=0)
+  Message: OK
+
+[COMMAND interval | 31.0 ms]
+  Status: OK (code=0, detail=0)
+  Interval: 160 deciseconds (16.0 s)
+READBACK_CHECK: PASS (160 ds)
+
+[COMMAND dirty | 0.0 ms]
+  persistentConfigDirty: no
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  resyncNeeded: no
+DIRTY_POSTCHECK: PASS
+
+[OPERATOR]
+  Disconnected ESP32-S3 USB power and EE871 power.
+  Waited at least five seconds.
+  Reconnected EE871 power and ESP32-S3 USB.
+  Confirmed power cycle complete.
+
+[COMMAND version | 0.0 ms]
+=== Version Info ===
+  Example firmware build: Jul 30 2026 13:06:41
+  MCU: ESP32-S3 rev 2, flash 4194304 bytes, PSRAM ready (2097152 bytes)
+  EE871 library version: 1.0.0
+  EE871 library full: 1.0.0 (1fbe7d8, 2026-07-30 13:06:39, dirty)
+RUNTIME_MEMORY_CHECK: PASS
+
+[COMMAND drv | 0.0 ms]
+=== Driver Health ===
+  State: READY
+  Online: yes
+  Consecutive failures: 0
+  Total success: 0
+  Total failures: 0
+  Last OK: never
+  Last error: never
+  persistentConfigDirty: no
+  resyncNeeded: no
+POST_CYCLE_DRIVER_CHECK: PASS
+
+[COMMAND dirty | 0.0 ms]
+  persistentConfigDirty: no
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  resyncNeeded: no
+POST_CYCLE_DIRTY_CHECK: PASS
+
+[COMMAND interval | 31.0 ms]
+  Status: OK (code=0, detail=0)
+  Interval: 160 deciseconds (16.0 s)
+POWER_CYCLE_PERSISTENCE: PASS (160 ds)
+
+[COMMAND offset | 16.0 ms]
+  Status: OK (code=0, detail=0)
+  CO2 offset: 0 ppm
+
+[COMMAND gain | 16.0 ms]
+  Status: OK (code=0, detail=0)
+  CO2 gain: 32768 (factor=1.0000)
+
+[COMMAND partname | 125.0 ms]
+  Status: OK (code=0, detail=0)
+  Part name: EE871
+
+[COMMAND interval 150 | 344.0 ms]
+  Status: OK (code=0, detail=0)
+  Message: OK
+
+[COMMAND interval | 31.0 ms]
+  Status: OK (code=0, detail=0)
+  Interval: 150 deciseconds (15.0 s)
+RESTORE_READBACK_CHECK: PASS (150 ds)
+
+[COMMAND dirty | 0.0 ms]
+  persistentConfigDirty: no
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  resyncNeeded: no
+RESTORE_DIRTY_CHECK: PASS
+
+[COMMAND resync | 203.0 ms]
+=== Persistent Config Resync ===
+Before:
+  persistentConfigDirty: no
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  resyncNeeded: no
+  Status: OK (code=0, detail=0)
+After:
+  persistentConfigDirty: no
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  resyncNeeded: no
+RESYNC_CHECK: PASS
+
+[COMMAND interval | 31.0 ms]
+  Status: OK (code=0, detail=0)
+  Interval: 150 deciseconds (15.0 s)
+FINAL_INTERVAL_CHECK: PASS (150 ds)
+
+[COMMAND selftest | 500.0 ms]
+Selftest result: pass=27 fail=0 skip=0
+
+[COMMAND stress_mix 100 | 1282.0 ms]
+=== stress_mix summary ===
+  Total: ok=100 fail=0 (100.00%)
+  Duration: 1275 ms
+  Health delta: success +187, failures +0
+
+[COMMAND drv | 0.0 ms]
+=== Driver Health ===
+  State: READY
+  Online: yes
+  Consecutive failures: 0
+  Total success: 331
+  Total failures: 0
+  Success rate: 100.0%
+  Last error: never
+  persistentConfigDirty: no
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  resyncNeeded: no
+
+[COMMAND dirty | 0.0 ms]
+  persistentConfigDirty: no
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  resyncNeeded: no
+
+RESTORE_COMPLETED: yes
+
+END OF NORMALIZED OPERATOR-ASSISTED TRANSCRIPT

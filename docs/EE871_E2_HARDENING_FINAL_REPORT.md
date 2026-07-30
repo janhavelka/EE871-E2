@@ -1,5 +1,10 @@
 # EE871-E2 Hardening Final Report
 
+> Historical snapshot: this report records the June 2026 hardening state.
+> For current COM20 platform and HIL evidence, including physical fault and
+> power-cycle results, use
+> [EE871_E2_HARDWARE_VALIDATION_MATRIX.md](EE871_E2_HARDWARE_VALIDATION_MATRIX.md).
+
 Started: 2026-05-31
 Last updated: 2026-06-02
 Branch: `hardening/ee871-e2-industry-readiness`

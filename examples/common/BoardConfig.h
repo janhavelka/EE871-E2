@@ -39,10 +39,6 @@ static constexpr uint32_t E2_BYTE_TIMEOUT_US = 35000;
 static constexpr uint32_t E2_WRITE_DELAY_MS = 150;
 static constexpr uint32_t E2_INTERVAL_WRITE_DELAY_MS = 300;
 
-/// @brief LED pin. Example default for ESP32-S3 (RGB LED on GPIO48).
-/// Set to -1 to disable.
-static constexpr int LED = 10;
-
 /// @brief Access to E2 pin storage.
 inline transport::E2Pins& e2Pins() {
   static transport::E2Pins pins{E2_CLOCK, E2_DATA};
@@ -50,8 +46,8 @@ inline transport::E2Pins& e2Pins() {
 }
 
 /// @brief Initialize E2 pins for examples using the default config.
-inline bool initE2() {
-  return transport::initE2(e2Pins(), E2_CLOCK, E2_DATA);
+inline void initE2() {
+  transport::initE2(e2Pins(), E2_CLOCK, E2_DATA);
 }
 
 }  // namespace board

@@ -12,30 +12,37 @@
 #include <stdint.h>
 
 #ifndef EE871_VERSION_STRING
+/// @brief Semantic version string synchronized from library.json.
 #define EE871_VERSION_STRING "1.0.0"
 #endif
 
 #ifndef EE871_BUILD_DATE
+/// @brief Build date injected by PlatformIO or supplied by the compiler.
 #define EE871_BUILD_DATE __DATE__
 #endif
 
 #ifndef EE871_BUILD_TIME
+/// @brief Build time injected by PlatformIO or supplied by the compiler.
 #define EE871_BUILD_TIME __TIME__
 #endif
 
 #ifndef EE871_BUILD_TIMESTAMP
+/// @brief Combined build date and time.
 #define EE871_BUILD_TIMESTAMP EE871_BUILD_DATE " " EE871_BUILD_TIME
 #endif
 
 #ifndef EE871_GIT_COMMIT
+/// @brief Git commit identifier injected by PlatformIO when available.
 #define EE871_GIT_COMMIT "unknown"
 #endif
 
 #ifndef EE871_GIT_STATUS
+/// @brief Git working-tree state injected by PlatformIO when available.
 #define EE871_GIT_STATUS "unknown"
 #endif
 
 #ifndef EE871_VERSION_FULL
+/// @brief Version, commit, timestamp, and working-tree state.
 #define EE871_VERSION_FULL EE871_VERSION_STRING " (" EE871_GIT_COMMIT ", " EE871_BUILD_TIMESTAMP ", " EE871_GIT_STATUS ")"
 #endif
 

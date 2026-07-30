@@ -20,7 +20,7 @@ enum class Err : uint8_t {
   INVALID_PARAM,             ///< Invalid parameter value
   DEVICE_NOT_FOUND,          ///< Device not responding on E2 bus
   PEC_MISMATCH,              ///< PEC validation failed
-  NACK,                      ///< Missing ACK/NACK on bus
+  NACK,                      ///< Expected slave ACK was not received
   BUSY,                      ///< Device is busy
   IN_PROGRESS,               ///< Operation scheduled; call tick() to complete
   BUS_STUCK,                 ///< Bus lines stuck (SDA or SCL held low)

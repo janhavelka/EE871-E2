@@ -1,32 +1,31 @@
 ﻿#!/usr/bin/env python3
-"""Synchronize Version.h from library.json and expose build metadata via macros.
+"""Synchronize version replicas from library.json and expose build metadata.
 
 Default behavior:
-- when run by PlatformIO as an extra script: sync generated headers if needed and
+- when run by PlatformIO as an extra script: synchronize version metadata and
   inject build metadata defines into the compile environment
-- when run standalone: sync generated headers if needed
+- when run standalone: synchronize version metadata if needed
 
 Standalone commands:
   sync
-      Regenerate generated headers only if source metadata changed.
+      Synchronize Version.h, idf_component.yml, and Doxyfile when needed.
   check
-      Exit with code 1 when generated headers are out of date.
+      Exit with code 1 when any synchronized version replica is out of date.
   bump patch|minor|major
-      Update library.json, then regenerate generated headers.
+      Update library.json, then synchronize all version replicas.
   set X.Y.Z
-      Set an explicit semantic version, then regenerate generated headers.
+      Set an explicit semantic version, then synchronize all version replicas.
 """
 
 from __future__ import annotations
 
-import configparser
 import json
 import re
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 ENV = None
 try:
@@ -36,21 +35,6 @@ except Exception:
     ENV = None
 
 SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
-DEPENDENCY_VERSION_TARGETS = (
-    ("BME280_PIN_VERSION", ("BME280",)),
-    ("SHT3X_PIN_VERSION", ("SHT3X", "SHT3X-MAIN")),
-    ("RV3032_PIN_VERSION", ("RV3032", "RV3032-C7")),
-    ("SSD1315_PIN_VERSION", ("SSD1315",)),
-    ("ASYNCSD_PIN_VERSION", ("ASYNCSD",)),
-    ("SYSTEMCHRONO_PIN_VERSION", ("SYSTEMCHRONO",)),
-    ("STATUSLED_PIN_VERSION", ("STATUSLED",)),
-    ("SHZK_PT_PIN_VERSION", ("SHZK_PT", "SHZK-PT")),
-    ("VTN4XX_PIN_VERSION", ("VTN4XX",)),
-    ("SIM7080G_PIN_VERSION", ("SIM7080G", "SIM7080G-CORE")),
-    ("ARDUINOJSON_PIN_VERSION", ("ARDUINOJSON",)),
-    ("ESPASYNCWEBSERVER_PIN_VERSION", ("ESPASYNCWEBSERVER",)),
-    ("ASYNCTCP_PIN_VERSION", ("ASYNCTCP",)),
-)
 
 
 def _find_project_root() -> Path:
@@ -198,30 +182,37 @@ def _render_version_header(namespace: str, version: str) -> str:
 #include <stdint.h>
 
 #ifndef {prefix}_VERSION_STRING
+/// @brief Semantic version string synchronized from library.json.
 #define {prefix}_VERSION_STRING "{version}"
 #endif
 
 #ifndef {prefix}_BUILD_DATE
+/// @brief Build date injected by PlatformIO or supplied by the compiler.
 #define {prefix}_BUILD_DATE __DATE__
 #endif
 
 #ifndef {prefix}_BUILD_TIME
+/// @brief Build time injected by PlatformIO or supplied by the compiler.
 #define {prefix}_BUILD_TIME __TIME__
 #endif
 
 #ifndef {prefix}_BUILD_TIMESTAMP
+/// @brief Combined build date and time.
 #define {prefix}_BUILD_TIMESTAMP {prefix}_BUILD_DATE " " {prefix}_BUILD_TIME
 #endif
 
 #ifndef {prefix}_GIT_COMMIT
+/// @brief Git commit identifier injected by PlatformIO when available.
 #define {prefix}_GIT_COMMIT "unknown"
 #endif
 
 #ifndef {prefix}_GIT_STATUS
+/// @brief Git working-tree state injected by PlatformIO when available.
 #define {prefix}_GIT_STATUS "unknown"
 #endif
 
 #ifndef {prefix}_VERSION_FULL
+/// @brief Version, commit, timestamp, and working-tree state.
 #define {prefix}_VERSION_FULL {prefix}_VERSION_STRING " (" {prefix}_GIT_COMMIT ", " {prefix}_BUILD_TIMESTAMP ", " {prefix}_GIT_STATUS ")"
 #endif
 
@@ -267,92 +258,16 @@ static constexpr const char* VERSION_FULL = {prefix}_VERSION_FULL;
 '''
 
 
-def _normalize_dependency_name(raw_name: str) -> str:
-    return "".join(ch for ch in raw_name.upper() if ch.isalnum())
-
-
-def _dependency_name_from_spec(spec: str) -> str:
-    if "://" in spec or spec.startswith("git@"):
-        base = spec.split("#", 1)[0].rstrip("/")
-        name = base.rsplit("/", 1)[-1]
-        if name.endswith(".git"):
-            name = name[:-4]
-        return name
-    if "@" in spec:
-        return spec.rsplit("@", 1)[0].rstrip("/").rsplit("/", 1)[-1]
-    return spec.rstrip("/").rsplit("/", 1)[-1]
-
-
-def _dependency_version_from_spec(spec: str) -> str:
-    if "#" in spec:
-        return spec.rsplit("#", 1)[1].strip()
-    if "@" in spec:
-        return spec.rsplit("@", 1)[1].strip()
-    return ""
-
-
-def _load_dependency_versions(project_root: Path) -> Dict[str, str]:
-    platformio_ini = project_root / "platformio.ini"
-    parser = configparser.RawConfigParser(interpolation=None, strict=False)
-    parser.optionxform = str
-    parser.read(platformio_ini, encoding="utf-8")
-
-    versions: Dict[str, str] = {}
-    deps_block = parser.get("lib_common", "lib_deps", fallback="")
-    for raw_line in deps_block.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith(";") or line.startswith("#"):
-            continue
-        dep_name = _dependency_name_from_spec(line)
-        dep_version = _dependency_version_from_spec(line)
-        if dep_name:
-            versions[_normalize_dependency_name(dep_name)] = dep_version or "unversioned"
-    return versions
-
-
-def _resolve_dependency_pin(versions: Dict[str, str], aliases: Iterable[str]) -> str:
-    for alias in aliases:
-        pin = versions.get(_normalize_dependency_name(alias))
-        if pin:
-            return pin
-    return "unknown"
-
-
-def _render_dependency_versions_header(project_root: Path, namespace: str) -> Optional[str]:
-    if project_root.name.lower() != "tunnelmonitor":
-        return None
-
-    dependency_versions = _load_dependency_versions(project_root)
-    lines: List[str] = [
-        "/**",
-        " * @file DependencyVersions.h",
-        " * @brief PlatformIO dependency version pins for runtime diagnostics.",
-        " *",
-        " * This file is AUTO-GENERATED by scripts/generate_version.py from",
-        " * platformio.ini [lib_common].lib_deps.",
-        " * DO NOT EDIT MANUALLY. Update dependency refs in platformio.ini instead.",
-        " */",
-        "",
-        "#pragma once",
-        "",
-        f"namespace {namespace} {{",
-        "namespace DependencyPins {",
-        "",
-    ]
-
-    for const_name, aliases in DEPENDENCY_VERSION_TARGETS:
-        pin = _resolve_dependency_pin(dependency_versions, aliases)
-        lines.append(f'inline constexpr const char* {const_name} = "{pin}";')
-
-    lines.extend(
-        [
-            "",
-            "}  // namespace DependencyPins",
-            f"}}  // namespace {namespace}",
-            "",
-        ]
-    )
-    return "\n".join(lines)
+def _replace_single_version(
+    path: Path,
+    pattern: str,
+    replacement: str,
+) -> str:
+    current = _read_text(path)
+    updated, count = re.subn(pattern, replacement, current, count=1, flags=re.MULTILINE)
+    if count != 1:
+        raise RuntimeError(f"Expected one version field in {path}, found {count}")
+    return updated
 
 
 def _expected_outputs(project_root: Path) -> Dict[Path, str]:
@@ -364,11 +279,17 @@ def _expected_outputs(project_root: Path) -> Dict[Path, str]:
 
     outputs = {
         namespace_dir / "Version.h": _render_version_header(namespace, version),
+        project_root / "idf_component.yml": _replace_single_version(
+            project_root / "idf_component.yml",
+            r'^version\s*:\s*.*$',
+            f'version: "{version}"',
+        ),
+        project_root / "Doxyfile": _replace_single_version(
+            project_root / "Doxyfile",
+            r"^PROJECT_NUMBER\s*=.*$",
+            f'PROJECT_NUMBER         = "{version}"',
+        ),
     }
-
-    dependency_header = _render_dependency_versions_header(project_root, namespace)
-    if dependency_header is not None:
-        outputs[namespace_dir / "DependencyVersions.h"] = dependency_header
 
     return outputs
 

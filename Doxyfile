@@ -16,7 +16,7 @@ BUILTIN_STL_SUPPORT    = YES
 JAVADOC_AUTOBRIEF      = YES
 MULTILINE_CPP_IS_BRIEF = YES
 
-EXTRACT_ALL            = YES
+EXTRACT_ALL            = NO
 EXTRACT_PRIVATE        = NO
 EXTRACT_STATIC         = YES
 EXTRACT_LOCAL_CLASSES  = YES
@@ -31,7 +31,15 @@ REFERENCED_BY_RELATION = YES
 REFERENCES_RELATION    = YES
 STRIP_CODE_COMMENTS    = NO
 
-INPUT                  = README.md CHANGELOG.md AGENTS.md CONTRIBUTING.md include docs
+INPUT                  = README.md \
+                         CHANGELOG.md \
+                         CONTRIBUTING.md \
+                         include/EE871 \
+                         docs/EE871_E2_Protocol_and_Register_Map.md \
+                         docs/EE871_E2_HIL_RUNNER.md \
+                         docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md \
+                         docs/IDF_PORT.md \
+                         docs/IDF_PORT_IMPLEMENTATION.md
 FILE_PATTERNS          = *.h *.md
 RECURSIVE              = YES
 EXCLUDE_PATTERNS       = */.pio/* */.git/* */test/* */docs/doxygen/* */docs/extracted-md/* */docs/pdf-extracted-md/* */docs/_pdf_extracts/*
@@ -51,8 +59,8 @@ GENERATE_XML           = NO
 GENERATE_RTF           = NO
 GENERATE_MAN           = NO
 
-WARN_IF_UNDOCUMENTED   = NO
-WARN_NO_PARAMDOC       = NO
+WARN_IF_UNDOCUMENTED   = YES
+WARN_NO_PARAMDOC       = YES
 WARN_IF_DOC_ERROR      = YES
-WARN_AS_ERROR          = NO
+WARN_AS_ERROR          = FAIL_ON_WARNINGS
 QUIET                  = YES

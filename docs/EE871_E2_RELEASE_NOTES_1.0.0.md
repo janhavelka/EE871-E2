@@ -1,11 +1,15 @@
 # EE871-E2 Release Notes 1.0.0
 
+> Historical release snapshot: these limitations describe evidence available
+> at the 1.0.0 release. For current COM20 platform and HIL evidence, use
+> [EE871_E2_HARDWARE_VALIDATION_MATRIX.md](EE871_E2_HARDWARE_VALIDATION_MATRIX.md).
+
 Date: 2026-06-02
 Branch: `hardening/ee871-e2-industry-readiness`
 
 ## Summary
 
-`1.0.0` is the first production-oriented EE871-E2 release candidate from the
+`1.0.0` is the first production-oriented EE871-E2 release from the
 hardening branch. It keeps the core driver framework-neutral, uses injected
 GPIO-style E2 callbacks, adds native fault-injection coverage, exposes
 persistent dirty/resync diagnostics, and records repeatable hardware evidence

@@ -302,13 +302,21 @@ Status EE871::begin(const Config& config) {
   st = _writeCommandRaw(ptrControl, 0x00, cmd::CUSTOM_OPERATING_FUNCTIONS);
   if (st.ok()) {
     const uint8_t readControl = cmd::makeControlRead(cmd::MAIN_CUSTOM_PTR, _config.deviceAddress);
+    uint8_t operatingFunctions = 0;
+    uint8_t operatingModeSupport = 0;
+    uint8_t specialFeatures = 0;
     // Read 0x07, 0x08, 0x09 in sequence (auto-increment)
-    st = _readControlByteRaw(readControl, _operatingFunctions);
+    st = _readControlByteRaw(readControl, operatingFunctions);
     if (st.ok()) {
-      st = _readControlByteRaw(readControl, _operatingModeSupport);
+      st = _readControlByteRaw(readControl, operatingModeSupport);
     }
     if (st.ok()) {
-      st = _readControlByteRaw(readControl, _specialFeatures);
+      st = _readControlByteRaw(readControl, specialFeatures);
+    }
+    if (st.ok()) {
+      _operatingFunctions = operatingFunctions;
+      _operatingModeSupport = operatingModeSupport;
+      _specialFeatures = specialFeatures;
     }
   }
   // If feature read fails, continue with defaults (all features disabled)
@@ -603,15 +611,15 @@ Status EE871::writeMeasurementInterval(uint16_t intervalDeciSeconds) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
   }
-  if (!hasGlobalInterval()) {
-    return Status::Error(Err::NOT_SUPPORTED, "Global interval not supported");
-  }
 
   // Validate range: 15.0s - 3600.0s (150 - 36000 deciseconds)
   if (intervalDeciSeconds < cmd::INTERVAL_MIN_DECISEC ||
       intervalDeciSeconds > cmd::INTERVAL_MAX_DECISEC) {
     return Status::Error(Err::OUT_OF_RANGE, "Interval must be 150-36000 (15-3600s)",
                          intervalDeciSeconds);
+  }
+  if (!hasGlobalInterval()) {
+    return Status::Error(Err::NOT_SUPPORTED, "Global interval not supported");
   }
 
   const uint8_t control = cmd::makeControlWrite(cmd::MAIN_CUSTOM_WRITE, _config.deviceAddress);
@@ -802,11 +810,11 @@ Status EE871::writeBusAddress(uint8_t address) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
   }
-  if (!hasAddressConfig()) {
-    return Status::Error(Err::NOT_SUPPORTED, "Address config not supported");
-  }
   if (address > cmd::BUS_ADDRESS_MAX) {
     return Status::Error(Err::OUT_OF_RANGE, "Address must be 0-7", address);
+  }
+  if (!hasAddressConfig()) {
+    return Status::Error(Err::NOT_SUPPORTED, "Address config not supported");
   }
   return customWrite(cmd::CUSTOM_BUS_ADDRESS, address);
 }

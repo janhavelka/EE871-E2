@@ -32,7 +32,8 @@ inline bool readLine(String& outLine) {
       if (overflowed) {
         buffer = "";
         overflowed = false;
-        continue;
+        outLine = "__input_line_too_long__";
+        return true;
       }
       if (buffer.length() == 0U) {
         continue;

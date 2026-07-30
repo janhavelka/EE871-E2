@@ -6,7 +6,9 @@ import io
 import pathlib
 import sys
 import time
+import types
 import unittest
+from unittest import mock
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -20,6 +22,29 @@ SPEC.loader.exec_module(runner)
 
 
 class HilRunnerParserTest(unittest.TestCase):
+    def test_open_serial_deasserts_control_lines_before_open(self) -> None:
+        class FakeSerial:
+            def __init__(self) -> None:
+                self.dtr = True
+                self.rts = True
+                self.port = None
+                self.baudrate = None
+                self.timeout = None
+                self.write_timeout = None
+                self.open_snapshot = None
+
+            def open(self) -> None:
+                self.open_snapshot = (self.dtr, self.rts)
+
+        fake_module = types.SimpleNamespace(Serial=FakeSerial)
+        args = types.SimpleNamespace(port="COM20", baud=115200)
+        with mock.patch.dict(sys.modules, {"serial": fake_module}):
+            ser = runner.open_serial(args)
+
+        self.assertEqual((False, False), ser.open_snapshot)
+        self.assertEqual("COM20", ser.port)
+        self.assertEqual(115200, ser.baudrate)
+
     def test_parse_selftest_counts_ansi_output(self) -> None:
         text = """
 \x1b[36m=== EE871 selftest (safe commands) ===\x1b[0m
@@ -158,6 +183,57 @@ Selftest result: pass=9 fail=1 skip=0
         self.assertFalse(parsed["online"])
         self.assertEqual(parsed["consecutive_failures"], 5)
 
+    def test_parse_dirty_uses_after_state_from_resync(self) -> None:
+        text = """=== Persistent Config Resync ===
+Before:
+  persistentConfigDirty: yes
+  persistentConfigDirtyError: E2_ERROR (code=3, detail=17)
+  persistentConfigDirtyError message: Write verify failed
+  resyncNeeded: yes
+  Status: OK (code=0, detail=0)
+After:
+  persistentConfigDirty: no
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  persistentConfigDirtyError message: OK
+  resyncNeeded: no
+"""
+        parsed = runner.parse_response("resync", text)
+
+        self.assertFalse(parsed["persistent_config_dirty"])
+        self.assertFalse(parsed["resync_needed"])
+        self.assertEqual("OK", parsed["persistent_config_dirty_error"]["name"])
+
+    def test_missing_dirty_parse_requires_operator_review(self) -> None:
+        text = "=== Persistent Config Dirty State ===\n"
+        parsed = runner.parse_response("dirty", text)
+        result, reason = runner.classify_response(
+            runner.CommandSpec(
+                "dirty",
+                "dirty",
+                expected_any=("Persistent Config Dirty State",),
+                validators=("dirty_clean",),
+            ),
+            text,
+            False,
+            parsed,
+        )
+
+        self.assertEqual(runner.RESULT_OPERATOR, result)
+        self.assertIn("persistent dirty flag not parsed", reason)
+
+    def test_aggregate_verdict_rules(self) -> None:
+        self.assertEqual(runner.VERDICT_INCOMPLETE, runner.verdict([], dry_run=True))
+        self.assertEqual(runner.VERDICT_PASS, runner.verdict([{"result": runner.RESULT_PASS}], dry_run=False))
+        self.assertEqual(runner.VERDICT_FAIL, runner.verdict([{"result": runner.RESULT_FAIL}], dry_run=False))
+        self.assertEqual(
+            runner.VERDICT_OPERATOR,
+            runner.verdict([{"result": runner.RESULT_OPERATOR}], dry_run=False),
+        )
+        self.assertEqual(
+            runner.VERDICT_INCOMPLETE,
+            runner.verdict([{"result": runner.RESULT_SKIP}], dry_run=False),
+        )
+
     def test_dirty_state_fails_safe_run(self) -> None:
         text = """
 === Persistent Config Dirty State ===
@@ -249,6 +325,37 @@ Selftest result: pass=9 fail=1 skip=0
 
         self.assertEqual(runner.RESULT_OPERATOR, result)
         self.assertIn("expected output token missing", reason)
+
+    def test_persistent_read_completion_waits_for_value_line(self) -> None:
+        self.assertFalse(runner.response_has_completion("interval", "  Status: OK\n"))
+        self.assertFalse(runner.response_has_completion("offset", "  Status: OK\n"))
+        self.assertFalse(runner.response_has_completion("gain", "  Status: OK\n"))
+        self.assertFalse(runner.response_has_completion("addr", "  Status: OK\n"))
+
+        self.assertTrue(
+            runner.response_has_completion(
+                "interval",
+                "  Status: OK\n  Interval: 150 deciseconds (15.0 s)\n",
+            )
+        )
+        self.assertTrue(
+            runner.response_has_completion(
+                "offset",
+                "  Status: OK\n  CO2 offset: 0 ppm\n",
+            )
+        )
+        self.assertTrue(
+            runner.response_has_completion(
+                "gain",
+                "  Status: OK\n  CO2 gain: 32768 (factor=1.0000)\n",
+            )
+        )
+        self.assertTrue(
+            runner.response_has_completion(
+                "addr",
+                "  Status: OK\n  Bus address: 0\n",
+            )
+        )
 
     def test_persistent_writes_require_exact_confirmation(self) -> None:
         with contextlib.redirect_stderr(io.StringIO()):
@@ -362,6 +469,67 @@ Selftest result: pass=9 fail=1 skip=0
         self.assertEqual("prompt", reason)
         self.assertIn("> ", text)
 
+    def test_command_prompt_requirement_prevents_response_shift(self) -> None:
+        class FakeSerial:
+            def __init__(self) -> None:
+                self.chunks = [
+                    b"  Status: OK\n  CO2 offset: 0 ppm\n",
+                    b"",
+                    b"",
+                    b"> ",
+                ]
+
+            @property
+            def in_waiting(self) -> int:
+                return 0
+
+            def read(self, _size: int) -> bytes:
+                if not self.chunks:
+                    return b""
+                chunk = self.chunks.pop(0)
+                if not chunk:
+                    time.sleep(0.002)
+                return chunk
+
+        text, reason, timed_out = runner.read_until_ready(
+            FakeSerial(),
+            timeout_s=0.2,
+            idle_s=0.001,
+            command="offset",
+            require_prompt=True,
+        )
+
+        self.assertFalse(timed_out)
+        self.assertEqual("prompt", reason)
+        self.assertIn("CO2 offset: 0 ppm", text)
+        self.assertIn("> ", text)
+
+    def test_prompt_without_value_line_times_out(self) -> None:
+        class FakeSerial:
+            def __init__(self) -> None:
+                self.chunks = [b"> "]
+
+            @property
+            def in_waiting(self) -> int:
+                return 0
+
+            def read(self, _size: int) -> bytes:
+                if self.chunks:
+                    return self.chunks.pop(0)
+                time.sleep(0.001)
+                return b""
+
+        text, reason, timed_out = runner.read_until_ready(
+            FakeSerial(),
+            timeout_s=0.02,
+            idle_s=0.001,
+            command="offset",
+            require_prompt=True,
+        )
+
+        self.assertTrue(timed_out)
+        self.assertEqual("timeout", reason)
+        self.assertEqual("> ", text)
 
 if __name__ == "__main__":
     unittest.main()

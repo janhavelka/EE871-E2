@@ -80,9 +80,13 @@ public:
 
   /// Initialize the driver with configuration.
   ///
-  /// begin() validates timing and callbacks, normalizes configuration, probes
-  /// the EE871, and caches feature flags. The driver does not configure GPIO,
-  /// pins, pull-ups, tasks, locks, or framework handles.
+  /// begin() validates timing and callbacks, normalizes configuration, and
+  /// verifies the EE871 group identifier. It then attempts to cache feature
+  /// flags. A feature-cache read failure is non-fatal and leaves all optional
+  /// capabilities disabled; use the explicit identity/feature read APIs when
+  /// the application requires subgroup, CO2 capability, or feature proof.
+  /// The driver does not configure GPIO, pins, pull-ups, tasks, locks, or
+  /// framework handles.
   /// @param config Configuration including E2 transport callbacks.
   /// @return Status::Ok() on success, error otherwise.
   Status begin(const Config& config);
@@ -97,7 +101,9 @@ public:
   /// End the driver session and clear runtime/cache state.
   ///
   /// The core driver owns no GPIO or framework resources, so application-owned
-  /// callback state remains the caller's responsibility.
+  /// callback state remains the caller's responsibility. Persistent dirty
+  /// diagnostics survive end() and a later failed begin() so uncertain sensor
+  /// state is not silently forgotten.
   void end();
 
   // =========================================================================
@@ -106,15 +112,17 @@ public:
 
   /// Check if device is present on the bus.
   ///
-  /// probe() uses raw diagnostic transfers and does not update health counters
-  /// or driver state.
-  /// @return Status::Ok() if device responds, error otherwise.
+  /// probe() reads and validates the group identifier through raw diagnostic
+  /// transfers. It does not validate subgroup/CO2 capability and does not
+  /// update health counters or driver state.
+  /// @return Status::Ok() if the expected group responds, error otherwise.
   Status probe();
 
   /// Attempt to recover from DEGRADED/OFFLINE state.
   ///
-  /// Recovery performs bounded bus recovery/probe work and tracks failures
-  /// because the driver is initialized.
+  /// Recovery performs a bounded bus reset, then a tracked group-identifier
+  /// read. It still attempts the tracked read when the bus reset reports an
+  /// error; the returned status is the group-read result.
   /// @return Status::Ok() if device now responsive, error otherwise.
   Status recover();
 
@@ -257,15 +265,23 @@ public:
   Status customRead(uint8_t address, uint8_t* buf, size_t len);
 
   /// Write one custom-memory byte with command 0x10 and verify by readback.
+  ///
+  /// Addresses 0xC6 and 0xC7 are special: the driver reads the companion byte,
+  /// assembles the complete interval, and routes the operation through
+  /// writeMeasurementInterval(). This adds read traffic and uses the paired
+  /// persistent-write timing/dirty-state rules.
   /// @param address Custom-memory address.
   /// @param value Byte to write.
-  /// @return Status::Ok() when the readback matches.
+  /// @return Status::Ok() when readback matches, or a precise validation,
+  /// capability, or transport status.
   Status customWrite(uint8_t address, uint8_t value);
 
-  /// Write global measurement interval (0xC6/0xC7) and verify
-  /// @param intervalDeciSeconds Interval in 0.1 s units
+  /// Write global measurement interval (0xC6/0xC7) and verify.
+  /// @param intervalDeciSeconds Interval in 0.1 s units, from 150 through
+  /// 36000 (15 through 3600 seconds).
   /// @return Status::Ok() when both interval bytes verify. A failure after the
-  /// first byte succeeds marks persistent configuration dirty.
+  /// first byte succeeds marks persistent configuration dirty;
+  /// OUT_OF_RANGE is returned before capability checks or bus traffic.
   Status writeMeasurementInterval(uint16_t intervalDeciSeconds);
 
   // =========================================================================
@@ -329,6 +345,10 @@ public:
   // =========================================================================
   // Feature Support Queries (use cached values from begin())
   // =========================================================================
+  //
+  // A false result means "not present in the current cache." Before successful
+  // begin(), or when the best-effort feature-cache read failed, false does not
+  // prove the physical device lacks that feature.
 
   /// Check if serial number is readable.
   /// @return true when cached feature flags advertise serial number support.
@@ -403,7 +423,8 @@ public:
   /// This updates persistent sensor configuration and does not retarget the
   /// current driver session.
   /// @param address New address (0-7)
-  /// @return OUT_OF_RANGE if address > 7
+  /// @return OUT_OF_RANGE before capability checks or bus traffic if address
+  /// is greater than 7; otherwise a capability or write/readback status.
   Status writeBusAddress(uint8_t address);
 
   // =========================================================================
@@ -507,7 +528,12 @@ public:
   // Status / Measurements
   // =========================================================================
 
-  /// Read status byte; this can trigger a new measurement on EE871.
+  /// Read status byte.
+  ///
+  /// This operation is side-effecting: when the prior measurement is old, an
+  /// EE871 status read can trigger a new measurement and reset its interval
+  /// counter. For checked sampling, read MV3/MV4 first and status second so
+  /// status describes the last measured value while starting the next cycle.
   /// @param[out] status Status byte.
   /// @return Status::Ok() when the status byte and PEC verify.
   Status readStatus(uint8_t& status);
@@ -525,11 +551,17 @@ public:
   Status readErrorCode(uint8_t& code);
 
   /// Read CO2 fast response value from MV3.
+  ///
+  /// This is a raw value API. It does not read status, reject the CO2 error
+  /// bit, validate warm-up/freshness, or enforce a product-specific ppm range.
   /// @param[out] ppm CO2 concentration in ppm.
   /// @return Status::Ok() when MV3 low/high reads succeed.
   Status readCo2Fast(uint16_t& ppm);
 
   /// Read CO2 averaged value from MV4.
+  ///
+  /// This is a raw value API. It does not read status, reject the CO2 error
+  /// bit, validate warm-up/freshness, or enforce a product-specific ppm range.
   /// @param[out] ppm CO2 concentration in ppm.
   /// @return Status::Ok() when MV4 low/high reads succeed.
   Status readCo2Average(uint16_t& ppm);

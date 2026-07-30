@@ -7,7 +7,7 @@ Thank you for considering contributing to this project!
 1. Fork the repository
 2. Create a feature branch: `git checkout -b feature/my-feature`
 3. Make your changes
-4. Ensure examples build: `pio run -e ex_cli_s3 -e ex_cli_s2`
+4. Run the validation commands below.
 5. Commit with a clear message: `git commit -m "feat: add X"`
 6. Push and open a Pull Request
 
@@ -33,6 +33,19 @@ Thank you for considering contributing to this project!
 - Update documentation if needed
 - Add changelog entry under `[Unreleased]`
 - Ensure CI passes
+
+### Validation
+
+```bash
+python scripts/generate_version.py check
+python tools/check_core_timing_guard.py
+python tools/check_cli_contract.py
+python tools/check_idf_example_contract.py
+python -m unittest discover -s test -p "test_hil_runner_parser.py"
+pio test -e native
+pio run -e ex_bringup_s3
+pio run -e ex_bringup_s2
+```
 
 ### What We Accept
 - Bug fixes

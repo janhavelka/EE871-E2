@@ -53,6 +53,8 @@ IDF_REQUIRED_PATTERNS = {
     "dirty accessor": r"persistentConfigDirty",
     "dirty error accessor": r"persistentConfigDirtyError",
     "resync API": r"resyncPersistentConfig",
+    "newline-terminated prompt": r'void\s+printPrompt\s*\([^)]*\)\s*\{[\s\S]*?std::printf\(\s*">\s*\\n"\s*\)',
+    "prompt after trace drain": r"buslog::flush\s*\(\s*\)\s*;[\s\S]*?if\s*\(\s*promptPending\s*&&\s*buslog::empty\s*\(\s*\)\s*\)[\s\S]*?printPrompt\s*\(\s*\)",
     "driver health dirty output": r"void\s+printDriverHealth\s*\([^)]*\)\s*\{[\s\S]*?printPersistentDirtyFields\s*\(\s*settings\s*\)",
     "status dirty summary": r"hasCo2Error\(\):[\s\S]*?printPersistentDirtySummaryIfDirty\s*\(",
     "resync before after output": r'std::strcmp\(\s*trimmed\s*,\s*"resync"\s*\)\s*==\s*0[\s\S]*?Before:[\s\S]*?resyncPersistentConfig\s*\(\s*\)[\s\S]*?After:',

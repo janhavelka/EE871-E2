@@ -102,7 +102,7 @@ void logWarn(const char* fmt, ...) {
 }
 
 void printPrompt() {
-  std::printf("> ");
+  std::printf("> \n");
   std::fflush(stdout);
 }
 
@@ -150,6 +150,10 @@ void clear() {
 
 void setEnabled(bool enabled) {
   traceEnabled = enabled;
+}
+
+bool empty() {
+  return !traceEnabled || traceCount == 0U;
 }
 
 void push(EventType type, uint8_t value, uint16_t data) {
@@ -2524,15 +2528,19 @@ extern "C" void app_main(void) {
   printPrompt();
 
   char line[MAX_LINE_LENGTH + 1U] = {};
+  bool promptPending = false;
   while (true) {
     device.tick(nowMs());
     diag::sniffer().tick(deviceCfg);
-    if (pollLine(line, sizeof(line))) {
+    if (!promptPending && pollLine(line, sizeof(line))) {
       processCommand(line);
-      buslog::flush();
-      printPrompt();
+      promptPending = true;
     }
     buslog::flush();
+    if (promptPending && buslog::empty()) {
+      printPrompt();
+      promptPending = false;
+    }
     delayMs(10);
   }
 }

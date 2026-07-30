@@ -267,6 +267,51 @@ void test_fake_transport_begin_succeeds() {
   TEST_ASSERT_TRUE(dev.hasGlobalInterval());
 }
 
+void test_feature_cache_failure_disables_all_optional_capabilities() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  fake.corruptNextCustomReadPec(cmd::CUSTOM_OPERATING_MODE_SUPPORT);
+
+  const Status st = dev.begin(fake.makeConfig());
+
+  TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_FALSE(dev.hasSerialNumber());
+  TEST_ASSERT_FALSE(dev.hasPartName());
+  TEST_ASSERT_FALSE(dev.hasAddressConfig());
+  TEST_ASSERT_FALSE(dev.hasGlobalInterval());
+  TEST_ASSERT_FALSE(dev.hasSpecificInterval());
+  TEST_ASSERT_FALSE(dev.hasFilterConfig());
+  TEST_ASSERT_FALSE(dev.hasErrorCode());
+  TEST_ASSERT_FALSE(dev.hasLowPowerMode());
+  TEST_ASSERT_FALSE(dev.hasE2Priority());
+  TEST_ASSERT_FALSE(dev.hasAutoAdjust());
+}
+
+void test_persistent_write_ranges_precede_capability_checks() {
+  FakeE2Transport fake;
+  fake.setMemory(cmd::CUSTOM_OPERATING_FUNCTIONS, 0);
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+
+  const uint32_t successBefore = dev.totalSuccess();
+  const uint32_t failuresBefore = dev.totalFailures();
+
+  Status st = dev.writeBusAddress(cmd::BUS_ADDRESS_MAX + 1);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::OUT_OF_RANGE),
+                          static_cast<uint8_t>(st.code));
+
+  st = dev.writeMeasurementInterval(cmd::INTERVAL_MIN_DECISEC - 1);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::OUT_OF_RANGE),
+                          static_cast<uint8_t>(st.code));
+
+  st = dev.writeMeasurementInterval(cmd::INTERVAL_MAX_DECISEC + 1);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::OUT_OF_RANGE),
+                          static_cast<uint8_t>(st.code));
+
+  TEST_ASSERT_EQUAL_UINT32(successBefore, dev.totalSuccess());
+  TEST_ASSERT_EQUAL_UINT32(failuresBefore, dev.totalFailures());
+}
+
 void test_clock_stretch_timeout_is_bounded_and_tracked() {
   FakeE2Transport fake;
   EE871::EE871 dev;
@@ -599,6 +644,8 @@ int main() {
   RUN_TEST(test_recover_requires_begin);
   RUN_TEST(test_high_level_helpers_check_initialization_first);
   RUN_TEST(test_fake_transport_begin_succeeds);
+  RUN_TEST(test_feature_cache_failure_disables_all_optional_capabilities);
+  RUN_TEST(test_persistent_write_ranges_precede_capability_checks);
   RUN_TEST(test_clock_stretch_timeout_is_bounded_and_tracked);
   RUN_TEST(test_pec_mismatch_probe_is_raw_but_tracked_read_updates_health);
   RUN_TEST(test_device_absent_probe_has_no_health_side_effect_tracked_read_fails);

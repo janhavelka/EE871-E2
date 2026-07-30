@@ -1,6 +1,6 @@
 # EE871-E2 Python HIL Runner
 
-Last updated: 2026-06-02
+Last updated: 2026-07-30
 
 `tools/ee871_hil_runner.py` drives the EE871 example serial CLI and records
 repeatable HIL evidence. The default plan is non-persistent. A runner `PASS`
@@ -10,10 +10,20 @@ claim without the matching bench record.
 
 Recorded bench evidence is summarized in
 [EE871_E2_HARDWARE_VALIDATION_MATRIX.md](EE871_E2_HARDWARE_VALIDATION_MATRIX.md).
-As of this update, ESP32-S3 safe HIL and persistent measurement-interval
-write/readback/restore have PASS evidence on `COM17`; ESP32-S2, pure ESP-IDF
-hardware HIL, power-cycle persistence, and physical fault/jig validation remain
-unrecorded.
+As of this update, the current ESP32-S3 `COM20` bench has PASS evidence for
+safe/extended commands, same-value interval/CO2 offset/CO2 gain
+write/readback, full bus diagnostics, range/capability guards, bus tracing,
+sniffing, mixed stress, operator-assisted unplug/replug recovery, SDA/SCL
+stuck-low faults, and a complete sensor/MCU power cycle with
+measurement-interval persistence. Historical COM17 evidence remains in the
+hardware matrix. A separate strict 10-minute COM20 post-power-cycle stability
+capture recorded one bounded NACK among 63 scheduled CLI commands and remains
+FAIL. Its first sample was approximately 66 seconds after MCU boot. A later
+clean immediate warm-up capture began 0.250 seconds after COM20 reappeared and
+passed: values/status transitioned from `0 ppm`/`0x08` through 4 seconds to
+`678 ppm`/`0x00` at 5 seconds. Manually normalized interactive output from an
+immediate 2,000-operation stability follow-up recorded zero errors; no raw
+follow-up transcript was retained.
 
 ## Default Safe Run
 
@@ -27,6 +37,8 @@ Common serial arguments:
 - `--baud` defaults to `115200`.
 - `--timeout` defaults to `8` seconds for initial serial drain.
 - `--command-timeout` defaults to `20` seconds for ordinary commands.
+- `--idle` defaults to `0.35` seconds after a complete CLI prompt, allowing
+  native USB CDC output to settle before the next command.
 - `--output-dir` defaults to `hil_logs`.
 - `--address` / `--device-address` records expected E2 address metadata only.
 - `--dry-run` writes artifacts without opening serial.
@@ -51,8 +63,14 @@ by driver contract, while `read`, `selftest`, and `stress` are tracked operation
 and can update driver health counters. `dirty` must remain clean for a normal
 safe run.
 
-Live serial runs currently use `pyserial` if it is not already present in the
-active Python environment:
+Live command completion requires the CLI prompt and, for value reads, the
+command-specific value line. If command framing times out, the runner stops the
+remaining plan so later commands cannot be credited with shifted responses.
+The serial port is opened with DTR and RTS already deasserted so attaching the
+runner does not intentionally reset native-USB ESP32 targets.
+
+Live serial runs require `pyserial`; install it in the active Python
+environment:
 
 ```powershell
 python -m pip install pyserial

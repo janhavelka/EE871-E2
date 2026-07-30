@@ -5,8 +5,8 @@ Last updated: 2026-06-02.
 Branch: `hardening/ee871-e2-industry-readiness`.
 
 Status: implementation files and CI contract are present. Pure ESP-IDF build
-success is still unproven until local `idf.py` builds or GitHub Actions
-`idf-build` matrix logs are recorded.
+proof is outside this recorded qualification; no local `idf.py` or GitHub
+Actions `idf-build` pass record is included here.
 
 ## Scope
 
@@ -49,14 +49,14 @@ success is still unproven until local `idf.py` builds or GitHub Actions
   monitor prompt, help sections, status blocks, and diagnostics remain aligned
   with the Arduino example.
 
-## Remaining Validation
+## Qualification Boundaries
 
 - `idf.py` was not on PATH in this shell, so local native ESP-IDF builds for
-  `esp32s3` and `esp32s2` remain pending.
+  `esp32s3` and `esp32s2` were not run.
 - GitHub Actions contains the intended `idf-build` matrix, but a passing run was
   not available locally when last checked.
 - Arduino ESP32-S3 safe HIL and persistent interval write/readback/restore have
-  bench evidence. Pure ESP-IDF hardware HIL remains pending.
-- Hardware smoke remains pending for pure ESP-IDF bus idle, line-level checks,
+  bench evidence. Pure ESP-IDF hardware HIL is not part of this qualification.
+- No pure ESP-IDF hardware smoke was run for bus idle, line-level checks,
   `begin()`, `probe()`, status reads, CO2 reads, missing-device timeout, and
   stuck-bus behavior.

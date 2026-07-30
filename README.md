@@ -17,32 +17,71 @@ examples, and HIL validation evidence.
 
 ## Release And Validation Status
 
-Version metadata is set to `1.0.0` for this release candidate. The driver is
+The latest released version is `1.0.0`; the current checkout also contains the
+changes listed under `[Unreleased]` in the changelog. The driver is
 production-oriented and validation-backed for the tested ESP32-S3/EE871 bench
 setup, but it is not a fully field-proven driver across every physical fault
 case.
 
 Recorded evidence:
 
-- Native tests: 31 passing.
+- Native tests: 33 passing; consolidated HIL-runner parser tests: 27 passing.
 - Arduino PlatformIO builds: `ex_bringup_s3` and `ex_bringup_s2` pass locally
   with the TunnelMonitor-node platform stack: pioarduino
   `platform-espressif32` `54.03.20`, Arduino-ESP32 `3.2.0`, and ESP-IDF
   `5.4.1`.
+- The current COM20 target was detected as ESP32-S3 revision 0.2 with 4 MB
+  embedded flash and 2 MB embedded QSPI PSRAM; the S3 PlatformIO environment
+  configures that QSPI PSRAM explicitly. The final firmware runtime report
+  confirmed 4,194,304 bytes flash and PSRAM ready with 2,097,152 bytes.
+- ESP32-S3 COM20 safe plus extended HIL: 33/33 PASS, including `selftest`
+  27/27, repeated reads/recovery, `stress 50` 50/50, and `stress 500` 500/500.
+- ESP32-S3 COM20 same-value persistent write/readback HIL: 25/25 PASS for
+  interval `150 ds`, CO2 offset `0 ppm`, and CO2 gain `32768`; dirty state
+  remained clean.
+- ESP32-S3 COM20 niche diagnostics: capability/range guards 11/11 PASS,
+  trace/sniffer/`stress_mix 500` 11/11 PASS, address 0 found by the full scan,
+  and all six in-spec timing points plus two out-of-spec characterization
+  points responded.
+- ESP32-S3 COM20 operator-assisted physical HIL: absent-sensor boot, hot
+  unplug/OFFLINE/replug recovery, SDA stuck-low, SCL stuck-low timeout, and
+  a complete sensor/MCU power cycle with measurement-interval persistence all
+  PASS. The temporary measurement interval was restored from `160 ds` to its
+  `150 ds` baseline.
+- ESP32-S3 COM20 immediate warm-up HIL: PASS. Sampling began 0.250 s after
+  COM20 reappeared; MV3/MV4 were `0 ppm` with status `0x08` through 4 s, then
+  `678 ppm` with status `0x00` at 5 s. All 33 scheduled CLI commands were
+  framed correctly; final health was READY with 65 transport successes,
+  zero failures, clean persistent state, and interval `150 ds`. A separate
+  delayed-start attempt recorded one bounded fast-read `NACK` at 20.094 s and
+  recovered immediately; it remains in the attempt ledger.
+- The strict 10-minute post-power-cycle stability capture recorded one bounded
+  `NACK` at t=330 s and therefore remains FAIL under its zero-error criterion;
+  the other 62 scheduled CLI commands succeeded. Manually normalized
+  interactive output from immediate `stress_mix 1000` and `stress 1000`
+  follow-ups recorded 1000/1000 for each, so the transient was not reproduced.
 - ESP32-S3 safe default HIL: PASS on `COM17`.
 - ESP32-S3 extended safe HIL: PASS on `COM17`.
 - ESP32-S3 persistent measurement interval write/readback/restore: PASS on
   `COM17`.
-- Physical unplug/replug recovery: PASS, operator-confirmed manual test; no
-  automated transcript is recorded.
+- Historical COM17 physical unplug/replug recovery: PASS, operator-confirmed
+  manual test; no automated transcript is recorded for that historical run.
 
-Remaining documented gaps:
+The COM20 artifacts identify their exact firmware/build metadata. The final
+repository cleanup changed example-only CLI input/sniffer structure and
+documentation after those captures; native tests, parser tests, and both
+Arduino target builds were rerun, but no new hardware transcript was claimed.
 
-- Pure ESP-IDF build success must be verified by GitHub Actions or local
-  `idf.py` builds.
+Outside the current qualification scope:
+
+- Pure ESP-IDF build proof is outside this qualification; CI is configured,
+  but no local or GitHub Actions pass record is included here.
 - ESP32-S2 hardware HIL and pure ESP-IDF hardware HIL are not recorded.
-- Power-cycle persistence, CO2 calibration writes, bus-address write/recovery,
-  and stuck-line fault-jig tests are not recorded.
+- The COM20 EE871 does not advertise address configuration, so a successful bus
+  address write is not applicable to this sensor. The `NOT_SUPPORTED` feature
+  guard and invalid-address `OUT_OF_RANGE` guard are recorded.
+- Same-value CO2 offset/gain writes prove the command/readback path only; they
+  do not prove calibration capability, calibration correctness, or accuracy.
 
 ## E2 Bus, Not Hardware I2C
 
@@ -50,6 +89,10 @@ EE871-E2 uses GPIO-style open-drain E2 signaling. The library does not use
 Arduino `Wire`, ESP-IDF `driver/i2c_master`, or a hardware I2C peripheral.
 Applications provide `setScl`, `setSda`, `readScl`, `readSda`, and `delayUs`
 callbacks through `Config`.
+
+Provide external 4.7 kOhm to 100 kOhm pull-ups to a 3.6-5.2 V E2 bus supply.
+Use a bidirectional open-drain level shifter between that bus and a 3.3 V
+ESP32; do not rely on direct 5 V connection to ESP32 GPIO.
 
 `Config::deviceAddress` is the 0-7 E2 protocol address encoded into the E2
 control byte. It is not an ESP-IDF or Arduino I2C device address.
@@ -144,15 +187,17 @@ void setup() {
 
 void loop() {
   sensor.tick(millis());
-
-  uint16_t ppm = 0;
-  if (sensor.readCo2Average(ppm).ok()) {
-    Serial.printf("CO2: %u ppm\n", ppm);
-  }
-
-  delay(1000);
+  delay(100);
 }
 ```
+
+This quick start proves transport setup and identity only. `readCo2Fast()` and
+`readCo2Average()` are raw MV3/MV4 reads: they do not check status, warm-up,
+freshness, or the product-specific valid ppm range. A sampling application
+should wait for its warm-up policy, read the selected measured value first,
+read `readStatus()` second, reject status bit 3 via `hasCo2Error()`, and apply
+its own range/staleness policy. Reading status can itself trigger the next
+measurement and reset the sensor interval counter.
 
 ## Health Monitoring
 
@@ -262,6 +307,8 @@ the release archive URL in `platformio.ini` makes Arduino-ESP32 `3.2.0`,
 ESP-IDF `5.4.1`, and the GCC `14.2.0` toolchain reproducible. This pin applies
 to this repository's examples and HIL firmware; consuming applications retain
 control of their own platform pin.
+The S3 flash/PSRAM settings in this repository describe the tested 4 MB flash /
+2 MB QSPI-PSRAM board; override them for a different ESP32-S3 module.
 
 ```bash
 pio test -e native
@@ -270,6 +317,9 @@ pio run -e ex_bringup_s2
 python tools/check_core_timing_guard.py
 python tools/check_cli_contract.py
 python tools/check_idf_example_contract.py
+python scripts/generate_version.py check
+python -m unittest discover -s test -p "test_hil_runner_parser.py"
+doxygen Doxyfile
 ```
 
 When ESP-IDF is installed, build the IDF example from
@@ -297,7 +347,9 @@ python tools/ee871_hil_runner.py --port COMx --include-persistent-writes --confi
 The default runner sequence is non-persistent and records `version`, `help`,
 `probe`, `read`, `selftest`, `drv`, `dirty`, `stress 50`, final `drv`, and
 final `dirty`. It writes a raw transcript, `summary.json`, and `summary.md`.
-Dry-runs and operator/fault steps are never reported as hardware `PASS`.
+Dry-runs never report hardware `PASS`; acknowledging an operator prompt alone
+is review-required and is not automatically promoted to PASS. Separately
+reviewed manual fault evidence can be recorded in the hardware matrix.
 
 ## Documentation
 

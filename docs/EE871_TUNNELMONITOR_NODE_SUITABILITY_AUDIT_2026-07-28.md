@@ -1,5 +1,10 @@
 # EE871-E2 Suitability Audit for TunnelMonitor-node
 
+> Point-in-time audit of EE871-E2 commit `b5588be`. The later
+> pioarduino-platform alignment and COM20 HIL runs add compatibility and bench
+> evidence; they do not, by themselves, implement or close the P0 API and
+> integration findings recorded here.
+
 Date: 2026-07-28
 Audit mode: cross-repository, report only
 Hardware used during this audit: none

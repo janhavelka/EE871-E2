@@ -487,7 +487,17 @@ def response_has_completion(command: str, text: str) -> bool:
         return "EE871 library version:" in clean
     if command == "help" or command == "?":
         return "EE871-E2 CLI Help" in clean and "selftest" in clean
-    if command in {"read", "probe", "recover", "interval", "offset", "gain", "addr"}:
+    if command == "read":
+        return "CO2 avg:" in clean
+    if command == "interval":
+        return "Interval:" in clean
+    if command == "offset":
+        return "CO2 offset:" in clean
+    if command == "gain":
+        return "CO2 gain:" in clean
+    if command == "addr":
+        return "Bus address:" in clean
+    if command in {"probe", "recover"}:
         return "Status:" in clean
     return "Status:" in clean or PROMPT_RE.search(clean) is not None
 
@@ -515,12 +525,21 @@ def read_until_ready(
             joined = "".join(chunks)
             if command is not None and response_has_completion(command, joined):
                 completion_seen = True
-            if PROMPT_RE.search(strip_ansi(joined)):
+            if (
+                PROMPT_RE.search(strip_ansi(joined))
+                and (command is None or completion_seen)
+            ):
                 return joined, "prompt", False
             continue
-        if data_seen and completion_seen and (time.monotonic() - last_data_at) >= idle_s:
+        now = time.monotonic()
+        if (
+            data_seen
+            and completion_seen
+            and not require_prompt
+            and (now - last_data_at) >= idle_s
+        ):
             return "".join(chunks), "completion-idle" if command else "serial-idle", False
-        if data_seen and command is None and not require_prompt and (time.monotonic() - last_data_at) >= idle_s:
+        if data_seen and command is None and not require_prompt and (now - last_data_at) >= idle_s:
             return "".join(chunks), "serial-idle", False
 
     return "".join(chunks), "timeout", True
@@ -769,8 +788,16 @@ def run_serial_command(
     flush = getattr(ser, "flush", None)
     if callable(flush):
         flush()
-    response, wait_reason, timed_out = read_until_ready(ser, timeout_s, args.idle, command)
+    response, wait_reason, timed_out = read_until_ready(
+        ser,
+        timeout_s,
+        args.idle,
+        command,
+        require_prompt=True,
+    )
     elapsed = time.monotonic() - start
+    if wait_reason == "prompt" and args.idle > 0:
+        time.sleep(args.idle)
     parsed = parse_response(command, response)
     result, reason = classify_response(spec, response, timed_out, parsed, state)
     return result_row(spec, command, result, reason, elapsed, response, wait_reason, parsed)
@@ -986,12 +1013,17 @@ def open_serial(args: argparse.Namespace) -> object:
     except ImportError:
         print("pyserial is required for real serial HIL runs. Install it with: python -m pip install pyserial", file=sys.stderr)
         raise SystemExit(2)
-    ser = serial.Serial(port=args.port, baudrate=args.baud, timeout=0.05, write_timeout=2.0)
+    ser = serial.Serial()
     try:
         ser.dtr = False
         ser.rts = False
     except (AttributeError, OSError):
         pass
+    ser.port = args.port
+    ser.baudrate = args.baud
+    ser.timeout = 0.05
+    ser.write_timeout = 2.0
+    ser.open()
     return ser
 
 
@@ -1001,7 +1033,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--baud", type=int, default=DEFAULT_BAUD)
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_S, help="Startup/initial serial drain timeout in seconds.")
     parser.add_argument("--command-timeout", type=float, default=DEFAULT_COMMAND_TIMEOUT_S)
-    parser.add_argument("--idle", type=float, default=DEFAULT_IDLE_S, help="Idle gap after completion token before a command is considered complete.")
+    parser.add_argument("--idle", type=float, default=DEFAULT_IDLE_S, help="Settle delay after a complete CLI prompt before sending the next command.")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--address", "--device-address", dest="device_address", default="0", help="Expected E2 device address metadata. This does not retarget firmware.")
     parser.add_argument("--dry-run", action="store_true")
@@ -1079,6 +1111,8 @@ def main(argv: list[str] | None = None) -> int:
             ser = open_serial(args)
             try:
                 initial_output, _, _ = read_until_ready(ser, args.timeout, args.idle, None, require_prompt=True)
+                if args.idle > 0:
+                    time.sleep(args.idle)
                 for spec in plan:
                     if spec.operator_required or not spec.send:
                         row = run_operator_step(spec)
@@ -1097,6 +1131,8 @@ def main(argv: list[str] | None = None) -> int:
                     results.append(row)
                     update_state(state, row)
                     record_persistent_write_expectation(row, state)
+                    if row.get("wait_reason") == "timeout":
+                        break
             finally:
                 close = getattr(ser, "close", None)
                 if callable(close):

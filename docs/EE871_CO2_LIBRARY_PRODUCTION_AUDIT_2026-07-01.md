@@ -1,5 +1,11 @@
 # EE871 CO2 Library Production Audit - 2026-07-01
 
+> Historical point-in-time audit. Later implementation and COM20 HIL work has
+> addressed some findings, but not every production gap. Use
+> [README.md](README.md) for document routing and
+> [EE871_E2_HARDWARE_VALIDATION_MATRIX.md](EE871_E2_HARDWARE_VALIDATION_MATRIX.md)
+> for the current evidence ledger; verify each finding against current code.
+
 ## Scope
 
 Audited the EE871-E2 library for production CO2 sensor use against the repository guidelines, extracted E2/EE871 protocol notes, public API contracts, tests, examples, and packaging metadata.
@@ -443,4 +449,3 @@ The passing tests/builds do not cover the high-risk behavioral gaps above.
 5. Harden persistent-write dirty handling and CLI parsing/unlock.
 6. Expand fake coverage around the production contracts.
 7. Re-run and update validation evidence after fixes.
-

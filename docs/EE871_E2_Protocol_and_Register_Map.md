@@ -593,19 +593,23 @@ Implement the driver using a tiny hardware abstraction with:
 - `read_scl()` / `read_sda()` to support clock stretching checks
 - `delay_us(t)` (or equivalent) to control bit timing
 
-### 13.2 Suggested public API
-Minimum API to implement:
-- `bool e2_read_byte(uint8_t control_byte, uint8_t* out_data)`
-- `bool e2_read_u16(uint8_t control_low, uint8_t control_high, uint16_t* out)`
-- `bool e2_set_custom_ptr(uint16_t addr)`
-- `bool e2_custom_read(uint16_t addr, uint8_t* out)`
-- `bool e2_custom_read_n(uint16_t addr, uint8_t* buf, size_t n)`
-- `bool e2_custom_write(uint8_t addr, uint8_t value)` (and verify)
-- EE871 helpers:
-  - `bool ee871_read_co2_fast(uint16_t* ppm)`  // MV3
-  - `bool ee871_read_co2_avg(uint16_t* ppm)`   // MV4
-  - `bool ee871_read_status(uint8_t* status)`  // 0x71
-  - `bool ee871_read_error_code(uint8_t* code)`// custom 0xC1 (if supported)
+### 13.2 Current C++ API mapping
+
+The maintained implementation returns `EE871::Status`, preserving precise
+transport, validation, capability, and protocol failures:
+
+- Protocol/custom memory: `readControlByte()`, `readU16()`,
+  `setCustomPointer()`, `customRead()`, and `customWrite()`.
+- Raw measurements: `readCo2Fast()` for MV3 and `readCo2Average()` for MV4.
+- Status/error: `readStatus()`, `hasCo2Error()`, and `readErrorCode()`.
+- Lifecycle/recovery: `begin()`, `tick()`, `end()`, `probe()`, `recover()`,
+  `busReset()`, and `checkBusIdle()`.
+- Persistent maintenance: typed helpers such as
+  `writeMeasurementInterval()`, with dirty/resync diagnostics for uncertain
+  multi-byte state.
+
+This section maps the protocol to the current library; it is not a generic C
+API compatibility requirement.
 
 ### 13.3 Mandatory robustness rules
 - Timeouts for clock stretching:

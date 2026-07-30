@@ -378,45 +378,75 @@ inline uint8_t readByteRaw(const EE871::Config& cfg, bool sendAck, bool verbose 
 
 /// Scan all 8 possible E2 device addresses
 inline void scanAddresses(const EE871::Config& cfg) {
+  static constexpr uint8_t SCAN_ATTEMPTS = 5;
+  static constexpr uint16_t SCAN_RETRY_GAP_MS = 200;
+
   Serial.printf("%s=== E2 Address Scanner ===%s\n", LOG_COLOR_CYAN, LOG_COLOR_RESET);
-  Serial.println("Scanning addresses 0-7 with status read (0x7x)...\n");
-  
-  int found = 0;
-  
-  for (uint8_t addr = 0; addr < 8; addr++) {
-    // Status read: main=0x7, addr, read=1
-    uint8_t ctrlByte = EE871::cmd::makeControlRead(EE871::cmd::MAIN_STATUS, addr);
-    
-    sendStart(cfg);
-    bool ack = sendByteRaw(cfg, ctrlByte, false);
-    
-    if (ack) {
-      // Read data byte
-      uint8_t data = readByteRaw(cfg, true, false);  // ACK
-      uint8_t pec = readByteRaw(cfg, false, false);  // NACK
-      sendStop(cfg);
-      
-      uint8_t expectedPec = (ctrlByte + data) & 0xFF;
-      bool pecOk = (pec == expectedPec);
-      
+  Serial.printf("Scanning addresses 0-7 with status read (0x7x), up to %u attempts...\n\n",
+                static_cast<unsigned>(SCAN_ATTEMPTS));
+
+  bool found[8] = {};
+  bool pecOk[8] = {};
+  uint8_t status[8] = {};
+
+  for (uint8_t attempt = 0; attempt < SCAN_ATTEMPTS; ++attempt) {
+    for (uint8_t addr = 0; addr < 8; ++addr) {
+      if (found[addr]) {
+        continue;
+      }
+
+      const uint8_t ctrlByte =
+          EE871::cmd::makeControlRead(EE871::cmd::MAIN_STATUS, addr);
+
+      sendStart(cfg);
+      const bool ack = sendByteRaw(cfg, ctrlByte, false);
+
+      if (ack) {
+        status[addr] = readByteRaw(cfg, true, false);  // ACK
+        const uint8_t pec = readByteRaw(cfg, false, false);  // NACK
+        sendStop(cfg);
+
+        const uint8_t expectedPec =
+            static_cast<uint8_t>(ctrlByte + status[addr]);
+        pecOk[addr] = (pec == expectedPec);
+        found[addr] = true;
+      } else {
+        sendStop(cfg);
+      }
+
+      delay(10);
+    }
+
+    if (attempt + 1 < SCAN_ATTEMPTS) {
+      delay(SCAN_RETRY_GAP_MS);
+    }
+  }
+
+  int foundCount = 0;
+  for (uint8_t addr = 0; addr < 8; ++addr) {
+    if (found[addr]) {
       Serial.printf("  Address %d: %sFOUND%s Status=0x%02X, PEC=%s%s%s\n", 
                     addr,
                     LOG_COLOR_GREEN,
                     LOG_COLOR_RESET,
-                    data,
-                    okColor(pecOk),
-                    pecOk ? "OK" : "MISMATCH",
+                    status[addr],
+                    okColor(pecOk[addr]),
+                    pecOk[addr] ? "OK" : "MISMATCH",
                     LOG_COLOR_RESET);
-      found++;
+      ++foundCount;
     } else {
-      sendStop(cfg);
-      Serial.printf("  Address %d: %sNo response (NACK)%s\n", addr, neutralColor(), LOG_COLOR_RESET);
+      Serial.printf("  Address %d: %sNo response after %u attempts (NACK)%s\n",
+                    addr,
+                    neutralColor(),
+                    static_cast<unsigned>(SCAN_ATTEMPTS),
+                    LOG_COLOR_RESET);
     }
-    
-    delay(10);  // Small gap between attempts
   }
-  
-  Serial.printf("\nFound %s%d%s device(s)\n", okColor(found > 0), found, LOG_COLOR_RESET);
+
+  Serial.printf("\nFound %s%d%s device(s)\n",
+                okColor(foundCount > 0),
+                foundCount,
+                LOG_COLOR_RESET);
 }
 
 // ============================================================================
@@ -748,7 +778,6 @@ struct SnifferState {
   
   // For value tracking
   uint8_t lastMainCmd = 0;
-  uint8_t lastDataByte = 0;
   uint8_t pendingLowByte = 0;
   bool haveLowByte = false;
   uint8_t lowByteCmd = 0;
@@ -847,7 +876,6 @@ inline void snifferCallback(bool scl, bool sda) {
         // Data byte - check if it's data or PEC
         if (s.byteIndex == 1) {
           // First data byte
-          s.lastDataByte = s.currentByte;
           Serial.printf(" data=0x%02X(%u)", s.currentByte, s.currentByte);
           
           // Track for 16-bit assembly
@@ -883,49 +911,39 @@ inline void snifferCallback(bool scl, bool sda) {
   s.lastSda = sda;
 }
 
-/// Sniffer control class
-class BusSniffer {
-public:
-  void start(const EE871::Config* cfg) {
-    auto& s = snifferState();
-    s.lastScl = cfg->readScl(cfg->busUser);
-    s.lastSda = cfg->readSda(cfg->busUser);
-    s.transitions = 0;
-    s.startMs = millis();
-    s.state = SnifferState::State::IDLE;
-    s.currentByte = 0;
-    s.bitCount = 0;
-    s.isFirstByte = true;
-    s.haveLowByte = false;
-    s.active = true;
-    
-    // Register callback with transport
-    transport::setSnifferCallback(snifferCallback);
-    
-    Serial.println("[SNIFF] ON - 'sniff 0' to stop");
-  }
-  
-  void stop() {
-    auto& s = snifferState();
-    if (s.active) {
-      s.active = false;
-      transport::setSnifferCallback(nullptr);
-      uint32_t elapsed = millis() - s.startMs;
-      Serial.printf("\n[SNIFF] OFF (%lu ms, %lu edges)\n",
-                    static_cast<unsigned long>(elapsed),
-                    static_cast<unsigned long>(s.transitions));
-    }
-  }
-  
-  bool isActive() const { return snifferState().active; }
-  
-  void tick() {}
-};
+inline void startSniffer(const EE871::Config& cfg) {
+  auto& s = snifferState();
+  s.lastScl = cfg.readScl(cfg.busUser);
+  s.lastSda = cfg.readSda(cfg.busUser);
+  s.transitions = 0;
+  s.startMs = millis();
+  s.state = SnifferState::State::IDLE;
+  s.currentByte = 0;
+  s.bitCount = 0;
+  s.isFirstByte = true;
+  s.haveLowByte = false;
+  s.active = true;
 
-/// Global sniffer instance for use in examples
-inline BusSniffer& sniffer() {
-  static BusSniffer instance;
-  return instance;
+  transport::setSnifferCallback(snifferCallback);
+  Serial.println("[SNIFF] ON - 'sniff 0' to stop");
+}
+
+inline void stopSniffer() {
+  auto& s = snifferState();
+  if (!s.active) {
+    return;
+  }
+
+  s.active = false;
+  transport::setSnifferCallback(nullptr);
+  const uint32_t elapsed = millis() - s.startMs;
+  Serial.printf("\n[SNIFF] OFF (%lu ms, %lu edges)\n",
+                static_cast<unsigned long>(elapsed),
+                static_cast<unsigned long>(s.transitions));
+}
+
+inline bool isSnifferActive() {
+  return snifferState().active;
 }
 
 } // namespace e2diag

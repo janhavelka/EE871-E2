@@ -10,12 +10,11 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 REQUIRED_COMMON = [
     "BoardConfig.h",
     "BuildConfig.h",
+    "E2Diagnostics.h",
+    "E2Transport.h",
     "Log.h",
-    "TransportAdapter.h",
-    "BusDiag.h",
     "CliShell.h",
     "CliStyle.h",
-    "HealthView.h",
 ]
 
 MANDATORY_COMMANDS = [
@@ -44,6 +43,7 @@ REQUIRED_FRAGMENTS = [
 ]
 
 REQUIRED_PATTERNS = {
+    "bounded CLI line reader": r"cli_shell::readLine\s*\(",
     "dirty help entry": r'printHelpItem\(\s*"dirty"\s*,',
     "resync help entry": r'printHelpItem\(\s*"resync"\s*,',
     "dirty command dispatch": r'trimmed\s*==\s*"dirty"',

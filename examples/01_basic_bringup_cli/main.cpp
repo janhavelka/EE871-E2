@@ -4,6 +4,7 @@
 
 #include <Arduino.h>
 #include <stdlib.h>
+#include "common/CliShell.h"
 #include "common/CliStyle.h"
 #include "common/Log.h"
 #include "common/BoardConfig.h"
@@ -61,6 +62,10 @@ inline void clear() {
 
 inline void setEnabled(bool enabled) {
   traceEnabled = enabled;
+}
+
+inline bool empty() {
+  return !traceEnabled || traceCount == 0;
 }
 
 inline void push(EventType type, uint8_t value, uint16_t data) {
@@ -539,6 +544,12 @@ void printHelp() {
 void printVersionInfo() {
   Serial.println("=== Version Info ===");
   Serial.printf("  Example firmware build: %s %s\n", __DATE__, __TIME__);
+  Serial.printf("  MCU: %s rev %u, flash %lu bytes, PSRAM %s (%lu bytes)\n",
+                ESP.getChipModel(),
+                static_cast<unsigned int>(ESP.getChipRevision()),
+                static_cast<unsigned long>(ESP.getFlashChipSize()),
+                psramFound() ? "ready" : "not available",
+                static_cast<unsigned long>(ESP.getPsramSize()));
   Serial.printf("  EE871 library version: %s\n", EE871::VERSION);
   Serial.printf("  EE871 library full: %s\n", EE871::VERSION_FULL);
   Serial.printf("  EE871 library build: %s\n", EE871::BUILD_TIMESTAMP);
@@ -1454,10 +1465,10 @@ void processCommand(const String& cmd) {
     e2diag::testClockPulses(deviceCfg, 10);
   } else if (trimmed == "sniff") {
     // Toggle
-    if (e2diag::sniffer().isActive()) {
-      e2diag::sniffer().stop();
+    if (e2diag::isSnifferActive()) {
+      e2diag::stopSniffer();
     } else {
-      e2diag::sniffer().start(&deviceCfg);
+      e2diag::startSniffer(deviceCfg);
     }
   } else if (trimmed == "scan") {
     e2diag::scanAddresses(deviceCfg);
@@ -1504,10 +1515,7 @@ void setup() {
   Serial.println();
   Serial.println("=== EE871 Bringup Example ===");
 
-  if (!board::initE2()) {
-    Serial.println("[E] Failed to initialize E2 pins");
-    return;
-  }
+  board::initE2();
 
   Serial.printf("[I] E2 initialized (DATA=%d, CLOCK=%d)\n", board::E2_DATA, board::E2_CLOCK);
 
@@ -1547,21 +1555,18 @@ void setup() {
 
 void loop() {
   device.tick(millis());
-  e2diag::sniffer().tick();  // Background sniffer (if active)
 
-  static String inputBuffer;
-  while (Serial.available()) {
-    char c = Serial.read();
-    if (c == '\n' || c == '\r') {
-      if (inputBuffer.length() > 0) {
-        processCommand(inputBuffer);
-        inputBuffer = "";
-        cli::printPrompt();
-      }
-    } else {
-      inputBuffer += c;
-    }
+  static String inputLine;
+  static bool promptPending = false;
+  if (!promptPending && cli_shell::readLine(inputLine)) {
+    processCommand(inputLine);
+    inputLine = "";
+    promptPending = true;
   }
 
   buslog::flush();
+  if (promptPending && buslog::empty()) {
+    cli::printPrompt();
+    promptPending = false;
+  }
 }

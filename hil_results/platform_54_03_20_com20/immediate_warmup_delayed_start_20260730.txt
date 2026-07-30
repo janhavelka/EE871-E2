@@ -1,0 +1,198 @@
+EE871-E2 COM20 IMMEDIATE WARM-UP CAPTURE
+armed_utc=2026-07-30T14:47:20.229736+00:00
+waiting_for_port_disconnect=true
+port_disconnected_utc=2026-07-30T15:00:41.057690+00:00
+waiting_for_port_reconnect=true
+port_reconnected_utc=2026-07-30T15:00:46.796431+00:00
+disconnect_duration_s=5.750
+open_retry=could not open port 'COM20': FileNotFoundError(2, 'The system cannot find the file specified.', None, 2)
+startup_prompt_complete=false
+startup_prompt_after_port_s=12.094
+----- STARTUP -----
+
+##### SAMPLE 0 target_s=0 after_port_s=12.094 #####
+===== command=co2fast complete=true elapsed_ms=16.0 =====
+  Status: OK (code=0, detail=0)
+  Message: OK
+  CO2 fast: 626 ppm
+> 
+===== command=co2avg complete=true elapsed_ms=15.0 =====
+  Status: OK (code=0, detail=0)
+  Message: OK
+  CO2 avg: 626 ppm
+> 
+===== command=status complete=true elapsed_ms=16.0 =====
+  Status: OK (code=0, detail=0)
+  Message: OK
+Status: 0x00
+  hasCo2Error(): NO
+> 
+##### SAMPLE 1 target_s=2 after_port_s=14.094 #####
+===== command=co2fast complete=true elapsed_ms=16.0 =====
+  Status: OK (code=0, detail=0)
+  Message: OK
+  CO2 fast: 626 ppm
+> 
+===== command=co2avg complete=true elapsed_ms=15.0 =====
+  Status: OK (code=0, detail=0)
+  Message: OK
+  CO2 avg: 626 ppm
+> 
+===== command=status complete=true elapsed_ms=0.0 =====
+  Status: OK (code=0, detail=0)
+  Message: OK
+Status: 0x00
+  hasCo2Error(): NO
+> 
+##### SAMPLE 2 target_s=4 after_port_s=16.094 #####
+===== command=co2fast complete=true elapsed_ms=16.0 =====
+  Status: OK (code=0, detail=0)
+  Message: OK
+  CO2 fast: 626 ppm
+> 
+===== command=co2avg complete=true elapsed_ms=15.0 =====
+  Status: OK (code=0, detail=0)
+  Message: OK
+  CO2 avg: 626 ppm
+> 
+===== command=status complete=true elapsed_ms=0.0 =====
+  Status: OK (code=0, detail=0)
+  Message: OK
+Status: 0x00
+  hasCo2Error(): NO
+> 
+##### SAMPLE 3 target_s=6 after_port_s=18.094 #####
+===== command=co2fast complete=true elapsed_ms=0.0 =====
+  Status: OK (code=0, detail=0)
+  Message: OK
+  CO2 fast: 626 ppm
+> 
+===== command=co2avg complete=true elapsed_ms=16.0 =====
+  Status: OK (code=0, detail=0)
+  Message: OK
+  CO2 avg: 626 ppm
+> 
+===== command=status complete=true elapsed_ms=15.0 =====
+  Status: OK (code=0, detail=0)
+  Message: OK
+Status: 0x00
+  hasCo2Error(): NO
+> 
+##### SAMPLE 4 target_s=8 after_port_s=20.094 #####
+===== command=co2fast complete=true elapsed_ms=0.0 =====
+  Status: NACK (code=8, detail=0)
+  Message: Control byte NACK
+> 
+===== command=co2avg complete=true elapsed_ms=16.0 =====
+  Status: OK (code=0, detail=0)
+  Message: OK
+  CO2 avg: 666 ppm
+> 
+===== command=status complete=true elapsed_ms=0.0 =====
+  Status: OK (code=0, detail=0)
+  Message: OK
+Status: 0x00
+  hasCo2Error(): NO
+> 
+##### SAMPLE 5 target_s=10 after_port_s=22.094 #####
+===== command=co2fast complete=true elapsed_ms=16.0 =====
+  Status: OK (code=0, detail=0)
+  Message: OK
+  CO2 fast: 666 ppm
+> 
+===== command=co2avg complete=true elapsed_ms=15.0 =====
+  Status: OK (code=0, detail=0)
+  Message: OK
+  CO2 avg: 666 ppm
+> 
+===== command=status complete=true elapsed_ms=0.0 =====
+  Status: OK (code=0, detail=0)
+  Message: OK
+Status: 0x00
+  hasCo2Error(): NO
+> 
+##### SAMPLE 6 target_s=12 after_port_s=24.094 #####
+===== command=co2fast complete=true elapsed_ms=16.0 =====
+  Status: OK (code=0, detail=0)
+  Message: OK
+  CO2 fast: 666 ppm
+> 
+===== command=co2avg complete=true elapsed_ms=15.0 =====
+  Status: OK (code=0, detail=0)
+  Message: OK
+  CO2 avg: 666 ppm
+> 
+===== command=status complete=true elapsed_ms=0.0 =====
+  Status: OK (code=0, detail=0)
+  Message: OK
+Status: 0x00
+  hasCo2Error(): NO
+> 
+##### SAMPLE 7 target_s=15 after_port_s=27.094 #####
+===== command=co2fast complete=true elapsed_ms=16.0 =====
+  Status: OK (code=0, detail=0)
+  Message: OK
+  CO2 fast: 666 ppm
+> 
+===== command=co2avg complete=true elapsed_ms=0.0 =====
+  Status: OK (code=0, detail=0)
+  Message: OK
+  CO2 avg: 666 ppm
+> 
+===== command=status complete=true elapsed_ms=15.0 =====
+  Status: OK (code=0, detail=0)
+  Message: OK
+Status: 0x00
+  hasCo2Error(): NO
+> 
+##### SAMPLE 8 target_s=20 after_port_s=32.094 #####
+===== command=co2fast complete=true elapsed_ms=0.0 =====
+  Status: OK (code=0, detail=0)
+  Message: OK
+  CO2 fast: 666 ppm
+> 
+===== command=co2avg complete=true elapsed_ms=16.0 =====
+  Status: OK (code=0, detail=0)
+  Message: OK
+  CO2 avg: 666 ppm
+> 
+===== command=status complete=true elapsed_ms=15.0 =====
+  Status: OK (code=0, detail=0)
+  Message: OK
+Status: 0x00
+  hasCo2Error(): NO
+> 
+===== FINAL command=drv complete=true elapsed_ms=0.0 =====
+=== Driver Health ===
+  State: READY
+  Online: yes
+  Consecutive failures: 0
+  Total success: 43
+  Total failures: 1
+  Success rate: 97.7%
+  Last OK: 8 ms ago (at 32466 ms)
+  Last error: 12032 ms ago (at 20442 ms)
+  Error code: NACK
+  Error detail: 0
+  Error msg: Control byte NACK
+  persistentConfigDirty: no
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  persistentConfigDirtyError message: OK
+  resyncNeeded: no
+> 
+===== FINAL command=dirty complete=true elapsed_ms=0.0 =====
+=== Persistent Config Dirty State ===
+  persistentConfigDirty: no
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  persistentConfigDirtyError message: OK
+  resyncNeeded: no
+> 
+===== FINAL command=interval complete=true elapsed_ms=32.0 =====
+  Status: OK (code=0, detail=0)
+  Message: OK
+  Interval: 150 deciseconds (15.0 s)
+> 
+FAILURES:
+- startup prompt missing
+- sample 4 co2fast: non-OK response
+RESULT=FAIL
