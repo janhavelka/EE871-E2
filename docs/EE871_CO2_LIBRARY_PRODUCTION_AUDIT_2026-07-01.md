@@ -374,7 +374,8 @@ Add a table-driven native fake coverage matrix for every public field-facing API
 **Evidence**
 
 - README says version metadata is `1.0.0` and lists HIL PASS evidence: `README.md:20`.
-- Stored safe HIL artifact reports library `0.3.0`: `hil_results/safe_default/ee871_20260601T185912Z/summary.md:33`.
+- The original safe HIL artifact reported library `0.3.0`; it was later
+  condensed into `hil_results/README.md` and remains in Git history.
 - The deeper hardware matrix notes the caveat: `docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md:177`.
 - Functional matrix rows are labeled `S2, S3` while the summary says S2 HIL is not recorded: `docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md:21`, `docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md:276`.
 - Package metadata advertises ESP-IDF support: `library.json:38`, `idf_component.yml:5`, while README says pure ESP-IDF build proof remains to be verified: `README.md:39`.

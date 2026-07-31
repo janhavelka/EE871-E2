@@ -233,9 +233,8 @@ python tools/ee871_hil_runner.py --port COMx --include-power-cycle
 - Final state: READY, online, 3,109 tracked successes, zero consecutive/total
   failures, persistent state clean; selftest 26/0/1, repeated stress 500/500,
   mixed stress 500/500.
-- Evidence:
-  `hil_results/platform_55_03_311_com20/full_hil_final_exact_commit/ee871_20260731T094932Z/`.
-- Two preceding review runs are retained beside the PASS artifact. They proved
+- Evidence is condensed in `hil_results/README.md`.
+- Two preceding review runs proved
   that the example scanner accepted ACK-only malformed frames and that
   `libtest` duplicated an incomplete raw bus path. The scanner now requires
   valid PEC, and `libtest` now uses the production driver.
@@ -283,16 +282,7 @@ Arduino diagnostic CLI on `COM20`.
   level shifter, supply voltage, ambient conditions, and cable length were not
   independently measured and must not be inferred from PASS.
 
-Prior `55.03.39` COM20 artifacts:
-
-- Targeted 144-command HIL:
-  `hil_results/platform_55_03_39_com20/final_v1_0_1_exact_source/ee871_20260731T072912Z/`
-- Serial-only 10,000-round-trip discriminator:
-  `hil_results/platform_55_03_39_com20/serial_discriminator_v1_0_1_10000/`
-- Accelerated scheduled-read regression:
-  `hil_results/platform_55_03_39_com20/final_v1_0_1_scheduled_nack_9min/`
-- Unsupported operating-mode guard:
-  `hil_results/platform_55_03_39_com20/operating_mode_fail_closed_v1_0_1/`
+Prior `55.03.39` COM20 evidence is condensed in `hil_results/README.md`.
 
 ## Historical TunnelMonitor-Parity Evidence (`54.03.20`)
 
@@ -354,37 +344,9 @@ TunnelMonitor-node parity stack.
   measurement-interval persistence. The interval was changed from `150 ds` to
   `160 ds`, persisted across the cycle, and restored to `150 ds`.
 
-Historical `54.03.20` COM20 artifacts:
-
-- Curated directory index and evidence boundaries:
-  `hil_results/platform_54_03_20_com20/README.md`
-- Safe/extended retained command summary:
-  `hil_results/platform_54_03_20_com20/safe_extended_settle_final/ee871_20260730T105954Z/`
-- Same-value persistent-register retained command summary:
-  `hil_results/platform_54_03_20_com20/persistent_calibration_settle_final/ee871_20260730T105933Z/`
-- Curated identity/capability, guard, bus-diagnostic, trace/sniffer,
-  mixed-stress, and same-value part-name report:
-  `hil_results/platform_54_03_20_com20/niche_diagnostics_20260730.md`
-- Final runtime-memory safe smoke:
-  `hil_results/platform_54_03_20_com20/runtime_psram_final/ee871_20260730T110655Z/`
-- Operator-assisted physical fault and power-cycle report:
-  `hil_results/platform_54_03_20_com20/operator_physical_faults_20260730.md`
-- Strict post-power-cycle stability/stale capture:
-  `hil_results/platform_54_03_20_com20/post_power_cycle_stability_20260730.txt`
-- Evidence limitations and manually normalized follow-up:
-  `hil_results/platform_54_03_20_com20/warmup_stale_followup_20260730.md`
-- Immediate warm-up raw capture:
-  `hil_results/platform_54_03_20_com20/immediate_warmup_final_20260730.txt`
-- Delayed-start warm-up attempt with bounded NACK:
-  `hil_results/platform_54_03_20_com20/immediate_warmup_delayed_start_20260730.txt`
-- Immediate warm-up attempt/evidence classification:
-  `hil_results/platform_54_03_20_com20/immediate_warmup_attempts_20260730.md`
-- Post-prompt-framing-fix automated safe run:
-  `hil_results/platform_54_03_20_com20/prompt_newline_postfix/ee871_20260730T152316Z/`
-- Eight-hour soak preflight:
-  `hil_results/platform_54_03_20_com20/overnight_preflight/`
-- Eight-hour strict-FAIL soak:
-  `hil_results/platform_54_03_20_com20/overnight_soak_20260730T173126Z/`
+Historical `54.03.20` COM20 evidence is condensed in
+`hil_results/README.md`. Detailed generated artifacts remain recoverable from
+Git commit `3687e49`.
 
 Earlier COM17 evidence follows.
 
@@ -419,12 +381,7 @@ exists for this manual physical recovery step.
 
 Retained artifacts:
 
-- Safe default command summary:
-  `hil_results/safe_default/ee871_20260601T185912Z/summary.md`
-- Extended safe command summary:
-  `hil_results/extended_safe/ee871_20260601T185921Z/summary.md`
-- Manual resync command summary:
-  `hil_results/manual_resync/ee871_20260601T190024Z/summary.md`
+- Condensed command evidence: `hil_results/README.md`.
 
 Persistent configuration validation was recorded on 2026-06-01 after explicit
 bench-unit approval. The bench run changed only the measurement interval, then
@@ -463,8 +420,7 @@ restored the baseline:
 
 Retained artifact:
 
-- Persistent validation command summary:
-  `hil_results/persistent_config_validation/ee871_20260601T193500Z_interval_restore/summary.md`
+- Condensed persistent-validation evidence: `hil_results/README.md`.
 
 Stuck-line fault/jig tests were not run in this historical COM17 session; the
 historical `54.03.20` COM20 results are recorded separately above.

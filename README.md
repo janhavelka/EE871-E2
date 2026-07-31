@@ -101,8 +101,9 @@ Recorded evidence:
 - Historical COM17 physical unplug/replug recovery: PASS, operator-confirmed
   manual test; no automated transcript is recorded for that historical run.
 
-The COM20 artifacts identify their exact firmware/build metadata. Results from
-different platform stacks are not combined into one platform claim. The new
+The compact [HIL evidence ledger](hil_results/README.md) identifies the exact
+firmware/build metadata. Results from different platform stacks are not
+combined into one platform claim. The new
 `55.03.311` pin has passed S2/S3 builds and the post-commit COM20 run above.
 No completed long-soak result is currently claimed for this pin.
 

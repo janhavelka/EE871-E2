@@ -135,7 +135,7 @@ only compact aggregate evidence:
 ```powershell
 python tools/ee871_serial_discriminator.py --port COM20 `
   --count 10000 `
-  --run-dir hil_results/platform_55_03_311_com20/serial_discriminator_10000 `
+  --run-dir hil_logs/serial_discriminator_10000 `
   --expected-arduino-version 3.3.11 `
   --expected-idf-version v5.5.5 `
   --expected-library-version 1.0.1

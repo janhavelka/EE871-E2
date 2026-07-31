@@ -68,17 +68,9 @@ across every physical fault case.
 
 ## Retained Hardware Artifacts
 
-The generated PASS transcripts and JSON were condensed after this release note
-was written. Their command ledgers and parsed final states remain in:
-
-- Safe default HIL:
-  `hil_results/safe_default/ee871_20260601T185912Z/summary.md`
-- Extended safe HIL:
-  `hil_results/extended_safe/ee871_20260601T185921Z/summary.md`
-- Manual resync:
-  `hil_results/manual_resync/ee871_20260601T190024Z/summary.md`
-- Persistent interval validation:
-  `hil_results/persistent_config_validation/ee871_20260601T193500Z_interval_restore/summary.md`
+The generated transcripts and JSON were later condensed into
+`hil_results/README.md`. Detailed artifacts remain recoverable from Git
+history.
 
 ## Known Limitations
 

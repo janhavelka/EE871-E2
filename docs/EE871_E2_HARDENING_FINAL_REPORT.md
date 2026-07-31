@@ -639,8 +639,7 @@ Safe default HIL result:
 - Key results: `read` Status OK with CO2 avg `567 ppm`; `probe` Status OK;
   `selftest` pass=27 fail=0 skip=0; `drv` READY/online yes/zero consecutive
   failures; `stress 50` success=50 errors=0; persistent dirty stayed clean.
-- Retained artifact:
-  - `hil_results/safe_default/ee871_20260601T185912Z/summary.md`
+- Condensed result: `hil_results/README.md`.
 
 Extended safe HIL result:
 - Command:
@@ -654,15 +653,13 @@ Extended safe HIL result:
   Status OK; repeated selftests reported pass=27 fail=0 skip=0; final driver
   state READY/online yes/zero consecutive failures; persistent dirty stayed
   clean.
-- Retained artifact:
-  - `hil_results/extended_safe/ee871_20260601T185921Z/summary.md`
+- Condensed result: `hil_results/README.md`.
 
 Manual resync check:
 - Commands: `dirty`, `resync`, `dirty`.
 - Final verdict: PASS.
 - Result: pre-resync dirty clean, `resync` Status OK, post-resync dirty clean.
-- Retained artifact:
-  - `hil_results/manual_resync/ee871_20260601T190024Z/summary.md`
+- Condensed result: `hil_results/README.md`.
 
 CLI alias note:
 - Help advertises `version / ver`; it does not advertise `rv`.
@@ -737,8 +734,7 @@ Scope boundaries:
 - Failed-write/operator recovery was not physically induced. Native fake tests
   remain the evidence for partial persistent-write dirty/resync behavior.
 
-Retained artifact:
-- `hil_results/persistent_config_validation/ee871_20260601T193500Z_interval_restore/summary.md`
+Condensed result: `hil_results/README.md`.
 
 Validation commands for this pass:
 - `python tools/check_cli_contract.py`: PASS, `CLI contract PASSED`.

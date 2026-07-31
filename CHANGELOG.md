@@ -26,10 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added a fixed, non-persistent niche HIL plan for identity/capability,
   parameter guards, GPIO/E2 diagnostics, trace/sniffer behavior, and mixed
   stress, plus a reusable state-only native-USB framing discriminator.
-- Condensed retained HIL evidence from 4.53 MB to 1.21 MB: ordinary successful
-  runs keep their complete Markdown command ledgers, while raw serial is
-  retained for unique failure and time-series evidence. Future structured
-  summaries omit ordinary PASS payloads and retain bounded abnormal excerpts.
+- Condensed 4.53 MB of generated HIL command ledgers, JSON, and raw serial into
+  one compact evidence summary; detailed artifacts remain recoverable from Git
+  commit `3687e49`.
 - Version tooling now synchronizes `Version.h`, `idf_component.yml`, and the
   Doxygen project number from `library.json`.
 - Restricted Doxygen input to maintained public documentation and enabled
