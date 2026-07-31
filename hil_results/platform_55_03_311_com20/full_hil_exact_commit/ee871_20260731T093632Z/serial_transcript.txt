@@ -1,0 +1,2172 @@
+EE871-E2 serial HIL transcript
+timestamp_utc=2026-07-31T09:36:32Z
+port=COM20
+baud=115200
+dry_run=False
+git_branch=agent/pioarduino-55-03-311-hil
+git_commit=a25978cff96f
+git_worktree=clean
+
+=== command 1: version ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+=== Version Info ===
+  Example firmware build: Jul 31 2026 11:35:32
+  MCU: ESP32-S3 rev 2, flash 4194304 bytes, PSRAM ready (2097152 bytes)
+  Arduino-ESP32: 3.3.11
+  ESP-IDF: v5.5.5
+  EE871 library version: 1.0.1
+  EE871 library full: 1.0.1 (a25978c, 2026-07-31 11:35:30, clean)
+  EE871 library build: 2026-07-31 11:35:30
+  EE871 library commit: a25978c (clean)
+  Sensor firmware: use command 'fw'
+> 
+
+=== command 2: help ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+
+[36m=== EE871-E2 CLI Help ===[0m
+
+[32m[Common][0m
+  [36mhelp / ?                        [0m - Show this help
+  [36mversion / ver                   [0m - Print firmware and library version info
+  [36mscan                            [0m - Scan all 8 E2 addresses
+  [36mprobe                           [0m - Probe device (no health tracking)
+  [36mrecover                         [0m - Attempt recovery
+  [36mdrv                             [0m - Show driver state and health
+  [36mdirty                           [0m - Show persistent dirty-state diagnostics
+  [36mresync                          [0m - Verify persistent config; clear dirty on success
+  [36mread                            [0m - Read CO2 average
+  [36mcfg / settings                  [0m - Show driver state and feature flags
+  [36mverbose [0|1]                   [0m - Toggle bus trace output (no args = show)
+  [36mstress [N]                      [0m - Repeated CO2 average reads
+  [36mstress_mix [N]                  [0m - Mixed safe read operations
+  [36mselftest                        [0m - Safe command self-test with report
+
+[32m[Device Commands][0m
+  [36mid                              [0m - Read group/subgroup/available bits
+  [36mstatus                          [0m - Read status byte (starts measurement)
+  [36mco2fast                         [0m - Read MV3 (fast response)
+  [36mco2avg                          [0m - Read MV4 (averaged)
+  [36merror                           [0m - Read error code (if status indicates error)
+  [36mreg read <addr>                 [0m - Read custom register (0x00..0xFF)
+  [36mreg write <addr> <value>        [0m - Write persistent custom register (bench only)
+  [36mreg dump [start] [len]          [0m - Dump custom registers (default all)
+  [36mctrl <main_nibble>              [0m - Raw readControlByte(main_nibble)
+  [36mu16 <main_lo> <main_hi>         [0m - Raw readU16(main_lo, main_hi)
+  [36mptr <addr16>                    [0m - Set custom pointer
+
+[32m[Device Info][0m
+  [36mfw                              [0m - Read firmware version
+  [36me2spec                          [0m - Read E2 spec version
+  [36mfeatures                        [0m - Read feature support flags
+  [36mserial                          [0m - Read serial number
+  [36mpartname                        [0m - Read part name
+  [36mpartname <text>                 [0m - Write persistent part name (16 bytes max)
+
+[32m[Configuration][0m
+  [36maddr                            [0m - Read current bus address
+  [36maddr <0-7>                      [0m - Write persistent bus address (power cycle)
+  [36minterval                        [0m - Read measurement interval
+  [36minterval <dec>                  [0m - Write persistent interval (150..36000 ds)
+  [36mfactor                          [0m - Read CO2 interval factor
+  [36mfactor <val>                    [0m - Write persistent CO2 interval factor
+  [36mfilter                          [0m - Read CO2 filter setting
+  [36mfilter <val>                    [0m - Write persistent CO2 filter
+  [36mmode                            [0m - Read operating mode
+  [36mmode <val>                      [0m - Write persistent operating mode (0..3)
+
+[32m[Calibration][0m
+  [36moffset                          [0m - Read CO2 offset (ppm)
+  [36moffset <val>                    [0m - Write persistent CO2 offset (signed)
+  [36mgain                            [0m - Read CO2 gain
+  [36mgain <val>                      [0m - Write persistent CO2 gain
+  [36mcalpoints                       [0m - Read last calibration points
+  [36mautoadj                         [0m - Read auto-adjust status
+  [36mautoadj start                   [0m - Start config-changing auto-adjustment (~5 min)
+
+[32m[Bus Safety][0m
+  [36mbuscheck                        [0m - Check if bus is idle
+  [36mlibreset                        [0m - Bus reset via library
+
+[32m[Diagnostics][0m
+  [36mdiag                            [0m - Run full diagnostic suite
+  [36mlevels                          [0m - Read current bus levels
+  [36mpintest                         [0m - Test pin toggle (MCU bus control)
+  [36mclocktest                       [0m - Generate clock pulses and verify
+  [36msniff                           [0m - Toggle sniffer on/off
+  [36mtiming                          [0m - Try different clock frequencies
+  [36mbusreset                        [0m - Send 9 clocks to recover stuck bus
+  [36mtx <hex>                        [0m - Test transaction with control byte
+  [36mlibtest                         [0m - Test all library commands (begin uses)
+  [36mcaps                            [0m - Print feature capability booleans
+  [36mtrace stats                     [0m - Show bus trace buffer stats
+  [36mtrace clear                     [0m - Clear buffered trace events
+> 
+
+=== command 3: probe ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+[36m[I][0m Probing device (no health tracking)...
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+> 
+
+=== command 4: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 623 ppm
+> 
+
+=== command 5: selftest ===
+result=PASS reason= elapsed_s=0.5 wait=prompt
+=== EE871 selftest (safe commands) ===
+  [[32mPASS[0m] probe responds
+  [[32mPASS[0m] probe no-health-side-effects
+  [[32mPASS[0m] readGroup
+  [[32mPASS[0m] group matches
+  [[32mPASS[0m] readSubgroup
+  [[32mPASS[0m] subgroup matches
+  [[32mPASS[0m] readAvailableMeasurements
+  [[32mPASS[0m] CO2 measurement bit present
+  [[32mPASS[0m] readFirmwareVersion
+  [[32mPASS[0m] readE2SpecVersion
+  [[32mPASS[0m] readOperatingFunctions
+  [[32mPASS[0m] readOperatingModeSupport
+  [[32mPASS[0m] readSpecialFeatures
+  [[32mPASS[0m] readStatus
+  [[32mPASS[0m] readCo2Fast
+  [[32mPASS[0m] readCo2Average
+  [[32mPASS[0m] readErrorCode
+  [[32mPASS[0m] readSerialNumber
+  [[32mPASS[0m] readPartName
+  [[32mPASS[0m] readBusAddress
+  [[32mPASS[0m] readMeasurementInterval
+  [[32mPASS[0m] readCo2IntervalFactor
+  [[33mSKIP[0m] readOperatingMode - not supported
+  [[32mPASS[0m] readControlByte(MAIN_STATUS)
+  [[32mPASS[0m] readU16(MV4)
+  [[32mPASS[0m] recover
+  [[32mPASS[0m] isOnline
+Selftest result: pass=[32m26[0m fail=[32m0[0m skip=[33m1[0m
+> 
+
+=== command 6: drv ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+=== Driver Health ===
+  State: [32mREADY[0m
+  Online: [32myes[0m
+  Consecutive failures: [32m0[0m
+  Total success: [32m72[0m
+  Total failures: [32m0[0m
+  Success rate: [32m100.0%[0m
+  Last OK: 840 ms ago (at 29267 ms)
+  Last error: never
+  persistentConfigDirty: [32mno[0m
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  persistentConfigDirtyError message: OK
+  resyncNeeded: [32mno[0m
+> 
+
+=== command 7: dirty ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+=== Persistent Config Dirty State ===
+  persistentConfigDirty: [32mno[0m
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  persistentConfigDirtyError message: OK
+  resyncNeeded: [32mno[0m
+> 
+
+=== command 8: stress 50 ===
+result=PASS reason= elapsed_s=0.641 wait=prompt
+  Progress: 5/50 ([31m10%[0m, ok=[32m5[0m, fail=[32m0[0m)
+  Progress: 10/50 ([31m20%[0m, ok=[32m10[0m, fail=[32m0[0m)
+  Progress: 15/50 ([31m30%[0m, ok=[32m15[0m, fail=[32m0[0m)
+  Progress: 20/50 ([31m40%[0m, ok=[32m20[0m, fail=[32m0[0m)
+  Progress: 25/50 ([31m50%[0m, ok=[32m25[0m, fail=[32m0[0m)
+  Progress: 30/50 ([31m60%[0m, ok=[32m30[0m, fail=[32m0[0m)
+  Progress: 35/50 ([31m70%[0m, ok=[32m35[0m, fail=[32m0[0m)
+  Progress: 40/50 ([33m80%[0m, ok=[32m40[0m, fail=[32m0[0m)
+  Progress: 45/50 ([33m90%[0m, ok=[32m45[0m, fail=[32m0[0m)
+  Progress: 50/50 ([32m100%[0m, ok=[32m50[0m, fail=[32m0[0m)
+=== Stress Summary ===
+  Total: 50
+  Success: [32m50[0m
+  Errors: [32m0[0m
+  Success rate: [32m100.00%[0m
+  Duration: 642 ms
+  Rate: 77.88 ops/s
+  Health delta: [32msuccess +100[0m, [32mfailures +0[0m
+> 
+
+=== command 9: drv ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+=== Driver Health ===
+  State: [32mREADY[0m
+  Online: [32myes[0m
+  Consecutive failures: [32m0[0m
+  Total success: [32m172[0m
+  Total failures: [32m0[0m
+  Success rate: [32m100.0%[0m
+  Last OK: 365 ms ago (at 31439 ms)
+  Last error: never
+  persistentConfigDirty: [32mno[0m
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  persistentConfigDirtyError message: OK
+  resyncNeeded: [32mno[0m
+> 
+
+=== command 10: dirty ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+=== Persistent Config Dirty State ===
+  persistentConfigDirty: [32mno[0m
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  persistentConfigDirtyError message: OK
+  resyncNeeded: [32mno[0m
+> 
+
+=== command 11: stress 500 ===
+result=PASS reason= elapsed_s=6.422 wait=prompt
+  Progress: 50/500 ([31m10%[0m, ok=[32m50[0m, fail=[32m0[0m)
+  Progress: 100/500 ([31m20%[0m, ok=[32m100[0m, fail=[32m0[0m)
+  Progress: 150/500 ([31m30%[0m, ok=[32m150[0m, fail=[32m0[0m)
+  Progress: 200/500 ([31m40%[0m, ok=[32m200[0m, fail=[32m0[0m)
+  Progress: 250/500 ([31m50%[0m, ok=[32m250[0m, fail=[32m0[0m)
+  Progress: 300/500 ([31m60%[0m, ok=[32m300[0m, fail=[32m0[0m)
+  Progress: 350/500 ([31m70%[0m, ok=[32m350[0m, fail=[32m0[0m)
+  Progress: 400/500 ([33m80%[0m, ok=[32m400[0m, fail=[32m0[0m)
+  Progress: 450/500 ([33m90%[0m, ok=[32m450[0m, fail=[32m0[0m)
+  Progress: 500/500 ([32m100%[0m, ok=[32m500[0m, fail=[32m0[0m)
+=== Stress Summary ===
+  Total: 500
+  Success: [32m500[0m
+  Errors: [32m0[0m
+  Success rate: [32m100.00%[0m
+  Duration: 6423 ms
+  Rate: 77.85 ops/s
+  Health delta: [32msuccess +1000[0m, [32mfailures +0[0m
+> 
+
+=== command 12: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 623 ppm
+> 
+
+=== command 13: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 623 ppm
+> 
+
+=== command 14: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 623 ppm
+> 
+
+=== command 15: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 623 ppm
+> 
+
+=== command 16: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 17: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 18: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 19: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 20: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 21: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 22: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 23: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 24: read ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 25: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 26: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 27: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 28: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 29: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 30: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 31: read ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 32: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 33: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 34: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 35: read ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 36: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 37: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 38: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 39: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 40: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 41: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 42: read ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 43: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 44: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 45: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 46: read ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 47: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 48: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 49: read ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 50: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 51: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 52: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 53: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 54: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 55: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 56: read ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 624 ppm
+> 
+
+=== command 57: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 58: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 59: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 60: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 61: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 62: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 63: read ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 64: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 65: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 66: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 67: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 68: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 69: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 70: read ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 71: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 72: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 73: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 74: read ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 75: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 76: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 77: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 78: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 79: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 80: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 81: read ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 82: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 83: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 84: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 85: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 86: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 87: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 88: read ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 89: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 90: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 91: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 92: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 93: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 94: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 95: read ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 96: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 97: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 630 ppm
+> 
+
+=== command 98: read ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 632 ppm
+> 
+
+=== command 99: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 632 ppm
+> 
+
+=== command 100: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 632 ppm
+> 
+
+=== command 101: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 632 ppm
+> 
+
+=== command 102: read ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 632 ppm
+> 
+
+=== command 103: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 632 ppm
+> 
+
+=== command 104: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 632 ppm
+> 
+
+=== command 105: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 632 ppm
+> 
+
+=== command 106: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 632 ppm
+> 
+
+=== command 107: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 632 ppm
+> 
+
+=== command 108: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 632 ppm
+> 
+
+=== command 109: read ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 632 ppm
+> 
+
+=== command 110: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 632 ppm
+> 
+
+=== command 111: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 632 ppm
+> 
+
+=== command 112: probe ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+[36m[I][0m Probing device (no health tracking)...
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+> 
+
+=== command 113: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 632 ppm
+> 
+
+=== command 114: selftest ===
+result=PASS reason= elapsed_s=0.485 wait=prompt
+=== EE871 selftest (safe commands) ===
+  [[32mPASS[0m] probe responds
+  [[32mPASS[0m] probe no-health-side-effects
+  [[32mPASS[0m] readGroup
+  [[32mPASS[0m] group matches
+  [[32mPASS[0m] readSubgroup
+  [[32mPASS[0m] subgroup matches
+  [[32mPASS[0m] readAvailableMeasurements
+  [[32mPASS[0m] CO2 measurement bit present
+  [[32mPASS[0m] readFirmwareVersion
+  [[32mPASS[0m] readE2SpecVersion
+  [[32mPASS[0m] readOperatingFunctions
+  [[32mPASS[0m] readOperatingModeSupport
+  [[32mPASS[0m] readSpecialFeatures
+  [[32mPASS[0m] readStatus
+  [[32mPASS[0m] readCo2Fast
+  [[32mPASS[0m] readCo2Average
+  [[32mPASS[0m] readErrorCode
+  [[32mPASS[0m] readSerialNumber
+  [[32mPASS[0m] readPartName
+  [[32mPASS[0m] readBusAddress
+  [[32mPASS[0m] readMeasurementInterval
+  [[32mPASS[0m] readCo2IntervalFactor
+  [[33mSKIP[0m] readOperatingMode - not supported
+  [[32mPASS[0m] readControlByte(MAIN_STATUS)
+  [[32mPASS[0m] readU16(MV4)
+  [[32mPASS[0m] recover
+  [[32mPASS[0m] isOnline
+Selftest result: pass=[32m26[0m fail=[32m0[0m skip=[33m1[0m
+> 
+
+=== command 115: probe ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+[36m[I][0m Probing device (no health tracking)...
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+> 
+
+=== command 116: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 632 ppm
+> 
+
+=== command 117: selftest ===
+result=PASS reason= elapsed_s=0.5 wait=prompt
+=== EE871 selftest (safe commands) ===
+  [[32mPASS[0m] probe responds
+  [[32mPASS[0m] probe no-health-side-effects
+  [[32mPASS[0m] readGroup
+  [[32mPASS[0m] group matches
+  [[32mPASS[0m] readSubgroup
+  [[32mPASS[0m] subgroup matches
+  [[32mPASS[0m] readAvailableMeasurements
+  [[32mPASS[0m] CO2 measurement bit present
+  [[32mPASS[0m] readFirmwareVersion
+  [[32mPASS[0m] readE2SpecVersion
+  [[32mPASS[0m] readOperatingFunctions
+  [[32mPASS[0m] readOperatingModeSupport
+  [[32mPASS[0m] readSpecialFeatures
+  [[32mPASS[0m] readStatus
+  [[32mPASS[0m] readCo2Fast
+  [[32mPASS[0m] readCo2Average
+  [[32mPASS[0m] readErrorCode
+  [[32mPASS[0m] readSerialNumber
+  [[32mPASS[0m] readPartName
+  [[32mPASS[0m] readBusAddress
+  [[32mPASS[0m] readMeasurementInterval
+  [[32mPASS[0m] readCo2IntervalFactor
+  [[33mSKIP[0m] readOperatingMode - not supported
+  [[32mPASS[0m] readControlByte(MAIN_STATUS)
+  [[32mPASS[0m] readU16(MV4)
+  [[32mPASS[0m] recover
+  [[32mPASS[0m] isOnline
+Selftest result: pass=[32m26[0m fail=[32m0[0m skip=[33m1[0m
+> 
+
+=== command 118: probe ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+[36m[I][0m Probing device (no health tracking)...
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+> 
+
+=== command 119: read ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 632 ppm
+> 
+
+=== command 120: selftest ===
+result=PASS reason= elapsed_s=0.484 wait=prompt
+=== EE871 selftest (safe commands) ===
+  [[32mPASS[0m] probe responds
+  [[32mPASS[0m] probe no-health-side-effects
+  [[32mPASS[0m] readGroup
+  [[32mPASS[0m] group matches
+  [[32mPASS[0m] readSubgroup
+  [[32mPASS[0m] subgroup matches
+  [[32mPASS[0m] readAvailableMeasurements
+  [[32mPASS[0m] CO2 measurement bit present
+  [[32mPASS[0m] readFirmwareVersion
+  [[32mPASS[0m] readE2SpecVersion
+  [[32mPASS[0m] readOperatingFunctions
+  [[32mPASS[0m] readOperatingModeSupport
+  [[32mPASS[0m] readSpecialFeatures
+  [[32mPASS[0m] readStatus
+  [[32mPASS[0m] readCo2Fast
+  [[32mPASS[0m] readCo2Average
+  [[32mPASS[0m] readErrorCode
+  [[32mPASS[0m] readSerialNumber
+  [[32mPASS[0m] readPartName
+  [[32mPASS[0m] readBusAddress
+  [[32mPASS[0m] readMeasurementInterval
+  [[32mPASS[0m] readCo2IntervalFactor
+  [[33mSKIP[0m] readOperatingMode - not supported
+  [[32mPASS[0m] readControlByte(MAIN_STATUS)
+  [[32mPASS[0m] readU16(MV4)
+  [[32mPASS[0m] recover
+  [[32mPASS[0m] isOnline
+Selftest result: pass=[32m26[0m fail=[32m0[0m skip=[33m1[0m
+> 
+
+=== command 121: probe ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+[36m[I][0m Probing device (no health tracking)...
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+> 
+
+=== command 122: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 632 ppm
+> 
+
+=== command 123: selftest ===
+result=PASS reason= elapsed_s=0.5 wait=prompt
+=== EE871 selftest (safe commands) ===
+  [[32mPASS[0m] probe responds
+  [[32mPASS[0m] probe no-health-side-effects
+  [[32mPASS[0m] readGroup
+  [[32mPASS[0m] group matches
+  [[32mPASS[0m] readSubgroup
+  [[32mPASS[0m] subgroup matches
+  [[32mPASS[0m] readAvailableMeasurements
+  [[32mPASS[0m] CO2 measurement bit present
+  [[32mPASS[0m] readFirmwareVersion
+  [[32mPASS[0m] readE2SpecVersion
+  [[32mPASS[0m] readOperatingFunctions
+  [[32mPASS[0m] readOperatingModeSupport
+  [[32mPASS[0m] readSpecialFeatures
+  [[32mPASS[0m] readStatus
+  [[32mPASS[0m] readCo2Fast
+  [[32mPASS[0m] readCo2Average
+  [[32mPASS[0m] readErrorCode
+  [[32mPASS[0m] readSerialNumber
+  [[32mPASS[0m] readPartName
+  [[32mPASS[0m] readBusAddress
+  [[32mPASS[0m] readMeasurementInterval
+  [[32mPASS[0m] readCo2IntervalFactor
+  [[33mSKIP[0m] readOperatingMode - not supported
+  [[32mPASS[0m] readControlByte(MAIN_STATUS)
+  [[32mPASS[0m] readU16(MV4)
+  [[32mPASS[0m] recover
+  [[32mPASS[0m] isOnline
+Selftest result: pass=[32m26[0m fail=[32m0[0m skip=[33m1[0m
+> 
+
+=== command 124: probe ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+[36m[I][0m Probing device (no health tracking)...
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+> 
+
+=== command 125: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 632 ppm
+> 
+
+=== command 126: selftest ===
+result=PASS reason= elapsed_s=0.484 wait=prompt
+=== EE871 selftest (safe commands) ===
+  [[32mPASS[0m] probe responds
+  [[32mPASS[0m] probe no-health-side-effects
+  [[32mPASS[0m] readGroup
+  [[32mPASS[0m] group matches
+  [[32mPASS[0m] readSubgroup
+  [[32mPASS[0m] subgroup matches
+  [[32mPASS[0m] readAvailableMeasurements
+  [[32mPASS[0m] CO2 measurement bit present
+  [[32mPASS[0m] readFirmwareVersion
+  [[32mPASS[0m] readE2SpecVersion
+  [[32mPASS[0m] readOperatingFunctions
+  [[32mPASS[0m] readOperatingModeSupport
+  [[32mPASS[0m] readSpecialFeatures
+  [[32mPASS[0m] readStatus
+  [[32mPASS[0m] readCo2Fast
+  [[32mPASS[0m] readCo2Average
+  [[32mPASS[0m] readErrorCode
+  [[32mPASS[0m] readSerialNumber
+  [[32mPASS[0m] readPartName
+  [[32mPASS[0m] readBusAddress
+  [[32mPASS[0m] readMeasurementInterval
+  [[32mPASS[0m] readCo2IntervalFactor
+  [[33mSKIP[0m] readOperatingMode - not supported
+  [[32mPASS[0m] readControlByte(MAIN_STATUS)
+  [[32mPASS[0m] readU16(MV4)
+  [[32mPASS[0m] recover
+  [[32mPASS[0m] isOnline
+Selftest result: pass=[32m26[0m fail=[32m0[0m skip=[33m1[0m
+> 
+
+=== command 127: probe ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+[36m[I][0m Probing device (no health tracking)...
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+> 
+
+=== command 128: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 632 ppm
+> 
+
+=== command 129: selftest ===
+result=PASS reason= elapsed_s=0.5 wait=prompt
+=== EE871 selftest (safe commands) ===
+  [[32mPASS[0m] probe responds
+  [[32mPASS[0m] probe no-health-side-effects
+  [[32mPASS[0m] readGroup
+  [[32mPASS[0m] group matches
+  [[32mPASS[0m] readSubgroup
+  [[32mPASS[0m] subgroup matches
+  [[32mPASS[0m] readAvailableMeasurements
+  [[32mPASS[0m] CO2 measurement bit present
+  [[32mPASS[0m] readFirmwareVersion
+  [[32mPASS[0m] readE2SpecVersion
+  [[32mPASS[0m] readOperatingFunctions
+  [[32mPASS[0m] readOperatingModeSupport
+  [[32mPASS[0m] readSpecialFeatures
+  [[32mPASS[0m] readStatus
+  [[32mPASS[0m] readCo2Fast
+  [[32mPASS[0m] readCo2Average
+  [[32mPASS[0m] readErrorCode
+  [[32mPASS[0m] readSerialNumber
+  [[32mPASS[0m] readPartName
+  [[32mPASS[0m] readBusAddress
+  [[32mPASS[0m] readMeasurementInterval
+  [[32mPASS[0m] readCo2IntervalFactor
+  [[33mSKIP[0m] readOperatingMode - not supported
+  [[32mPASS[0m] readControlByte(MAIN_STATUS)
+  [[32mPASS[0m] readU16(MV4)
+  [[32mPASS[0m] recover
+  [[32mPASS[0m] isOnline
+Selftest result: pass=[32m26[0m fail=[32m0[0m skip=[33m1[0m
+> 
+
+=== command 130: probe ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+[36m[I][0m Probing device (no health tracking)...
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+> 
+
+=== command 131: read ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 632 ppm
+> 
+
+=== command 132: selftest ===
+result=PASS reason= elapsed_s=0.485 wait=prompt
+=== EE871 selftest (safe commands) ===
+  [[32mPASS[0m] probe responds
+  [[32mPASS[0m] probe no-health-side-effects
+  [[32mPASS[0m] readGroup
+  [[32mPASS[0m] group matches
+  [[32mPASS[0m] readSubgroup
+  [[32mPASS[0m] subgroup matches
+  [[32mPASS[0m] readAvailableMeasurements
+  [[32mPASS[0m] CO2 measurement bit present
+  [[32mPASS[0m] readFirmwareVersion
+  [[32mPASS[0m] readE2SpecVersion
+  [[32mPASS[0m] readOperatingFunctions
+  [[32mPASS[0m] readOperatingModeSupport
+  [[32mPASS[0m] readSpecialFeatures
+  [[32mPASS[0m] readStatus
+  [[32mPASS[0m] readCo2Fast
+  [[32mPASS[0m] readCo2Average
+  [[32mPASS[0m] readErrorCode
+  [[32mPASS[0m] readSerialNumber
+  [[32mPASS[0m] readPartName
+  [[32mPASS[0m] readBusAddress
+  [[32mPASS[0m] readMeasurementInterval
+  [[32mPASS[0m] readCo2IntervalFactor
+  [[33mSKIP[0m] readOperatingMode - not supported
+  [[32mPASS[0m] readControlByte(MAIN_STATUS)
+  [[32mPASS[0m] readU16(MV4)
+  [[32mPASS[0m] recover
+  [[32mPASS[0m] isOnline
+Selftest result: pass=[32m26[0m fail=[32m0[0m skip=[33m1[0m
+> 
+
+=== command 133: probe ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+[36m[I][0m Probing device (no health tracking)...
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+> 
+
+=== command 134: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 632 ppm
+> 
+
+=== command 135: selftest ===
+result=PASS reason= elapsed_s=0.5 wait=prompt
+=== EE871 selftest (safe commands) ===
+  [[32mPASS[0m] probe responds
+  [[32mPASS[0m] probe no-health-side-effects
+  [[32mPASS[0m] readGroup
+  [[32mPASS[0m] group matches
+  [[32mPASS[0m] readSubgroup
+  [[32mPASS[0m] subgroup matches
+  [[32mPASS[0m] readAvailableMeasurements
+  [[32mPASS[0m] CO2 measurement bit present
+  [[32mPASS[0m] readFirmwareVersion
+  [[32mPASS[0m] readE2SpecVersion
+  [[32mPASS[0m] readOperatingFunctions
+  [[32mPASS[0m] readOperatingModeSupport
+  [[32mPASS[0m] readSpecialFeatures
+  [[32mPASS[0m] readStatus
+  [[32mPASS[0m] readCo2Fast
+  [[32mPASS[0m] readCo2Average
+  [[32mPASS[0m] readErrorCode
+  [[32mPASS[0m] readSerialNumber
+  [[32mPASS[0m] readPartName
+  [[32mPASS[0m] readBusAddress
+  [[32mPASS[0m] readMeasurementInterval
+  [[32mPASS[0m] readCo2IntervalFactor
+  [[33mSKIP[0m] readOperatingMode - not supported
+  [[32mPASS[0m] readControlByte(MAIN_STATUS)
+  [[32mPASS[0m] readU16(MV4)
+  [[32mPASS[0m] recover
+  [[32mPASS[0m] isOnline
+Selftest result: pass=[32m26[0m fail=[32m0[0m skip=[33m1[0m
+> 
+
+=== command 136: probe ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+[36m[I][0m Probing device (no health tracking)...
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+> 
+
+=== command 137: read ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 632 ppm
+> 
+
+=== command 138: selftest ===
+result=PASS reason= elapsed_s=0.484 wait=prompt
+=== EE871 selftest (safe commands) ===
+  [[32mPASS[0m] probe responds
+  [[32mPASS[0m] probe no-health-side-effects
+  [[32mPASS[0m] readGroup
+  [[32mPASS[0m] group matches
+  [[32mPASS[0m] readSubgroup
+  [[32mPASS[0m] subgroup matches
+  [[32mPASS[0m] readAvailableMeasurements
+  [[32mPASS[0m] CO2 measurement bit present
+  [[32mPASS[0m] readFirmwareVersion
+  [[32mPASS[0m] readE2SpecVersion
+  [[32mPASS[0m] readOperatingFunctions
+  [[32mPASS[0m] readOperatingModeSupport
+  [[32mPASS[0m] readSpecialFeatures
+  [[32mPASS[0m] readStatus
+  [[32mPASS[0m] readCo2Fast
+  [[32mPASS[0m] readCo2Average
+  [[32mPASS[0m] readErrorCode
+  [[32mPASS[0m] readSerialNumber
+  [[32mPASS[0m] readPartName
+  [[32mPASS[0m] readBusAddress
+  [[32mPASS[0m] readMeasurementInterval
+  [[32mPASS[0m] readCo2IntervalFactor
+  [[33mSKIP[0m] readOperatingMode - not supported
+  [[32mPASS[0m] readControlByte(MAIN_STATUS)
+  [[32mPASS[0m] readU16(MV4)
+  [[32mPASS[0m] recover
+  [[32mPASS[0m] isOnline
+Selftest result: pass=[32m26[0m fail=[32m0[0m skip=[33m1[0m
+> 
+
+=== command 139: probe ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+[36m[I][0m Probing device (no health tracking)...
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+> 
+
+=== command 140: read ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 632 ppm
+> 
+
+=== command 141: selftest ===
+result=PASS reason= elapsed_s=0.5 wait=prompt
+=== EE871 selftest (safe commands) ===
+  [[32mPASS[0m] probe responds
+  [[32mPASS[0m] probe no-health-side-effects
+  [[32mPASS[0m] readGroup
+  [[32mPASS[0m] group matches
+  [[32mPASS[0m] readSubgroup
+  [[32mPASS[0m] subgroup matches
+  [[32mPASS[0m] readAvailableMeasurements
+  [[32mPASS[0m] CO2 measurement bit present
+  [[32mPASS[0m] readFirmwareVersion
+  [[32mPASS[0m] readE2SpecVersion
+  [[32mPASS[0m] readOperatingFunctions
+  [[32mPASS[0m] readOperatingModeSupport
+  [[32mPASS[0m] readSpecialFeatures
+  [[32mPASS[0m] readStatus
+  [[32mPASS[0m] readCo2Fast
+  [[32mPASS[0m] readCo2Average
+  [[32mPASS[0m] readErrorCode
+  [[32mPASS[0m] readSerialNumber
+  [[32mPASS[0m] readPartName
+  [[32mPASS[0m] readBusAddress
+  [[32mPASS[0m] readMeasurementInterval
+  [[32mPASS[0m] readCo2IntervalFactor
+  [[33mSKIP[0m] readOperatingMode - not supported
+  [[32mPASS[0m] readControlByte(MAIN_STATUS)
+  [[32mPASS[0m] readU16(MV4)
+  [[32mPASS[0m] recover
+  [[32mPASS[0m] isOnline
+Selftest result: pass=[32m26[0m fail=[32m0[0m skip=[33m1[0m
+> 
+
+=== command 142: recover ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+[36m[I][0m Attempting recovery...
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+=== Driver Health ===
+  State: [32mREADY[0m
+  Online: [32myes[0m
+  Consecutive failures: [32m0[0m
+  Total success: [32m2094[0m
+  Total failures: [32m0[0m
+  Success rate: [32m100.0%[0m
+  Last OK: 16 ms ago (at 91356 ms)
+  Last error: never
+  persistentConfigDirty: [32mno[0m
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  persistentConfigDirtyError message: OK
+  resyncNeeded: [32mno[0m
+> 
+
+=== command 143: drv ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+=== Driver Health ===
+  State: [32mREADY[0m
+  Online: [32myes[0m
+  Consecutive failures: [32m0[0m
+  Total success: [32m2094[0m
+  Total failures: [32m0[0m
+  Success rate: [32m100.0%[0m
+  Last OK: 367 ms ago (at 91356 ms)
+  Last error: never
+  persistentConfigDirty: [32mno[0m
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  persistentConfigDirtyError message: OK
+  resyncNeeded: [32mno[0m
+> 
+
+=== command 144: dirty ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+=== Persistent Config Dirty State ===
+  persistentConfigDirty: [32mno[0m
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  persistentConfigDirtyError message: OK
+  resyncNeeded: [32mno[0m
+> 
+
+=== command 145: id ===
+result=PASS reason= elapsed_s=0.031 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  Group=0x0367, Subgroup=0x09, Available=0x08
+> 
+
+=== command 146: status ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+Status: [36m0x00[0m
+  hasCo2Error(): NO
+> 
+
+=== command 147: co2fast ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 fast: 648 ppm
+> 
+
+=== command 148: co2avg ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 avg: 632 ppm
+> 
+
+=== command 149: error ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  Error code: 0 (no error)
+> 
+
+=== command 150: fw ===
+result=PASS reason= elapsed_s=0.031 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  Firmware: 1.4
+> 
+
+=== command 151: e2spec ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  E2 spec version: 4
+> 
+
+=== command 152: features ===
+result=PASS reason= elapsed_s=0.047 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  Operating functions (0x07): 0x93
+    Serial number: yes
+    Part name: yes
+    Address config: no
+    Global interval: yes
+    Specific interval: no
+    Filter config: no
+    Error code: yes
+  Mode support (0x08): 0x00
+    Low power: no
+    E2 priority: no
+  Special features (0x09): 0x00
+    Auto adjust: no
+> 
+
+=== command 153: caps ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+=== Capabilities ===
+  hasSerialNumber: true
+  hasPartName: true
+  hasAddressConfig: false
+  hasGlobalInterval: true
+  hasSpecificInterval: false
+  hasFilterConfig: false
+  hasErrorCode: true
+  hasLowPowerMode: false
+  hasE2Priority: false
+  hasAutoAdjust: false
+> 
+
+=== command 154: serial ===
+result=PASS reason= elapsed_s=0.109 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  Serial: 1920935602368A..
+  Hex: 31 39 32 30 39 33 35 36 30 32 33 36 38 41 00 00 
+> 
+
+=== command 155: partname ===
+result=PASS reason= elapsed_s=0.11 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  Part name: EE871
+> 
+
+=== command 156: addr ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  Bus address: 0
+> 
+
+=== command 157: interval ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  Interval: 150 deciseconds (15.0 s)
+> 
+
+=== command 158: factor ===
+result=PASS reason= elapsed_s=0.015 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 interval factor: 85
+> 
+
+=== command 159: filter ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  CO2 filter: 85
+> 
+
+=== command 160: mode ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+  Status: [31mNOT_SUPPORTED[0m (code=14, detail=0)
+  Message: [33mOperating mode not supported[0m
+> 
+
+=== command 161: addr 8 ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+[36m[I][0m Writing bus address 8 (power cycle required)...
+  Status: [31mOUT_OF_RANGE[0m (code=13, detail=8)
+  Message: [33mAddress must be 0-7[0m
+> 
+
+=== command 162: interval 149 ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+[36m[I][0m Writing interval 149 deciseconds...
+  Status: [31mOUT_OF_RANGE[0m (code=13, detail=149)
+  Message: [33mInterval must be 150-36000 (15-3600s)[0m
+> 
+
+=== command 163: interval 36001 ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+[36m[I][0m Writing interval 36001 deciseconds...
+  Status: [31mOUT_OF_RANGE[0m (code=13, detail=36001)
+  Message: [33mInterval must be 150-36000 (15-3600s)[0m
+> 
+
+=== command 164: mode 4 ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+  Status: [31mOUT_OF_RANGE[0m (code=13, detail=4)
+  Message: [33mInvalid mode bits[0m
+> 
+
+=== command 165: drv ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+=== Driver Health ===
+  State: [32mREADY[0m
+  Online: [32myes[0m
+  Consecutive failures: [32m0[0m
+  Total success: [32m2161[0m
+  Total failures: [32m0[0m
+  Success rate: [32m100.0%[0m
+  Last OK: 2120 ms ago (at 97783 ms)
+  Last error: never
+  persistentConfigDirty: [32mno[0m
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  persistentConfigDirtyError message: OK
+  resyncNeeded: [32mno[0m
+> 
+
+=== command 166: dirty ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+=== Persistent Config Dirty State ===
+  persistentConfigDirty: [32mno[0m
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  persistentConfigDirtyError message: OK
+  resyncNeeded: [32mno[0m
+> 
+
+=== command 167: buscheck ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+  Bus is idle (both lines high)
+> 
+
+=== command 168: levels ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+[36m=== Bus Levels ===[0m
+  SCL: [32mHIGH (idle)[0m
+  SDA: [32mHIGH (idle)[0m
+  [32mOK[0m: Bus idle (both HIGH)
+> 
+
+=== command 169: clocktest ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+[36m=== Clock Pulse Test (10 pulses) ===[0m
+  Pulse  1: LOW=[32mok[0m HIGH=[32mok[0m
+  Pulse  2: LOW=[32mok[0m HIGH=[32mok[0m
+  Pulse  3: LOW=[32mok[0m HIGH=[32mok[0m
+  Pulse  4: LOW=[32mok[0m HIGH=[32mok[0m
+  Pulse  5: LOW=[32mok[0m HIGH=[32mok[0m
+  Pulse  6: LOW=[32mok[0m HIGH=[32mok[0m
+  Pulse  7: LOW=[32mok[0m HIGH=[32mok[0m
+  Pulse  8: LOW=[32mok[0m HIGH=[32mok[0m
+  Pulse  9: LOW=[32mok[0m HIGH=[32mok[0m
+  Pulse 10: LOW=[32mok[0m HIGH=[32mok[0m
+
+Results: 10/10 LOW ok, 10/10 HIGH ok
+> 
+
+=== command 170: scan ===
+result=OPERATOR_REVIEW_REQUIRED reason=expected output token missing elapsed_s=0.953 wait=prompt
+[36m=== E2 Address Scanner ===[0m
+Scanning addresses 0-7 with status read (0x7x), up to 5 attempts...
+
+  Address 0: [32mFOUND[0m Status=0x00, PEC=[32mOK[0m
+  Address 1: [32mFOUND[0m Status=0xFF, PEC=[31mMISMATCH[0m
+  Address 2: [32mFOUND[0m Status=0xFF, PEC=[31mMISMATCH[0m
+  Address 3: [32mFOUND[0m Status=0xFF, PEC=[31mMISMATCH[0m
+  Address 4: [32mFOUND[0m Status=0xFF, PEC=[31mMISMATCH[0m
+  Address 5: [32mFOUND[0m Status=0xFF, PEC=[31mMISMATCH[0m
+  Address 6: [32mFOUND[0m Status=0xFF, PEC=[31mMISMATCH[0m
+  Address 7: [32mFOUND[0m Status=0xFF, PEC=[31mMISMATCH[0m
+
+Found [32m8[0m device(s)
+> 
+
+=== command 171: timing ===
+result=PASS reason= elapsed_s=0.547 wait=prompt
+[36m=== Timing Discovery ===[0m
+Testing different clock periods...
+
+E2 spec: 100-1000us (500-5000 Hz)
+
+  1000 us (  500 Hz): [32mACK[0m, data=0x00, PEC=[32mOK[0m
+   500 us ( 1000 Hz): [32mACK[0m, data=0x00, PEC=[32mOK[0m
+   250 us ( 2000 Hz): [32mACK[0m, data=0x00, PEC=[32mOK[0m
+   200 us ( 2500 Hz): [32mACK[0m, data=0x00, PEC=[32mOK[0m
+   150 us ( 3333 Hz): [32mACK[0m, data=0x00, PEC=[32mOK[0m
+   100 us ( 5000 Hz): [32mACK[0m, data=0x00, PEC=[32mOK[0m
+    75 us ( 6667 Hz): [32mACK[0m, data=0x00, PEC=[32mOK[0m
+    50 us (10000 Hz): [32mACK[0m, data=0x00, PEC=[32mOK[0m
+
+[32m8[0m timing(s) worked
+> 
+
+=== command 172: libtest ===
+result=PASS reason= elapsed_s=0.235 wait=prompt
+[36m=== Library Command Test ===[0m
+Testing exact commands used by begin()...
+
+TYPE_LO (0x11)     [0x11]: [32mACK[0m data=0x67 PEC=[32mOK[0m
+TYPE_HI (0x41)     [0x41]: [32mACK[0m data=0x03 PEC=[32mOK[0m
+TYPE_SUB (0x21)    [0x21]: [32mACK[0m data=0x09 PEC=[32mOK[0m
+AVAIL (0x31)       [0x31]: [32mACK[0m data=0x08 PEC=[32mOK[0m
+STATUS (0x71)      [0x71]: [32mACK[0m data=0x00 PEC=[32mOK[0m
+MV3_LO (0xC1)      [0xC1]: [32mACK[0m data=0x94 PEC=[32mOK[0m
+MV3_HI (0xD1)      [0xD1]: [32mACK[0m data=0x02 PEC=[32mOK[0m
+MV4_LO (0xE1)      [0xE1]: [32mACK[0m data=0x7D PEC=[32mOK[0m
+MV4_HI (0xF1)      [0xF1]: [32mACK[0m data=0x02 PEC=[32mOK[0m
+
+Passed: [32m9[0m/9
+> 
+
+=== command 173: diag ===
+result=PASS reason= elapsed_s=2.766 wait=prompt
+
+
+[36m=== FULL E2 BUS DIAGNOSTICS ===[0m
+
+Config: DATA=GPIO6, CLOCK=GPIO7
+Timing: LOW=100 us, HIGH=100 us (5000 Hz)
+
+[32m[Step 1] Bus Levels[0m
+[36m=== Bus Levels ===[0m
+  SCL: [32mHIGH (idle)[0m
+  SDA: [32mHIGH (idle)[0m
+  [32mOK[0m: Bus idle (both HIGH)
+
+[32m[Step 2] Pin Toggle Test[0m
+[36m=== Pin Toggle Test ===[0m
+Testing if MCU can control and read bus lines...
+
+SCL pin test:
+  Set HIGH -> Read: [32mHIGH (OK)[0m
+  Set LOW  -> Read: [32mLOW (OK)[0m
+
+SDA pin test:
+  Set HIGH -> Read: [32mHIGH (OK)[0m
+  Set LOW  -> Read: [32mLOW (OK)[0m
+
+Summary:
+  [32mPASS[0m: Both pins working correctly
+
+[32m[Step 3] Clock Pulse Test[0m
+[36m=== Clock Pulse Test (5 pulses) ===[0m
+  Pulse  1: LOW=[32mok[0m HIGH=[32mok[0m
+  Pulse  2: LOW=[32mok[0m HIGH=[32mok[0m
+  Pulse  3: LOW=[32mok[0m HIGH=[32mok[0m
+  Pulse  4: LOW=[32mok[0m HIGH=[32mok[0m
+  Pulse  5: LOW=[32mok[0m HIGH=[32mok[0m
+
+Results: 5/5 LOW ok, 5/5 HIGH ok
+
+[32m[Step 4] Bus Sniff (1s)[0m
+[36m=== Bus Sniffer (1000 ms) ===[0m
+Monitoring bus activity...
+
+Results over 1000 ms:
+  SCL transitions: 0
+  SDA transitions: 0
+
+  No bus activity detected - bus is quiet
+
+[32m[Step 5] Address Scan[0m
+[36m=== E2 Address Scanner ===[0m
+Scanning addresses 0-7 with status read (0x7x), up to 5 attempts...
+
+  Address 0: [32mFOUND[0m Status=0x00, PEC=[32mOK[0m
+  Address 1: [90mNo response after 5 attempts (NACK)[0m
+  Address 2: [90mNo response after 5 attempts (NACK)[0m
+  Address 3: [90mNo response after 5 attempts (NACK)[0m
+  Address 4: [90mNo response after 5 attempts (NACK)[0m
+  Address 5: [90mNo response after 5 attempts (NACK)[0m
+  Address 6: [90mNo response after 5 attempts (NACK)[0m
+  Address 7: [90mNo response after 5 attempts (NACK)[0m
+
+Found [32m1[0m device(s)
+
+[32m[Step 6] Timing Discovery[0m
+[36m=== Timing Discovery ===[0m
+Testing different clock periods...
+
+E2 spec: 100-1000us (500-5000 Hz)
+
+  1000 us (  500 Hz): [32mACK[0m, data=0x00, PEC=[32mOK[0m
+   500 us ( 1000 Hz): [32mACK[0m, data=0x00, PEC=[32mOK[0m
+   250 us ( 2000 Hz): [32mACK[0m, data=0x00, PEC=[32mOK[0m
+   200 us ( 2500 Hz): [32mACK[0m, data=0x00, PEC=[32mOK[0m
+   150 us ( 3333 Hz): [32mACK[0m, data=0x00, PEC=[32mOK[0m
+   100 us ( 5000 Hz): [32mACK[0m, data=0x00, PEC=[32mOK[0m
+    75 us ( 6667 Hz): [32mACK[0m, data=0x00, PEC=[32mOK[0m
+    50 us (10000 Hz): [32mACK[0m, data=0x00, PEC=[32mOK[0m
+
+[32m8[0m timing(s) worked
+
+[36m=== DIAGNOSTICS COMPLETE ===[0m
+
+> 
+
+=== command 174: trace clear ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+[36m[I][0m Bus trace cleared
+> 
+
+=== command 175: verbose 1 ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+[36m[I][0m Verbose mode: [32mON[0m
+> 
+
+=== command 176: status ===
+result=PASS reason= elapsed_s=0.016 wait=prompt
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+Status: [36m0x00[0m
+  hasCo2Error(): NO
+[BUS]  108260714 us SDA=1
+[BUS]  108260718 us SCL=1
+[BUS]  108260726 us SCL?=1
+[BUS]  108260730 us delay 100 us
+[BUS]  108260833 us SDA=0
+[BUS]  108260834 us delay 100 us
+[BUS]  108260937 us SCL=0
+[BUS]  108260938 us delay 100 us
+[BUS]  108261047 us SDA=0
+[BUS]  108261049 us delay 10 us
+[BUS]  108261061 us SCL=1
+[BUS]  108261063 us SCL?=1
+[BUS]  108261067 us delay 100 us
+[BUS]  108261170 us SCL=0
+[BUS]  108261171 us delay 100 us
+[BUS]  108261274 us SDA=1
+[BUS]  108261276 us delay 10 us
+[BUS]  108261288 us SCL=1
+[BUS]  108261290 us SCL?=1
+[BUS]  108261291 us delay 100 us
+[BUS]  108261393 us SCL=0
+[BUS]  108261395 us delay 100 us
+[BUS]  108261497 us SDA=1
+[BUS]  108261498 us delay 10 us
+[BUS]  108261511 us SCL=1
+[BUS]  108261512 us SCL?=1
+[BUS]  108261514 us delay 100 us
+[BUS]  108261616 us SCL=0
+[BUS]  108261617 us delay 100 us
+[BUS]  108261720 us SDA=1
+[BUS]  108261721 us delay 10 us
+[BUS]  108261734 us SCL=1
+[BUS]  108261735 us SCL?=1
+[BUS]  108261737 us delay 100 us
+[BUS]  108261840 us SCL=0
+[BUS]  108261841 us delay 100 us
+[BUS]  108261944 us SDA=0
+[BUS]  108261945 us delay 10 us
+[BUS]  108261958 us SCL=1
+[BUS]  108261959 us SCL?=1
+[BUS]  108261961 us delay 100 us
+[BUS]  108262063 us SCL=0
+[BUS]  108262064 us delay 100 us
+[BUS]  108262167 us SDA=0
+[BUS]  108262168 us delay 10 us
+[BUS]  108262180 us SCL=1
+[BUS]  108262182 us SCL?=1
+[BUS]  108262183 us delay 100 us
+[BUS]  108262286 us SCL=0
+[BUS]  108262287 us delay 100 us
+[BUS]  108262390 us SDA=0
+[BUS]  108262391 us delay 10 us
+[BUS]  108262404 us SCL=1
+[BUS]  108262405 us SCL?=1
+[BUS]  108262407 us delay 100 us
+[BUS]  108262510 us SCL=0
+[BUS]  108262511 us delay 100 us
+[BUS]  108262614 us SDA=1
+[BUS]  108262615 us delay 10 us
+[BUS]  108262628 us SCL=1
+[BUS]  108262629 us SCL?=1
+[BUS]  108262631 us delay 100 us
+[BUS]  108262734 us SCL=0
+[BUS]  108262735 us delay 100 us
+[BUS]  108262841 us SDA=1
+[BUS]  108262842 us delay 10 us
+[BUS]  108262855 us SCL=1
+[BUS]  108262857 us SCL?=1
+[BUS]  108262860 us delay 50 us
+[BUS]  108262912 us SDA?=0
+[BUS]  108262913 us delay 50 us
+[BUS]  108262965 us SCL=0
+[BUS]  108262967 us delay 100 us
+[BUS]  108263074 us SDA=1
+[BUS]  108263075 us delay 10 us
+[BUS]  108263088 us SCL=1
+[BUS]  108263089 us SCL?=1
+[BUS]  108263093 us delay 50 us
+[BUS]  108263145 us SDA?=0
+[BUS]  108263148 us delay 50 us
+[BUS]  108263200 us SCL=0
+[BUS]  108263202 us delay 100 us
+[BUS]  108263304 us SDA=1
+[BUS]  108263305 us delay 10 us
+[BUS]  108263317 us SCL=1
+[BUS]  108263319 us SCL?=1
+[BUS]  108263320 us delay 50 us
+[BUS]  108263372 us SDA?=0
+[BUS]  108263373 us delay 50 us
+[BUS]  108263425 us SCL=0
+[BUS]  108263426 us delay 100 us
+[BUS]  108263529 us SDA=1
+[BUS]  108263530 us delay 10 us
+[BUS]  108263543 us SCL=1
+[BUS]  108263545 us SCL?=1
+[BUS]  108263546 us delay 50 us
+[BUS]  108263599 us SDA?=0
+[BUS]  108263600 us delay 50 us
+[BUS]  108263653 us SCL=0
+[BUS]  108263654 us delay 100 us
+[BUS]  108263757 us SDA=1
+[BUS]  108263758 us delay 10 us
+[BUS]  108263771 us SCL=1
+[BUS]  108263772 us SCL?=1
+[BUS]  108263774 us delay 50 us
+[BUS]  108263826 us SDA?=0
+[BUS]  108263828 us delay 50 us
+[BUS]  108263880 us SCL=0
+[BUS]  108263881 us delay 100 us
+[BUS]  108263984 us SDA=1
+[BUS]  108263985 us delay 10 us
+[BUS]  108263997 us SCL=1
+[BUS]  108263999 us SCL?=1
+[BUS]  108264000 us delay 50 us
+[BUS]  108264053 us SDA?=0
+[BUS]  108264054 us delay 50 us
+[BUS]  108264107 us SCL=0
+[BUS]  108264108 us delay 100 us
+[BUS]  108264211 us SDA=1
+[BUS]  108264212 us delay 10 us
+[BUS]  108264225 us SCL=1
+[BUS]  108264226 us SCL?=1
+[BUS]  108264228 us delay 50 us
+[BUS]  108264280 us SDA?=0
+[BUS]  108264282 us delay 50 us
+[BUS]  108264333 us SCL=0
+[BUS]  108264335 us delay 100 us
+[BUS]  108264438 us SDA=1
+[BUS]  108264439 us delay 10 us
+[BUS]  108264451 us SCL=1
+[BUS]  108264453 us SCL?=1
+[BUS]  108264454 us delay 50 us
+[BUS]  108264506 us SDA?=0
+[BUS]  108264507 us delay 50 us
+[BUS]  108264560 us SCL=0
+[BUS]  108264561 us delay 100 us
+[BUS]  108264664 us SDA=1
+[BUS]  108264665 us delay 10 us
+[BUS]  108264677 us SCL=1
+[BUS]  108264679 us SCL?=1
+[BUS]  108264680 us delay 50 us
+[BUS]  108264732 us SDA?=0
+[BUS]  108264733 us delay 50 us
+[BUS]  108264785 us SCL=0
+[BUS]  108264786 us delay 100 us
+[BUS]  108264890 us SDA=0
+[BUS]  108264891 us delay 10 us
+[BUS]  108264903 us SCL=1
+[BUS]  108264905 us SCL?=1
+[BUS]  108264907 us delay 100 us
+[BUS]  108265010 us SCL=0
+[BUS]  108265011 us delay 100 us
+[BUS]  108265114 us SDA=1
+[BUS]  108265116 us SDA=1
+[BUS]  108265117 us delay 10 us
+[BUS]  108265130 us SCL=1
+[BUS]  108265132 us SCL?=1
+[BUS]  108265133 us delay 50 us
+[BUS]  108265186 us SDA?=0
+[BUS]  108265187 us delay 50 us
+[BUS]  108265240 us SCL=0
+[BUS]  108265241 us delay 100 us
+[BUS]  108265344 us SDA=1
+[BUS]  108265345 us delay 10 us
+[BUS]  108265357 us SCL=1
+[BUS]  108265359 us SCL?=1
+[BUS]  108265360 us delay 50 us
+[BUS]  108265412 us SDA?=1
+[BUS]  108265413 us delay 50 us
+[BUS]  108265465 us SCL=0
+[BUS]  108265467 us delay 100 us
+[BUS]  108265569 us SDA=1
+[BUS]  108265570 us delay 10 us
+[BUS]  108265583 us SCL=1
+[BUS]  108265584 us SCL?=1
+[BUS]  108265586 us delay 50 us
+[BUS]  108265638 us SDA?=1
+[BUS]  108265639 us delay 50 us
+[BUS]  108265691 us SCL=0
+[BUS]  108265692 us delay 100 us
+[BUS]  108265795 us SDA=1
+[BUS]  108265796 us delay 10 us
+[BUS]  108265809 us SCL=1
+[BUS]  108265810 us SCL?=1
+[BUS]  108265811 us delay 50 us
+[BUS]  108265863 us SDA?=1
+[BUS]  108265864 us delay 50 us
+[BUS]  108265916 us SCL=0
+[BUS]  108265918 us delay 100 us
+[BUS]  108266020 us SDA=1
+[BUS]  108266021 us delay 10 us
+[BUS]  108266034 us SCL=1
+[BUS]  108266035 us SCL?=1
+[BUS]  108266037 us delay 50 us
+[BUS]  108266089 us SDA?=0
+[BUS]  108266090 us delay 50 us
+[BUS]  108266142 us SCL=0
+[BUS]  108266143 us delay 100 us
+[BUS]  108266246 us SDA=1
+[BUS]  108266247 us delay 10 us
+[BUS]  108266259 us SCL=1
+[BUS]  108266261 us SCL?=1
+[BUS]  108266262 us delay 50 us
+[BUS]  108266314 us SDA?=0
+[BUS]  108266315 us delay 50 us
+[BUS]  108266367 us SCL=0
+[BUS]  108266368 us delay 100 us
+[BUS]  108266471 us SDA=1
+[BUS]  108266472 us delay 10 us
+[BUS]  108266484 us SCL=1
+[BUS]  108266486 us SCL?=1
+[BUS]  108266487 us delay 50 us
+[BUS]  108266540 us SDA?=0
+[BUS]  108266541 us delay 50 us
+[BUS]  108266594 us SCL=0
+[BUS]  108266595 us delay 100 us
+[BUS]  108266697 us SDA=1
+[BUS]  108266698 us delay 10 us
+[BUS]  108266710 us SCL=1
+[BUS]  108266712 us SCL?=1
+[BUS]  108266713 us delay 50 us
+[BUS]  108266765 us SDA?=1
+[BUS]  108266766 us delay 50 us
+[BUS]  108266818 us SCL=0
+[BUS]  108266819 us delay 100 us
+[BUS]  108266922 us SDA=1
+[BUS]  108266923 us delay 10 us
+[BUS]  108266936 us SCL=1
+[BUS]  108266937 us SCL?=1
+[BUS]  108266939 us delay 100 us
+[BUS]  108267040 us SCL=0
+[BUS]  108267042 us delay 100 us
+[BUS]  108267145 us SDA=1
+[BUS]  108267147 us SDA=0
+[BUS]  108267149 us delay 10 us
+[BUS]  108267162 us SCL=1
+[BUS]  108267163 us SCL?=1
+[BUS]  108267166 us delay 100 us
+[BUS]  108267269 us SDA=1
+[BUS]  108267270 us delay 100 us
+> 
+
+=== command 177: trace stats ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+=== Bus Trace ===
+  Enabled: yes
+  Pending: 0
+  Dropped: 0
+  Capacity: 512
+> 
+
+=== command 178: verbose 0 ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+[36m[I][0m Verbose mode: [0mOFF[0m
+> 
+
+=== command 179: sniff ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+[SNIFF] ON - 'sniff 0' to stop
+> 
+
+=== command 180: status ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+
+>START [0x71 STATUS a0 ACK] data=0x00(0) pec=0x71 STOP
+  Status: [32mOK[0m (code=0, detail=0)
+  Message: [33mOK[0m
+Status: [36m0x00[0m
+  hasCo2Error(): NO
+> 
+
+=== command 181: sniff ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+
+[SNIFF] OFF (709 ms, 30 edges)
+> 
+
+=== command 182: stress_mix 500 ===
+result=PASS reason= elapsed_s=6.391 wait=prompt
+  Progress: 50/500 ([31m10%[0m, ok=[32m50[0m, fail=[32m0[0m)
+  Progress: 100/500 ([31m20%[0m, ok=[32m100[0m, fail=[32m0[0m)
+  Progress: 150/500 ([31m30%[0m, ok=[32m150[0m, fail=[32m0[0m)
+  Progress: 200/500 ([31m40%[0m, ok=[32m200[0m, fail=[32m0[0m)
+  Progress: 250/500 ([31m50%[0m, ok=[32m250[0m, fail=[32m0[0m)
+  Progress: 300/500 ([31m60%[0m, ok=[32m300[0m, fail=[32m0[0m)
+  Progress: 350/500 ([31m70%[0m, ok=[32m350[0m, fail=[32m0[0m)
+  Progress: 400/500 ([33m80%[0m, ok=[32m400[0m, fail=[32m0[0m)
+  Progress: 450/500 ([33m90%[0m, ok=[32m450[0m, fail=[32m0[0m)
+  Progress: 500/500 ([32m100%[0m, ok=[32m500[0m, fail=[32m0[0m)
+=== stress_mix summary ===
+  Total: [32mok=500[0m [32mfail=0[0m ([32m100.00%[0m)
+  Duration: 6387 ms
+  Rate: 78.28 ops/s
+  readStatus  [32mok=63[0m [32mfail=0[0m
+  readCo2Fast [32mok=63[0m [32mfail=0[0m
+  readCo2Avg  [32mok=63[0m [32mfail=0[0m
+  readGroup   [32mok=63[0m [32mfail=0[0m
+  readSubgroup [32mok=62[0m [32mfail=0[0m
+  readAvail   [32mok=62[0m [32mfail=0[0m
+  readFw      [32mok=62[0m [32mfail=0[0m
+  readFeatures [32mok=62[0m [32mfail=0[0m
+  Health delta: [32msuccess +937[0m, [32mfailures +0[0m
+> 
+
+=== command 183: drv ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+=== Driver Health ===
+  State: [32mREADY[0m
+  Online: [32myes[0m
+  Consecutive failures: [32m0[0m
+  Total success: [32m3100[0m
+  Total failures: [32m0[0m
+  Success rate: [32m100.0%[0m
+  Last OK: 6739 ms ago (at 110392 ms)
+  Last error: never
+  persistentConfigDirty: [32mno[0m
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  persistentConfigDirtyError message: OK
+  resyncNeeded: [32mno[0m
+> 
+
+=== command 184: dirty ===
+result=PASS reason= elapsed_s=0.0 wait=prompt
+=== Persistent Config Dirty State ===
+  persistentConfigDirty: [32mno[0m
+  persistentConfigDirtyError: OK (code=0, detail=0)
+  persistentConfigDirtyError message: OK
+  resyncNeeded: [32mno[0m
+> 
+

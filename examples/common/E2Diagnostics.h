@@ -386,7 +386,7 @@ inline void scanAddresses(const EE871::Config& cfg) {
                 static_cast<unsigned>(SCAN_ATTEMPTS));
 
   bool found[8] = {};
-  bool pecOk[8] = {};
+  bool invalidResponse[8] = {};
   uint8_t status[8] = {};
 
   for (uint8_t attempt = 0; attempt < SCAN_ATTEMPTS; ++attempt) {
@@ -402,14 +402,20 @@ inline void scanAddresses(const EE871::Config& cfg) {
       const bool ack = sendByteRaw(cfg, ctrlByte, false);
 
       if (ack) {
-        status[addr] = readByteRaw(cfg, true, false);  // ACK
+        const uint8_t candidateStatus = readByteRaw(cfg, true, false);  // ACK
         const uint8_t pec = readByteRaw(cfg, false, false);  // NACK
         sendStop(cfg);
 
         const uint8_t expectedPec =
-            static_cast<uint8_t>(ctrlByte + status[addr]);
-        pecOk[addr] = (pec == expectedPec);
-        found[addr] = true;
+            static_cast<uint8_t>(ctrlByte + candidateStatus);
+        if (pec == expectedPec) {
+          status[addr] = candidateStatus;
+          found[addr] = true;
+        } else {
+          // An ACK sample alone is not device discovery. A complete E2
+          // response must also carry a valid PEC.
+          invalidResponse[addr] = true;
+        }
       } else {
         sendStop(cfg);
       }
@@ -430,10 +436,17 @@ inline void scanAddresses(const EE871::Config& cfg) {
                     LOG_COLOR_GREEN,
                     LOG_COLOR_RESET,
                     status[addr],
-                    okColor(pecOk[addr]),
-                    pecOk[addr] ? "OK" : "MISMATCH",
+                    LOG_COLOR_GREEN,
+                    "OK",
                     LOG_COLOR_RESET);
       ++foundCount;
+    } else if (invalidResponse[addr]) {
+      Serial.printf("  Address %d: %sInvalid response after %u attempts "
+                    "(PEC mismatch; not a device)%s\n",
+                    addr,
+                    LOG_COLOR_RED,
+                    static_cast<unsigned>(SCAN_ATTEMPTS),
+                    LOG_COLOR_RESET);
     } else {
       Serial.printf("  Address %d: %sNo response after %u attempts (NACK)%s\n",
                     addr,

@@ -49,6 +49,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mid-cache read failure leaves every optional capability disabled.
 - Retry E2 address scans a bounded five times so a single transient NACK after
   another diagnostic operation does not falsely report an absent sensor.
+- Require both an ACK and valid PEC before the example diagnostic scanner
+  reports an address as an E2 device; malformed responses remain visible as
+  invalid diagnostics instead of false device discoveries.
 - Require a complete CLI prompt and the command-specific value line in the
   Python HIL runner, settle native USB briefly between commands, and stop the
   plan on a framing timeout instead of shifting later responses onto the wrong
