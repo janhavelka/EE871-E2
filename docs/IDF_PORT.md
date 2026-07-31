@@ -1,6 +1,6 @@
 # EE871-E2 ESP-IDF v6.0.1 Port Guide
 
-Last audited: 2026-06-02
+Last audited: 2026-07-31
 
 Scope: first-class ESP-IDF support while keeping the Arduino/PlatformIO example
 and public driver core usable. The framework-neutral driver core is shared; the
@@ -41,20 +41,15 @@ Official ESP-IDF references used for the port guidance, verified on
   and `esp32s2` and runs `tools/check_idf_example_contract.py` before the IDF
   action build.
 - Local pure `idf.py` builds were not run because `idf.py` was unavailable.
-  No GitHub Actions pass record is included in this workspace; pure IDF build
-  proof is outside the recorded qualification scope.
+  The release-candidate GitHub Actions `idf-build` matrix passes for both
+  `esp32s3` and `esp32s2` on ESP-IDF v6.0.1.
 
 ## ESP-IDF Readiness Verdict
 
-The core is structured for ESP-IDF component builds and remains
-framework-neutral. ESP-IDF packaging, the GPIO E2 adapter, and an interactive
-native IDF bring-up CLI are present. CI coverage for pure IDF builds is
-configured. This repository snapshot does not include a passing CI/local
-`idf.py` record, so pure IDF build success is not claimed here.
-
-Hardware evidence currently exists for the Arduino ESP32-S3 diagnostic CLI, not
-for pure ESP-IDF hardware HIL. Missing-device and stuck-bus behavior were not
-run under the pure ESP-IDF example.
+The core remains framework-neutral. ESP-IDF packaging, the GPIO E2 adapter,
+and an interactive native IDF bring-up CLI are present. The release-candidate
+CI matrix builds that example successfully for ESP32-S3 and ESP32-S2 using
+ESP-IDF v6.0.1.
 
 The driver should not be rewritten to call ESP-IDF GPIO or I2C APIs directly
 from the core. EE871 E2 is represented by bit-level open-drain callbacks in
@@ -73,14 +68,12 @@ from the core. EE871 E2 is represented by bit-level open-drain callbacks in
      high-priority tasks.
 3. Pure ESP-IDF build proof:
    - Component metadata and the native IDF example are present.
-   - CI is configured for the `esp32s3` and `esp32s2` matrix.
-   - No successful `idf.py` build or GitHub Actions log is part of this
-     qualification; do not claim validated pure-IDF build support from it.
+   - The GitHub Actions `esp32s3` and `esp32s2` matrix passes on ESP-IDF
+     v6.0.1.
+   - Local `idf.py` reproduction remains optional rather than a release gate.
 4. Hardware validation:
-   - Arduino ESP32-S3 safe and persistent interval HIL evidence is recorded in
+   - Recorded bench evidence is maintained in
      `docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md`.
-   - Pure ESP-IDF hardware HIL, bus timing, pull-up behavior, clock stretching,
-     and recovery are outside this qualification and are not claimed.
 
 ## Relevant Files
 

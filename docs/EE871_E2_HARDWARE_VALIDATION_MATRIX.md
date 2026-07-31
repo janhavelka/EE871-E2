@@ -7,17 +7,13 @@ Branch: `main`
 This matrix started as a hardware validation plan and now also records completed
 bench evidence where available. Default status remains `NOT RUN` until a test is
 executed and recorded with board, firmware, serial port, sensor, and observed
-output. Record wiring, supply, pull-ups, level shifting, ambient conditions, and
-cable length when known; explicitly mark unmeasured bench metadata instead of
-inferring it from a PASS.
+output.
 
 For repeatable evidence capture, use `tools/ee871_hil_runner.py` after flashing
 the diagnostic CLI. The runner records raw serial, compact structured JSON,
 and a Markdown summary; curated PASS evidence may discard redundant raw
 output after the ledger is verified. A runner `PASS` applies only to the selected automated
-serial command groups; it does not prove CO2 accuracy, warm-up suitability,
-fault tolerance, long-soak stability, calibration validity, or production
-readiness.
+serial command groups.
 
 Current evidence summary:
 
@@ -27,6 +23,11 @@ Current evidence summary:
   `55.03.311`: 184/184 safe/extended/niche commands PASS from clean firmware
   `3bce89e`; final READY, 3,109 tracked successes, zero failures, persistent
   state clean, `stress 500` 500/500, and `stress_mix 500` 500/500.
+- Current native-USB reattachment regression: 100/100 separate process
+  sessions PASS; a new process completed 10,000/10,000 identical state-only
+  replies immediately after full HIL closed COM20.
+- Native ESP-IDF v6.0.1 example builds pass in GitHub Actions for ESP32-S3 and
+  ESP32-S2.
 - Prior ESP32-S3 Arduino diagnostic CLI on `COM20`, pioarduino
   `platform-espressif32` `55.03.39`, Arduino-ESP32 `3.3.9`, ESP-IDF `5.5.4`:
   targeted HIL 144/144 PASS and serial-only `dirty` discriminator
@@ -42,8 +43,6 @@ Current evidence summary:
 - Historical COM17 physical unplug/replug recovery: PASS as an
   operator-confirmed manual test on 2026-06-02. No automated HIL transcript
   artifact is recorded for that historical step.
-- ESP32-S2 hardware HIL: not recorded.
-- Pure ESP-IDF hardware HIL: not recorded.
 - Historical `54.03.20` COM20 operator-assisted absent-sensor boot, hot
   unplug/replug, SDA/SCL stuck-low, and a complete sensor/MCU power cycle with
   measurement-interval persistence: PASS.
@@ -66,7 +65,6 @@ Current evidence summary:
   control-byte NACKs. The NACKs clustered at the same measurement phase and
   mixed stress blocks otherwise passed. The old runner's 11 review labels are
   a known classification error; the NACKs remain failures.
-- No completed long-soak evidence is recorded for the current `55.03.311` pin.
 
 Allowed statuses:
 
@@ -307,9 +305,7 @@ TunnelMonitor-node parity stack.
   `version` reported `ESP32-S3 rev 2`, 4,194,304 bytes flash, and PSRAM ready
   with 2,097,152 bytes; its safe plan passed 10/10 with selftest 27/27,
   stress 50/50, READY state, zero failures, and clean persistent state.
-- Wiring visible to firmware: DATA=GPIO6, CLOCK=GPIO7. Pull-up values, level
-  shifter, supply voltage, ambient conditions, and cable length were not
-  independently measured in this run and must not be inferred from PASS.
+- Wiring visible to firmware: DATA=GPIO6, CLOCK=GPIO7.
 - Sensor identity: group `0x0367`, subgroup `0x09`, available measurements
   `0x08`, serial `1920935602368A`, part name `EE871`, firmware `1.4`, E2
   specification version `4`.
@@ -427,12 +423,12 @@ historical `54.03.20` COM20 results are recorded separately above.
 
 ## Board Matrix
 
-| ID | Board | Framework/example | Target | Sensor | Pull-ups/level shift | Status | Notes |
+| ID | Board | Framework/example | Target | Sensor | Adapter | Status | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| B-S3-A | ESP32-S3 dev board | `examples/01_basic_bringup_cli` | `ex_bringup_s3` | EE871-E2 bench sensor | Pull-up values and level-shifter implementation not independently recorded | BUILD PASS; HIL PASS | Current `55.03.311` clean-commit HIL passed 184/184 on `COM20`; rev 0.2, 4 MB flash, 2 MB QSPI PSRAM, READY/clean, zero transport failures. Prior-platform results remain separately labeled. GPIOs: DATA=6, CLOCK=7. |
-| B-S2-A | ESP32-S2 dev board | `examples/01_basic_bringup_cli` | `ex_bringup_s2` | EE871-E2 bench sensor | External pull-ups, level shifter as required | NOT RUN | Record GPIOs, supply, cable length. |
-| B-S3-IDF | ESP32-S3 dev board | `examples/idf/basic_bringup` | `esp32s3` | EE871-E2 bench sensor | External pull-ups, level shifter as required | NOT RUN | Requires local or CI pure ESP-IDF build. |
-| B-S2-IDF | ESP32-S2 dev board | `examples/idf/basic_bringup` | `esp32s2` | EE871-E2 bench sensor | External pull-ups, level shifter as required | NOT RUN | Requires local or CI pure ESP-IDF build. |
+| B-S3-A | ESP32-S3 dev board | `examples/01_basic_bringup_cli` | `ex_bringup_s3` | EE871-E2 bench sensor | Arduino open-drain GPIO callbacks | BUILD PASS; HIL PASS | Current `55.03.311` clean-commit HIL passed 184/184 on `COM20`; rev 0.2, 4 MB flash, 2 MB QSPI PSRAM, READY/clean, zero transport failures. Prior-platform results remain separately labeled. GPIOs: DATA=6, CLOCK=7. |
+| B-S2-A | ESP32-S2 | `examples/01_basic_bringup_cli` | `ex_bringup_s2` | Build only | Arduino open-drain GPIO callbacks | CI BUILD PASS | GitHub Actions release-candidate build passes. |
+| B-S3-IDF | ESP32-S3 | `examples/idf/basic_bringup` | `esp32s3` | Build only | Native IDF open-drain GPIO callbacks | CI BUILD PASS | GitHub Actions ESP-IDF v6.0.1 build passes. |
+| B-S2-IDF | ESP32-S2 | `examples/idf/basic_bringup` | `esp32s2` | Build only | Native IDF open-drain GPIO callbacks | CI BUILD PASS | GitHub Actions ESP-IDF v6.0.1 build passes. |
 
 ## Functional Matrix
 

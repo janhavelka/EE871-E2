@@ -432,7 +432,7 @@ inline void scanAddresses(const EE871::Config& cfg) {
   int foundCount = 0;
   for (uint8_t addr = 0; addr < 8; ++addr) {
     if (found[addr]) {
-      Serial.printf("  Address %d: %sFOUND%s Status=0x%02X, PEC=%s%s%s\n", 
+      Serial.printf("  Address %d: %sFOUND%s Status=0x%02X, PEC=%s%s%s\n",
                     addr,
                     LOG_COLOR_GREEN,
                     LOG_COLOR_RESET,
@@ -661,12 +661,12 @@ inline void testTransaction(const EE871::Config& cfg, uint8_t ctrlByte) {
 inline void testLibraryCommands(EE871::EE871& driver) {
   Serial.printf("%s=== Library Command Test ===%s\n", LOG_COLOR_CYAN, LOG_COLOR_RESET);
   Serial.println("Testing bounded library control-byte reads...\n");
-  
+
   struct CmdTest {
     uint8_t mainCmd;
     const char* name;
   };
-  
+
   const CmdTest tests[] = {
     {EE871::cmd::MAIN_TYPE_LO, "TYPE_LO (0x11)"},    // Group low
     {EE871::cmd::MAIN_TYPE_HI, "TYPE_HI (0x41)"},    // Group high
@@ -678,16 +678,16 @@ inline void testLibraryCommands(EE871::EE871& driver) {
     {EE871::cmd::MAIN_MV4_LO, "MV4_LO (0xE1)"},     // CO2 avg low
     {EE871::cmd::MAIN_MV4_HI, "MV4_HI (0xF1)"},     // CO2 avg high
   };
-  
+
   const int numTests = sizeof(tests) / sizeof(tests[0]);
   int passed = 0;
   const uint8_t deviceAddress = driver.getConfig().deviceAddress;
-  
+
   for (int i = 0; i < numTests; i++) {
     const uint8_t ctrlByte =
         EE871::cmd::makeControlRead(tests[i].mainCmd, deviceAddress);
     uint8_t data = 0;
-    
+
     Serial.printf("%-18s [0x%02X]: ", tests[i].name, ctrlByte);
 
     const EE871::Status st =

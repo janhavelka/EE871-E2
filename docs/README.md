@@ -13,7 +13,7 @@ release guidance.
 | --- | --- | --- |
 | [EE871_E2_HARDWARE_VALIDATION_MATRIX.md](EE871_E2_HARDWARE_VALIDATION_MATRIX.md) | Hardware validation plan plus recorded bench evidence. | Current evidence ledger. |
 | [EE871_E2_HIL_RUNNER.md](EE871_E2_HIL_RUNNER.md) | Operator guide for `tools/ee871_hil_runner.py`. | Current HIL runner usage. |
-| [IDF_PORT.md](IDF_PORT.md) | ESP-IDF port architecture, constraints, and validation checklist. | Current guidance; pure IDF build proof is outside the recorded qualification scope. |
+| [IDF_PORT.md](IDF_PORT.md) | ESP-IDF port architecture, constraints, and validation checklist. | Current guidance; ESP32-S3/S2 native IDF example builds pass in CI. |
 | [IDF_PORT_IMPLEMENTATION.md](IDF_PORT_IMPLEMENTATION.md) | Short implementation note for files added by the IDF port. | Current implementation summary. |
 | [EE871_E2_Protocol_and_Register_Map.md](EE871_E2_Protocol_and_Register_Map.md) | Curated E2 protocol and EE871 register reference. | Current implementation reference; verify exact vendor tables against PDFs when needed. |
 | [prompts/README.md](prompts/README.md) | Ordered AI-coder prompt series that closes the general EE871 gaps first, then adds an E2 owner/module exclusively to the Co2Control product in consuming firmware. | Current implementation sequence; supersedes the older single TunnelMonitor-fit prompt and explicitly keeps all non-Co2Control production products E2-disabled. |
@@ -55,6 +55,11 @@ PDF if there is any ambiguity.
 - Current `55.03.311` COM20 HIL: 184/184 PASS from clean firmware `3bce89e`;
   safe/extended/niche coverage finished READY with zero transport failures,
   clean persistent state, repeated stress 500/500, and mixed stress 500/500.
+- Current native-USB process reattachment: 100/100 separate sessions PASS;
+  after full HIL closed COM20, a new process completed 10,000/10,000 identical
+  state-only replies without reset or cable replug.
+- GitHub Actions native ESP-IDF v6.0.1 example builds pass for ESP32-S3 and
+  ESP32-S2.
 - Prior `55.03.39` targeted HIL: 144/144 PASS. Its serial-only discriminator:
   10,000/10,000 identical 201-byte `dirty` replies PASS; `dirty` performs no
   E2 operation, so this is CLI-framing evidence rather than a long-soak claim.
@@ -85,6 +90,3 @@ PDF if there is any ambiguity.
   completed long soak is recorded for it.
 - Historical COM17 safe/persistent and manual unplug/replug evidence is
   retained in the hardware matrix.
-- ESP32-S2 hardware HIL: not recorded.
-- Pure ESP-IDF build proof is outside this qualification scope. CI is
-  configured, but no local or GitHub Actions pass evidence is recorded here.

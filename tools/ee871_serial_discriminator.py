@@ -6,10 +6,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import sys
 import time
 from collections import Counter
-from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -17,16 +15,7 @@ from typing import Any
 import ee871_hil_runner as hil
 
 
-SCRIPT_VERSION = "1.1"
-
-
-def utc_text() -> str:
-    return (
-        datetime.now(timezone.utc)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
+SCRIPT_VERSION = "1.2"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -111,7 +100,7 @@ def write_reports(run_dir: Path, payload: dict[str, Any]) -> None:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     run_dir = make_run_dir(args.run_dir)
-    started_utc = utc_text()
+    started_utc = hil.iso_timestamp()
     started = time.monotonic()
     pass_count = 0
     failure = ""
@@ -198,7 +187,7 @@ def main(argv: list[str] | None = None) -> int:
             "tool": "ee871_serial_discriminator.py",
             "tool_version": SCRIPT_VERSION,
             "start_utc": started_utc,
-            "end_utc": utc_text(),
+            "end_utc": hil.iso_timestamp(),
             "port": args.port,
             "baud": args.baud,
             "requested_count": args.count,
