@@ -550,6 +550,8 @@ void printVersionInfo() {
                 static_cast<unsigned long>(ESP.getFlashChipSize()),
                 psramFound() ? "ready" : "not available",
                 static_cast<unsigned long>(ESP.getPsramSize()));
+  Serial.printf("  Arduino-ESP32: %s\n", ESP.getCoreVersion());
+  Serial.printf("  ESP-IDF: %s\n", ESP.getSdkVersion());
   Serial.printf("  EE871 library version: %s\n", EE871::VERSION);
   Serial.printf("  EE871 library full: %s\n", EE871::VERSION_FULL);
   Serial.printf("  EE871 library build: %s\n", EE871::BUILD_TIMESTAMP);
@@ -901,7 +903,11 @@ void runSelfTest() {
 
   uint8_t mode = 0;
   st = device.readOperatingMode(mode);
-  reportCheck("readOperatingMode", st.ok(), st.ok() ? "" : errToStr(st.code));
+  if (st.code == EE871::Err::NOT_SUPPORTED) {
+    reportSkip("readOperatingMode", "not supported");
+  } else {
+    reportCheck("readOperatingMode", st.ok(), st.ok() ? "" : errToStr(st.code));
+  }
 
   uint8_t ctrl = 0;
   st = device.readControlByte(EE871::cmd::MAIN_STATUS, ctrl);
@@ -1482,7 +1488,7 @@ void processCommand(const String& cmd) {
     uint8_t ctrlByte = (uint8_t)strtol(hexStr.c_str(), nullptr, 16);
     e2diag::testTransaction(deviceCfg, ctrlByte);
   } else if (trimmed == "libtest") {
-    e2diag::testLibraryCommands(deviceCfg);
+    e2diag::testLibraryCommands(device);
   } else if (trimmed == "selftest") {
     runSelfTest();
   } else if (trimmed == "stress_mix") {

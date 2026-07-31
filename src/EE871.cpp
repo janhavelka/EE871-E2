@@ -880,8 +880,23 @@ Status EE871::writeCo2Filter(uint8_t filter) {
 }
 
 Status EE871::readOperatingMode(uint8_t& mode) {
-  // Mode can always be read, guard only applies to write
-  return customRead(cmd::CUSTOM_OPERATING_MODE, mode);
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  }
+  if (!hasLowPowerMode() && !hasE2Priority()) {
+    return Status::Error(Err::NOT_SUPPORTED, "Operating mode not supported");
+  }
+
+  uint8_t value = 0;
+  Status st = customRead(cmd::CUSTOM_OPERATING_MODE, value);
+  if (!st.ok()) {
+    return st;
+  }
+  if ((value & static_cast<uint8_t>(~0x03U)) != 0U) {
+    return Status::Error(Err::OUT_OF_RANGE, "Invalid operating mode bits", value);
+  }
+  mode = value;
+  return Status::Ok();
 }
 
 Status EE871::writeOperatingMode(uint8_t mode) {
@@ -891,6 +906,9 @@ Status EE871::writeOperatingMode(uint8_t mode) {
   // Only bits 0 and 1 are valid.
   if (mode > 0x03) {
     return Status::Error(Err::OUT_OF_RANGE, "Invalid mode bits", mode);
+  }
+  if (!hasLowPowerMode() && !hasE2Priority()) {
+    return Status::Error(Err::NOT_SUPPORTED, "Operating mode not supported");
   }
   // Check if requested mode bits are supported
   if ((mode & cmd::OPERATING_MODE_MEASUREMODE_MASK) && !hasLowPowerMode()) {

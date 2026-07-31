@@ -6,6 +6,7 @@
 #include <Arduino.h>
 #include "EE871/CommandTable.h"
 #include "EE871/Config.h"
+#include "EE871/EE871.h"
 #include "E2Transport.h"
 #include "Log.h"
 
@@ -386,7 +387,7 @@ inline void scanAddresses(const EE871::Config& cfg) {
                 static_cast<unsigned>(SCAN_ATTEMPTS));
 
   bool found[8] = {};
-  bool pecOk[8] = {};
+  bool invalidResponse[8] = {};
   uint8_t status[8] = {};
 
   for (uint8_t attempt = 0; attempt < SCAN_ATTEMPTS; ++attempt) {
@@ -402,14 +403,20 @@ inline void scanAddresses(const EE871::Config& cfg) {
       const bool ack = sendByteRaw(cfg, ctrlByte, false);
 
       if (ack) {
-        status[addr] = readByteRaw(cfg, true, false);  // ACK
+        const uint8_t candidateStatus = readByteRaw(cfg, true, false);  // ACK
         const uint8_t pec = readByteRaw(cfg, false, false);  // NACK
         sendStop(cfg);
 
         const uint8_t expectedPec =
-            static_cast<uint8_t>(ctrlByte + status[addr]);
-        pecOk[addr] = (pec == expectedPec);
-        found[addr] = true;
+            static_cast<uint8_t>(ctrlByte + candidateStatus);
+        if (pec == expectedPec) {
+          status[addr] = candidateStatus;
+          found[addr] = true;
+        } else {
+          // An ACK sample alone is not device discovery. A complete E2
+          // response must also carry a valid PEC.
+          invalidResponse[addr] = true;
+        }
       } else {
         sendStop(cfg);
       }
@@ -425,15 +432,22 @@ inline void scanAddresses(const EE871::Config& cfg) {
   int foundCount = 0;
   for (uint8_t addr = 0; addr < 8; ++addr) {
     if (found[addr]) {
-      Serial.printf("  Address %d: %sFOUND%s Status=0x%02X, PEC=%s%s%s\n", 
+      Serial.printf("  Address %d: %sFOUND%s Status=0x%02X, PEC=%s%s%s\n",
                     addr,
                     LOG_COLOR_GREEN,
                     LOG_COLOR_RESET,
                     status[addr],
-                    okColor(pecOk[addr]),
-                    pecOk[addr] ? "OK" : "MISMATCH",
+                    LOG_COLOR_GREEN,
+                    "OK",
                     LOG_COLOR_RESET);
       ++foundCount;
+    } else if (invalidResponse[addr]) {
+      Serial.printf("  Address %d: %sInvalid response after %u attempts "
+                    "(PEC mismatch; not a device)%s\n",
+                    addr,
+                    LOG_COLOR_RED,
+                    static_cast<unsigned>(SCAN_ATTEMPTS),
+                    LOG_COLOR_RESET);
     } else {
       Serial.printf("  Address %d: %sNo response after %u attempts (NACK)%s\n",
                     addr,
@@ -643,17 +657,17 @@ inline void testTransaction(const EE871::Config& cfg, uint8_t ctrlByte) {
 // Test All Library Commands
 // ============================================================================
 
-/// Test the exact commands that begin() uses
-inline void testLibraryCommands(const EE871::Config& cfg) {
+/// Test the library control-byte path used by begin() and measurement reads.
+inline void testLibraryCommands(EE871::EE871& driver) {
   Serial.printf("%s=== Library Command Test ===%s\n", LOG_COLOR_CYAN, LOG_COLOR_RESET);
-  Serial.println("Testing exact commands used by begin()...\n");
-  
+  Serial.println("Testing bounded library control-byte reads...\n");
+
   struct CmdTest {
     uint8_t mainCmd;
     const char* name;
   };
-  
-  CmdTest tests[] = {
+
+  const CmdTest tests[] = {
     {EE871::cmd::MAIN_TYPE_LO, "TYPE_LO (0x11)"},    // Group low
     {EE871::cmd::MAIN_TYPE_HI, "TYPE_HI (0x41)"},    // Group high
     {EE871::cmd::MAIN_TYPE_SUB, "TYPE_SUB (0x21)"},  // Subgroup
@@ -664,40 +678,32 @@ inline void testLibraryCommands(const EE871::Config& cfg) {
     {EE871::cmd::MAIN_MV4_LO, "MV4_LO (0xE1)"},     // CO2 avg low
     {EE871::cmd::MAIN_MV4_HI, "MV4_HI (0xF1)"},     // CO2 avg high
   };
-  
-  int numTests = sizeof(tests) / sizeof(tests[0]);
+
+  const int numTests = sizeof(tests) / sizeof(tests[0]);
   int passed = 0;
-  
+  const uint8_t deviceAddress = driver.getConfig().deviceAddress;
+
   for (int i = 0; i < numTests; i++) {
-    uint8_t ctrlByte = EE871::cmd::makeControlRead(tests[i].mainCmd, cfg.deviceAddress);
-    
+    const uint8_t ctrlByte =
+        EE871::cmd::makeControlRead(tests[i].mainCmd, deviceAddress);
+    uint8_t data = 0;
+
     Serial.printf("%-18s [0x%02X]: ", tests[i].name, ctrlByte);
-    
-    sendStart(cfg);
-    bool ack = sendByteRaw(cfg, ctrlByte, false);
-    
-    if (ack) {
-      uint8_t data = readByteRaw(cfg, true, false);
-      uint8_t pec = readByteRaw(cfg, false, false);
-      sendStop(cfg);
-      
-      uint8_t expectedPec = (ctrlByte + data) & 0xFF;
-      bool pecOk = (pec == expectedPec);
-      
-      Serial.printf("%sACK%s data=0x%02X PEC=%s%s%s\n",
-                    LOG_COLOR_GREEN,
-                    LOG_COLOR_RESET,
-                    data,
-                    okColor(pecOk),
-                    pecOk ? "OK" : "BAD",
-                    LOG_COLOR_RESET);
-      if (pecOk) passed++;
+
+    const EE871::Status st =
+        driver.readControlByte(tests[i].mainCmd, data);
+    if (st.ok()) {
+      Serial.printf("%sOK%s data=0x%02X\n",
+                    LOG_COLOR_GREEN, LOG_COLOR_RESET, data);
+      ++passed;
     } else {
-      sendStop(cfg);
-      Serial.printf("%sNACK%s\n", LOG_COLOR_RED, LOG_COLOR_RESET);
+      Serial.printf("%s%s%s (code=%u, detail=%ld)\n",
+                    LOG_COLOR_RED,
+                    st.msg,
+                    LOG_COLOR_RESET,
+                    static_cast<unsigned>(st.code),
+                    static_cast<long>(st.detail));
     }
-    
-    delay(20);
   }
   
   Serial.printf("\nPassed: %s%d%s/%d\n",
@@ -708,10 +714,10 @@ inline void testLibraryCommands(const EE871::Config& cfg) {
   
   if (passed == 0) {
     Serial.printf("\n%sAll commands failed!%s Check:\n", LOG_COLOR_RED, LOG_COLOR_RESET);
-    Serial.println("  - Is device address 0? (default)");
-    Serial.println("  - Datasheet command compatibility");
+    Serial.println("  - driver initialization and health");
+    Serial.println("  - device address and physical bus");
   } else if (passed < numTests) {
-    Serial.printf("\n%sSome commands failed%s - may be normal depending on device state\n",
+    Serial.printf("\n%sSome commands failed%s - inspect the precise status above\n",
                   LOG_COLOR_YELLOW, LOG_COLOR_RESET);
   }
 }

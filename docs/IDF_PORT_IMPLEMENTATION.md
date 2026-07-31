@@ -1,12 +1,11 @@
 # EE871-E2 ESP-IDF Port Implementation Notes
 
 Created: 2026-05-31.
-Last updated: 2026-06-02.
-Branch: `hardening/ee871-e2-industry-readiness`.
+Last updated: 2026-07-31.
 
-Status: implementation files and CI contract are present. Pure ESP-IDF build
-proof is outside this recorded qualification; no local `idf.py` or GitHub
-Actions `idf-build` pass record is included here.
+Status: implementation files and CI contract are present. The release-candidate
+GitHub Actions `idf-build` matrix passes for ESP32-S3 and ESP32-S2 on ESP-IDF
+v6.0.1.
 
 ## Scope
 
@@ -53,10 +52,6 @@ Actions `idf-build` pass record is included here.
 
 - `idf.py` was not on PATH in this shell, so local native ESP-IDF builds for
   `esp32s3` and `esp32s2` were not run.
-- GitHub Actions contains the intended `idf-build` matrix, but a passing run was
-  not available locally when last checked.
-- Arduino ESP32-S3 safe HIL and persistent interval write/readback/restore have
-  bench evidence. Pure ESP-IDF hardware HIL is not part of this qualification.
-- No pure ESP-IDF hardware smoke was run for bus idle, line-level checks,
-  `begin()`, `probe()`, status reads, CO2 reads, missing-device timeout, and
-  stuck-bus behavior.
+- GitHub Actions `idf-build` passes for both targets on ESP-IDF v6.0.1.
+- Recorded bench evidence is maintained in
+  `docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md`.

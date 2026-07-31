@@ -1,27 +1,39 @@
 # EE871-E2 Hardware Validation Matrix
 
 Created: 2026-06-01
-Last updated: 2026-07-30
+Last updated: 2026-07-31
 Branch: `main`
 
 This matrix started as a hardware validation plan and now also records completed
 bench evidence where available. Default status remains `NOT RUN` until a test is
 executed and recorded with board, firmware, serial port, sensor, and observed
-output. Record wiring, supply, pull-ups, level shifting, ambient conditions, and
-cable length when known; explicitly mark unmeasured bench metadata instead of
-inferring it from a PASS.
+output.
 
 For repeatable evidence capture, use `tools/ee871_hil_runner.py` after flashing
-the diagnostic CLI. The runner records a raw serial transcript, structured JSON,
-and a Markdown summary. A runner `PASS` applies only to the selected automated
-serial command groups; it does not prove CO2 accuracy, warm-up suitability,
-fault tolerance, long-soak stability, calibration validity, or production
-readiness.
+the diagnostic CLI. The runner records raw serial, compact structured JSON,
+and a Markdown summary; curated PASS evidence may discard redundant raw
+output after the ledger is verified. A runner `PASS` applies only to the selected automated
+serial command groups.
 
 Current evidence summary:
 
-- ESP32-S3 Arduino diagnostic CLI on `COM20`, pioarduino
-  `platform-espressif32` `54.03.20`: automated safe/extended HIL 33/33 PASS;
+- Current build pin: pioarduino `platform-espressif32` `55.03.311`,
+  Arduino-ESP32 `3.3.11`, ESP-IDF `5.5.5`; ESP32-S3 and ESP32-S2 builds pass.
+- Current ESP32-S3 Arduino diagnostic CLI on `COM20`, pioarduino
+  `55.03.311`: 184/184 safe/extended/niche commands PASS from clean firmware
+  `3bce89e`; final READY, 3,109 tracked successes, zero failures, persistent
+  state clean, `stress 500` 500/500, and `stress_mix 500` 500/500.
+- Current native-USB reattachment regression: 100/100 separate process
+  sessions PASS; a new process completed 10,000/10,000 identical state-only
+  replies immediately after full HIL closed COM20.
+- Native ESP-IDF v6.0.1 example builds pass in GitHub Actions for ESP32-S3 and
+  ESP32-S2.
+- Prior ESP32-S3 Arduino diagnostic CLI on `COM20`, pioarduino
+  `platform-espressif32` `55.03.39`, Arduino-ESP32 `3.3.9`, ESP-IDF `5.5.4`:
+  targeted HIL 144/144 PASS and serial-only `dirty` discriminator
+  10,000/10,000 PASS with identical 201-byte replies.
+- Historical ESP32-S3 `COM20` evidence on pioarduino `54.03.20`:
+  automated safe/extended HIL 33/33 PASS;
   same-value interval and raw CO2 offset/gain register HIL 25/25 PASS;
   range/capability guards 11/11 PASS; trace/sniffer/mixed-stress 11/11 PASS; full bus
   diagnostics PASS.
@@ -31,24 +43,28 @@ Current evidence summary:
 - Historical COM17 physical unplug/replug recovery: PASS as an
   operator-confirmed manual test on 2026-06-02. No automated HIL transcript
   artifact is recorded for that historical step.
-- ESP32-S2 hardware HIL: not recorded.
-- Pure ESP-IDF hardware HIL: not recorded.
-- Current COM20 operator-assisted absent-sensor boot, hot unplug/replug,
-  SDA/SCL stuck-low, and a complete sensor/MCU power cycle with
+- Historical `54.03.20` COM20 operator-assisted absent-sensor boot, hot
+  unplug/replug, SDA/SCL stuck-low, and a complete sensor/MCU power cycle with
   measurement-interval persistence: PASS.
-- Current COM20 immediate warm-up capture: PASS. The operator confirmed a
-  sensor/MCU power cycle; sampling began 0.250 s after COM20 reappeared.
+- Historical `54.03.20` COM20 immediate warm-up capture: PASS. The operator
+  confirmed a sensor/MCU power cycle; sampling began 0.250 s after COM20 reappeared.
   MV3/MV4 remained `0 ppm` with status `0x08` through 4 s, then became
   `678 ppm` with status `0x00` at 5 s. Sensor rail timing was not instrumented.
   Final health was READY, 65 transport successes/zero failures, dirty clean,
   interval `150 ds`.
-- Current COM20 strict 10-minute post-power-cycle stability capture: FAIL
-  because one of 63 scheduled CLI commands returned a bounded NACK at t=330 s.
+- Historical `54.03.20` COM20 strict 10-minute post-power-cycle stability
+  capture: FAIL because one of 63 scheduled CLI commands returned a bounded
+  NACK at t=330 s.
   The other 62 succeeded. The first sample was approximately 66 seconds after
   MCU boot, so this row is separate from the later immediate warm-up PASS.
   Manually normalized interactive output from an immediate 2,000-operation
   stress follow-up recorded zero errors; no raw follow-up transcript was
   retained.
+- Historical `54.03.20` eight-hour soak: strict FAIL with 2,376 PASS, 29
+  Arduino-ESP32 3.2.0 HWCDC replies stalled mid-line, and 11 real MV3 `0xC1`
+  control-byte NACKs. The NACKs clustered at the same measurement phase and
+  mixed stress blocks otherwise passed. The old runner's 11 review labels are
+  a known classification error; the NACKs remain failures.
 
 Allowed statuses:
 
@@ -114,6 +130,9 @@ Notes:
 - `probe` is diagnostic-only and should not change health counters.
 - `status` can trigger a new EE871 measurement when the previous sample is old.
 - `read` reads the CO2 averaged value; `co2fast` reads MV3; `co2avg` reads MV4.
+- The core driver does not retry a NACK or another failed transfer. It returns
+  the precise error so the application can own bounded retry cadence. A
+  control-byte NACK alone does not disclose the sensor's internal reason.
 - `dirty` is state-only and should report `persistentConfigDirty: no` on a
   clean startup and after normal safe commands.
 - `resync` calls `resyncPersistentConfig()`. It performs verified persistent
@@ -132,6 +151,13 @@ Notes:
   ```bash
   python tools/ee871_hil_runner.py --port COMx --include-extended
   ```
+
+- The separate read-only soak harness may retry only a scheduled MV3/MV4
+  `Control byte NACK` once after `--scheduled-nack-retry-ms` (default
+  1,500 ms). It records both attempts and reports
+  `SCHEDULED_CONTROL_NACK_RECOVERED` only when the retry passes. This is
+  harness policy, not a library retry, and does not infer the NACK's internal
+  cause.
 
 Persistent-write commands are bench-only:
 
@@ -190,10 +216,77 @@ python tools/ee871_hil_runner.py --port COMx --include-stuck-line
 python tools/ee871_hil_runner.py --port COMx --include-power-cycle
 ```
 
-## Current Evidence Status
+## Current Build Baseline (`55.03.311`)
 
-Current platform-compatibility and HIL evidence was recorded on 2026-07-30 using
-the Arduino diagnostic CLI on `COM20`.
+- Platform: pioarduino `platform-espressif32` `55.03.311`.
+- Framework: Arduino-ESP32 `3.3.11`.
+- ESP-IDF libraries: `5.5.5`.
+- ESP32-S3 and ESP32-S2 example builds: PASS.
+- TunnelMonitor compatibility build on retained `54.03.20`: PASS without
+  source shims.
+- COM20 full HIL: PASS, 184 PASS / 0 FAIL / 0 SKIP / 0 review from clean
+  firmware `3bce89e`.
+- Runtime target: ESP32-S3 revision 0.2, 4 MB embedded flash, 2 MB embedded
+  QSPI PSRAM.
+- Final state: READY, online, 3,109 tracked successes, zero consecutive/total
+  failures, persistent state clean; selftest 26/0/1, repeated stress 500/500,
+  mixed stress 500/500.
+- Evidence is condensed in `hil_results/README.md`.
+- Two preceding review runs proved
+  that the example scanner accepted ACK-only malformed frames and that
+  `libtest` duplicated an incomplete raw bus path. The scanner now requires
+  valid PEC, and `libtest` now uses the production driver.
+
+## Prior Platform Evidence (`55.03.39`)
+
+Prior targeted platform and HIL evidence was recorded on 2026-07-31 using the
+Arduino diagnostic CLI on `COM20`.
+
+- Board/target: ESP32-S3 revision 0.2, embedded 4 MB flash, embedded 2 MB QSPI
+  PSRAM, PlatformIO `ex_bringup_s3`.
+- Platform stack: pioarduino `platform-espressif32` `55.03.39`,
+  Arduino-ESP32 `3.3.9`, ESP-IDF `5.5.4`.
+- Firmware/library: firmware build `Jul 31 2026 09:28:51`, EE871 library
+  `1.0.1 (2ee66cf, 2026-07-31 09:28:49, dirty)`. Keep that dirty source state
+  attached to these artifacts when citing them.
+- Runtime identity: `ESP32-S3 rev 2`, 4,194,304 bytes flash, PSRAM ready with
+  2,097,152 bytes.
+- Targeted HIL: PASS, 144 PASS / 0 FAIL / 0 SKIP / 0 review. Final parsed state
+  was READY with zero consecutive/total transport failures, clean persistent
+  state, `stress 500` at 500/500, and selftest at 26 PASS / 0 FAIL / 1
+  unsupported-mode SKIP.
+- Serial-only discriminator: PASS, 10,000/10,000 `dirty` command round trips in
+  14.078 seconds; all replies were exactly 201 bytes. `dirty` performs no E2 bus
+  operation, so this isolates Arduino native-USB CLI framing and does not
+  qualify sensor transport, accuracy, or long-soak stability.
+- Accelerated scheduled-read regression: PASS, 108 sample cycles in 543.594 s,
+  with 564 ordinary command passes, two fully framed MV3 control-byte NACK
+  attempts each recovered by one 1,500 ms application-level retry, and zero
+  hard failures, reviews, skips, reconnects, or counter regressions. The NACKs
+  were about 105 s apart at nearly identical phase modulo the 15 s configured
+  interval. This records schedule-correlated recurrence at the E2 control-byte
+  ACK boundary and distinguishes it from host USB reply truncation, but does
+  not identify the electrical or sensor-internal cause. Final state was READY
+  with clean persistent state.
+- Unsupported operating-mode guard: PASS. `mode` returned `NOT_SUPPORTED`
+  without decoding `0x55`; tracked counters remained 3,908 successes / 2
+  failures across the command and the driver remained READY.
+- The platform change addresses the HWCDC TX lost-wakeup/data-loss mechanism
+  documented and fixed by
+  [Arduino-ESP32 PR #12606](https://github.com/espressif/arduino-esp32/pull/12606).
+  The discriminator demonstrates the fix on this board but is not a completed
+  long-soak result.
+- Wiring visible to firmware remained DATA=GPIO6 and CLOCK=GPIO7. Pull-ups,
+  level shifter, supply voltage, ambient conditions, and cable length were not
+  independently measured and must not be inferred from PASS.
+
+Prior `55.03.39` COM20 evidence is condensed in `hil_results/README.md`.
+
+## Historical TunnelMonitor-Parity Evidence (`54.03.20`)
+
+The broader COM20 platform-compatibility and physical/niche evidence below was
+recorded on 2026-07-30 using the Arduino diagnostic CLI and the then-current
+TunnelMonitor-node parity stack.
 
 - Board/target: ESP32-S3 revision 0.2, embedded 4 MB flash, embedded 2 MB QSPI
   PSRAM, PlatformIO `ex_bringup_s3`.
@@ -212,9 +305,7 @@ the Arduino diagnostic CLI on `COM20`.
   `version` reported `ESP32-S3 rev 2`, 4,194,304 bytes flash, and PSRAM ready
   with 2,097,152 bytes; its safe plan passed 10/10 with selftest 27/27,
   stress 50/50, READY state, zero failures, and clean persistent state.
-- Wiring visible to firmware: DATA=GPIO6, CLOCK=GPIO7. Pull-up values, level
-  shifter, supply voltage, ambient conditions, and cable length were not
-  independently measured in this run and must not be inferred from PASS.
+- Wiring visible to firmware: DATA=GPIO6, CLOCK=GPIO7.
 - Sensor identity: group `0x0367`, subgroup `0x09`, available measurements
   `0x08`, serial `1920935602368A`, part name `EE871`, firmware `1.4`, E2
   specification version `4`.
@@ -243,50 +334,17 @@ the Arduino diagnostic CLI on `COM20`.
 - The sensor does not advertise address configuration, specific interval,
   filter, operating-mode configuration, or auto-adjust. Successful writes for
   those features are therefore not applicable to this unit.
-- Current operator-assisted physical tests passed: absent-sensor boot; hot
+- Operator-assisted physical tests passed: absent-sensor boot; hot
   unplug with precise OFFLINE transition and replug recovery; SDA stuck-low;
   SCL stuck-low/clock timeout; and a complete sensor/MCU power cycle with
   measurement-interval persistence. The interval was changed from `150 ds` to
   `160 ds`, persisted across the cycle, and restored to `150 ds`.
 
-Current COM20 artifacts:
+Historical `54.03.20` COM20 evidence is condensed in
+`hil_results/README.md`. Detailed generated artifacts remain recoverable from
+Git commit `3687e49`.
 
-- Curated directory index and evidence boundaries:
-  `hil_results/platform_54_03_20_com20/README.md`
-- Safe/extended transcript and summaries:
-  `hil_results/platform_54_03_20_com20/safe_extended_settle_final/ee871_20260730T105954Z/`
-- Same-value persistent-register transcript and summaries:
-  `hil_results/platform_54_03_20_com20/persistent_calibration_settle_final/ee871_20260730T105933Z/`
-- Full diagnostics:
-  `hil_results/platform_54_03_20_com20/full_diagnostics_final.txt`
-- Range/capability guards:
-  `hil_results/platform_54_03_20_com20/range_capability_guards_final.txt`
-- Trace/sniffer/mixed stress:
-  `hil_results/platform_54_03_20_com20/trace_sniffer_mixed_stress_final.txt`
-- Expanded read/identity/capability diagnostics:
-  `hil_results/platform_54_03_20_com20/read_identity_diagnostics_final.txt`
-- Part-name write/readback raw evidence:
-  `hil_results/platform_54_03_20_com20/part_name_write_readback_raw.txt`
-- Final runtime-memory safe smoke:
-  `hil_results/platform_54_03_20_com20/runtime_psram_final/ee871_20260730T110655Z/`
-- Operator-assisted physical fault and power-cycle report:
-  `hil_results/platform_54_03_20_com20/operator_physical_faults_20260730.md`
-- Normalized operator-assisted CLI transcript:
-  `hil_results/platform_54_03_20_com20/operator_physical_faults_20260730_serial_transcript.txt`
-- Strict post-power-cycle stability/stale capture:
-  `hil_results/platform_54_03_20_com20/post_power_cycle_stability_20260730.txt`
-- Evidence limitations and manually normalized follow-up:
-  `hil_results/platform_54_03_20_com20/warmup_stale_followup_20260730.md`
-- Immediate warm-up raw capture:
-  `hil_results/platform_54_03_20_com20/immediate_warmup_final_20260730.txt`
-- Delayed-start warm-up attempt with bounded NACK:
-  `hil_results/platform_54_03_20_com20/immediate_warmup_delayed_start_20260730.txt`
-- Immediate warm-up attempt/evidence classification:
-  `hil_results/platform_54_03_20_com20/immediate_warmup_attempts_20260730.md`
-- Post-prompt-framing-fix automated safe run:
-  `hil_results/platform_54_03_20_com20/prompt_newline_postfix/ee871_20260730T152316Z/`
-
-Historical evidence follows.
+Earlier COM17 evidence follows.
 
 Safe EE871 HIL evidence was recorded on 2026-06-01 using the Arduino diagnostic
 CLI on `COM17`.
@@ -317,23 +375,9 @@ an operator-confirmed manual test. This is recorded as PASS for the unplug/replu
 scenario only. It is not automated HIL evidence, and no raw transcript artifact
 exists for this manual physical recovery step.
 
-Artifacts:
+Retained artifacts:
 
-- Safe default transcript:
-  `hil_results/safe_default/ee871_20260601T185912Z/serial_transcript.txt`
-- Safe default JSON/Markdown:
-  `hil_results/safe_default/ee871_20260601T185912Z/summary.json`,
-  `hil_results/safe_default/ee871_20260601T185912Z/summary.md`
-- Extended safe transcript:
-  `hil_results/extended_safe/ee871_20260601T185921Z/serial_transcript.txt`
-- Extended safe JSON/Markdown:
-  `hil_results/extended_safe/ee871_20260601T185921Z/summary.json`,
-  `hil_results/extended_safe/ee871_20260601T185921Z/summary.md`
-- Manual resync transcript:
-  `hil_results/manual_resync/ee871_20260601T190024Z/serial_transcript.txt`
-- Manual resync JSON/Markdown:
-  `hil_results/manual_resync/ee871_20260601T190024Z/summary.json`,
-  `hil_results/manual_resync/ee871_20260601T190024Z/summary.md`
+- Condensed command evidence: `hil_results/README.md`.
 
 Persistent configuration validation was recorded on 2026-06-01 after explicit
 bench-unit approval. The bench run changed only the measurement interval, then
@@ -345,7 +389,8 @@ restored the baseline:
 - Firmware/library: firmware build `Jun  1 2026 20:57:04`, EE871 library
   `0.3.0 (84a46b6, 2026-06-01 20:57:01, clean)`.
 - Baseline persistent values: interval `150 ds` (`15.0 s`), CO2 interval
-  factor `85`, operating mode `0x55` (low power, measurement priority), bus
+  factor `85`, raw operating-mode memory `0x55` (capability not advertised;
+  do not decode it as a valid mode), bus
   address `0`, part name `EE871`, serial `1920935602368A..`
   (`31 39 32 30 39 33 35 36 30 32 33 36 38 41 00 00`), CO2 offset `0 ppm`,
   CO2 gain `32768`.
@@ -365,29 +410,25 @@ restored the baseline:
   not modified because no automated post-power-cycle retarget/recovery path was
   used during this run.
 - Power-cycle persistence was not performed in this historical COM17 run; the
-  current COM20 power-cycle result is recorded separately above.
+  historical `54.03.20` COM20 power-cycle result is recorded separately above.
 - Failed-write/operator recovery was not physically induced; native fake tests
   remain the evidence for partial persistent-write dirty/resync behavior.
 
-Artifacts:
+Retained artifact:
 
-- Persistent validation transcript:
-  `hil_results/persistent_config_validation/ee871_20260601T193500Z_interval_restore/serial_transcript.txt`
-- Persistent validation JSON/Markdown:
-  `hil_results/persistent_config_validation/ee871_20260601T193500Z_interval_restore/summary.json`,
-  `hil_results/persistent_config_validation/ee871_20260601T193500Z_interval_restore/summary.md`
+- Condensed persistent-validation evidence: `hil_results/README.md`.
 
 Stuck-line fault/jig tests were not run in this historical COM17 session; the
-current COM20 results are recorded separately above.
+historical `54.03.20` COM20 results are recorded separately above.
 
 ## Board Matrix
 
-| ID | Board | Framework/example | Target | Sensor | Pull-ups/level shift | Status | Notes |
+| ID | Board | Framework/example | Target | Sensor | Adapter | Status | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| B-S3-A | ESP32-S3 dev board | `examples/01_basic_bringup_cli` | `ex_bringup_s3` | EE871-E2 bench sensor | Pull-up values and level-shifter implementation not independently recorded | PASS | 2026-07-30 on `COM20`: rev 0.2, 4 MB flash, 2 MB QSPI PSRAM, pioarduino `54.03.20`; automated and niche HIL PASS. Historical COM17 safe/persistent and manual unplug/replug evidence also retained. GPIOs: DATA=6, CLOCK=7. |
-| B-S2-A | ESP32-S2 dev board | `examples/01_basic_bringup_cli` | `ex_bringup_s2` | EE871-E2 bench sensor | External pull-ups, level shifter as required | NOT RUN | Record GPIOs, supply, cable length. |
-| B-S3-IDF | ESP32-S3 dev board | `examples/idf/basic_bringup` | `esp32s3` | EE871-E2 bench sensor | External pull-ups, level shifter as required | NOT RUN | Requires local or CI pure ESP-IDF build. |
-| B-S2-IDF | ESP32-S2 dev board | `examples/idf/basic_bringup` | `esp32s2` | EE871-E2 bench sensor | External pull-ups, level shifter as required | NOT RUN | Requires local or CI pure ESP-IDF build. |
+| B-S3-A | ESP32-S3 dev board | `examples/01_basic_bringup_cli` | `ex_bringup_s3` | EE871-E2 bench sensor | Arduino open-drain GPIO callbacks | BUILD PASS; HIL PASS | Current `55.03.311` clean-commit HIL passed 184/184 on `COM20`; rev 0.2, 4 MB flash, 2 MB QSPI PSRAM, READY/clean, zero transport failures. Prior-platform results remain separately labeled. GPIOs: DATA=6, CLOCK=7. |
+| B-S2-A | ESP32-S2 | `examples/01_basic_bringup_cli` | `ex_bringup_s2` | Build only | Arduino open-drain GPIO callbacks | CI BUILD PASS | GitHub Actions release-candidate build passes. |
+| B-S3-IDF | ESP32-S3 | `examples/idf/basic_bringup` | `esp32s3` | Build only | Native IDF open-drain GPIO callbacks | CI BUILD PASS | GitHub Actions ESP-IDF v6.0.1 build passes. |
+| B-S2-IDF | ESP32-S2 | `examples/idf/basic_bringup` | `esp32s2` | Build only | Native IDF open-drain GPIO callbacks | CI BUILD PASS | GitHub Actions ESP-IDF v6.0.1 build passes. |
 
 ## Functional Matrix
 
@@ -402,11 +443,18 @@ current COM20 results are recorded separately above.
 | F-07 | Feature/cache sanity | S3 | `features`, `caps`, `cfg` | Capability output is internally consistent and guards unsupported writes. | PASS | COM20 flags `0x93/0x00/0x00`; interval/part-name support and unsupported address/factor/filter/mode/auto-adjust guards matched cached capabilities. The flags do not establish calibration capability. |
 | F-08 | Immediate warm-up behavior | S3 | Power cycle sensor and MCU; after COM returns, sample at 0, 1, 2, 3, 4, 5, 6, 8, 10, 12, and 15 s using `co2fast`, `co2avg`, then `status` | Immediate post-power-cycle value/status evolution is observed; every operation is bounded and any error is recorded precisely. | PASS | Operator confirmed both sensor and MCU were powered off for at least 5 s; raw evidence records COM20 absent for 8.766 s. Startup prompt arrived 0.250 s after COM reappeared; MV3/MV4 were `0 ppm` and status `0x08` through 4 s, then `678 ppm` and status `0x00` at 5 s through 15 s. These times are relative to COM reappearance because sensor rail timing was not instrumented. All 33 scheduled commands were correctly framed. Final READY, 65 transport successes/zero failures, dirty clean, interval `150 ds`. A separate delayed-start attempt recorded one bounded fast-read NACK at 20.094 s and recovered immediately; the attempt ledger retains it. This is warm-up behavior evidence, not CO2 accuracy validation. |
 | F-09 | Stale sample behavior | S3 | `status`, wait 7 s, `co2avg`; wait >10 s, `co2avg`, `status`, wait 7 s, `co2avg` | Status-triggered timing and sample evolution are observable without claiming internal freshness. | PASS | COM20: status `0x00`; averaged reads at t=607/618/625 s were 634/634/626 ppm, all OK; this is observational and not an accuracy/freshness-internals claim. |
-| F-10 | Safe self-test | S3 | `dirty`, `selftest`, `dirty` | Safe commands complete with expected pass/fail report; no persistent settings are changed and persistent dirty remains clean. | PASS | Safe and extended HIL: `selftest` pass=27 fail=0 skip=0; dirty stayed clean. |
+| F-10 | Safe self-test | S3 | `dirty`, `selftest`, `dirty` | Safe commands complete with expected pass/fail report; no persistent settings are changed and persistent dirty remains clean. | PASS | Prior `55.03.39` library-1.0.1 HIL: 26 PASS / 0 FAIL / 1 unsupported-mode SKIP, dirty clean. Historical pre-guard HIL reported 27/0/0 because it decoded unsupported `0x55`; that old count is retained only with its exact firmware context. |
 | F-11 | Mixed read stress | S3 | `dirty`, `stress_mix 100`, `dirty` | No hangs; failures, if any, are bounded and health counters match output; persistent dirty remains clean. | PASS | COM20 `stress_mix 500`: 500/500, 0 errors, health success +937/failures +0, READY, dirty clean. |
 | F-12 | Repeated CO2 read stress | S3 | `dirty`, `stress 100`, `dirty` | No hangs; CO2 read success rate and health counters are recorded; persistent dirty remains clean. | PASS | COM20 safe HIL `stress 50`: 50/50; extended HIL `stress 500`: 500/500; zero errors and dirty stayed clean. Historical COM17 results agree. |
 | F-13 | Dirty resync command on coherent config | S3 | `dirty`, `resync`, `dirty` | `resync` returns precise status; if OK, dirty remains or becomes clean only through `resyncPersistentConfig()`. | PASS | COM20 persistent HIL: pre dirty clean, `resync` OK, post dirty clean. Historical COM17 manual evidence agrees. |
-| F-14 | Post-power-cycle 10-minute transport stability | S3 | After a complete power cycle, every 30 s for 10 min read `co2fast`, `co2avg`, then `status` | All 63 scheduled CLI commands return OK; final state is READY with zero consecutive failures and persistent state remains clean. | FAIL | COM20 strict capture began about 66 s after MCU boot: 62/63 scheduled CLI commands OK; one bounded fast-read NACK at t=330 s; final READY/zero consecutive failures/dirty clean. Manually normalized immediate follow-up recorded `stress_mix 1000` 1000/1000 and `stress 1000` 1000/1000; raw follow-up transcript was not retained. |
+| F-14 | Historical `54.03.20` post-power-cycle 10-minute transport stability | S3 | After a complete power cycle, every 30 s for 10 min read `co2fast`, `co2avg`, then `status` | All 63 scheduled CLI commands return OK; final state is READY with zero consecutive failures and persistent state remains clean. | FAIL | COM20 strict capture began about 66 s after MCU boot: 62/63 scheduled CLI commands OK; one bounded fast-read NACK at t=330 s; final READY/zero consecutive failures/dirty clean. Manually normalized immediate follow-up recorded `stress_mix 1000` 1000/1000 and `stress 1000` 1000/1000; raw follow-up transcript was not retained. |
+| F-15 | Historical `54.03.20` eight-hour soak | S3 | Run scheduled MV3/MV4/status/health/dirty samples each minute plus periodic mixed stress | Complete without serial framing stalls; preserve every transport failure and finish READY/clean. | FAIL | Completed 480 cycles: 2,376 PASS, 29 HWCDC mid-line reply stalls, and 11 real MV3 `0xC1` control-byte NACKs. The old runner mislabeled the NACK rows as review-required; they are failures. NACKs clustered at the same measurement phase, mixed stress otherwise passed, final READY/clean, and no transport counter regression occurred. Arduino-ESP32 PR #12606 fixes the separate HWCDC lost-wakeup path in 3.3.9. |
+| F-16 | Prior `55.03.39` targeted regression HIL | S3 | Run the targeted safe/extended command plan after upgrading Arduino-ESP32 | Every selected command is framed and parsed; finish READY with no transport failures or dirty state. | PASS | COM20/library 1.0.1: 144/144 PASS, selftest 26 PASS / 0 FAIL / 1 unsupported-mode SKIP, stress 500/500, final READY, zero total/consecutive transport failures, persistent state clean. This is targeted regression evidence, not a long soak. |
+| F-17 | Prior `55.03.39` HWCDC serial discriminator | S3 | Repeat state-only `dirty` 10,000 times and compare complete response lengths | No missing/truncated replies and every complete response has identical framing. | PASS | COM20: 10,000/10,000 in 14.078 s; all replies exactly 201 bytes. `dirty` performs no E2 operation, so this isolates CLI/HWCDC framing only. |
+| F-18 | Prior `55.03.39` scheduled-NACK policy regression | S3 | Sample MV3/MV4/status every 5 s, periodically run mixed stress, and retry only a fully framed scheduled MV3/MV4 control-byte NACK once after 1,500 ms | Preserve both attempts; no hidden core retry; finish READY/clean without omitted commands. | PASS | 108 cycles / 543.594 s: 564 ordinary PASS, 2 `SCHEDULED_CONTROL_NACK_RECOVERED`, 0 FAIL/review/SKIP/reconnect/counter regression. Both failures were MV3 control-byte NACKs; both retries passed. NACKs were about 105 s apart at nearly identical 15 s phase. Internal sensor cause remains unknown. |
+| F-19 | Unsupported operating-mode fail-closed guard | S3 | `drv`, `mode`, `drv` on a sensor advertising no mode capability | Return `NOT_SUPPORTED`, decode no mode value, perform no tracked E2 transfer, and preserve health. | PASS | Library 1.0.1 on COM20 returned `NOT_SUPPORTED` code 14; transport counters stayed 3,908 successes / 2 failures and state stayed READY with zero consecutive failures. Native fake coverage also proves read output preservation and no-I/O read/write guards. |
+| F-20 | Current `55.03.311` full regression HIL | S3 | Run safe, extended, identity/capability, invalid-parameter, bus diagnostic, trace/sniffer, and stress plans | Every selected command is framed and classified; finish READY with no transport failure or persistent dirty state. | PASS | Clean firmware `3bce89e`: 184/184 PASS, selftest 26/0/1, `stress 500` 500/500, `stress_mix 500` 500/500, address 0 only with valid PEC, library control-byte test 9/9, final READY/clean with 3,109 successes and zero failures. |
+| F-21 | Current `55.03.311` native-USB process reattachment | S3 | Close the HIL process, open COM20 from a new process, establish CLI framing, and repeat rapid process-level close/open cycles | Reattachment needs no MCU reset or cable replug; queued boot output or stale partial input cannot shift responses. | PASS | The former blank-line probe timeout was reproduced; the CLI deliberately ignores empty lines. Without any reset/replug, `version` returned normally. Explicit `\ndirty\n` synchronization then passed 100/100 separate process sessions and an immediate 184/184 full HIL rerun. After HIL closed COM20, a new process passed 10,000/10,000 state-only replies (all 201 bytes, one hash) in 10.094 s. |
 
 ## Persistent Configuration Matrix
 
@@ -418,7 +466,7 @@ Run these only on a bench sensor after recording original values.
 | P-02 | Measurement interval power-cycle persistence | S3 | Run P-01, power cycle sensor and MCU, `interval` | Value persists across power cycle or documented sensor behavior explains difference. | PASS | COM20: baseline `150 ds`, wrote/verified `160 ds`, fully power-cycled sensor and MCU, verified `160 ds`, restored/verified `150 ds`, resync OK, dirty clean. |
 | P-03 | Raw CO2 offset register write/readback | S3 | `offset`, `dirty`, record value, `offset <bench_value>`, `offset`, `dirty` | Same-value write returns OK and readback matches; dirty diagnostics checked on failure. | PASS | COM20 same-value write `0 ppm` returned OK and read back `0 ppm`; dirty stayed clean. This validates only the custom-memory command/readback path. No calibration capability, correctness, or accuracy claim is made. |
 | P-04 | Raw CO2 gain register write/readback | S3 | `gain`, `dirty`, record value, `gain <bench_value>`, `gain`, `dirty` | Same-value write returns OK and readback matches; dirty diagnostics checked on failure. | PASS | COM20 same-value write `32768` returned OK and read back `32768`; dirty stayed clean. This validates only the custom-memory command/readback path. No calibration capability, correctness, or accuracy claim is made. |
-| P-05 | Part name write/readback | S3 | `partname`, `dirty`, record value, `partname <bench_text>`, `partname`, `dirty` | Write returns OK and readback matches; dirty diagnostics checked on failure. | PASS | COM20 same-value `EE871` write returned OK and read back `EE871`; the clean part-name blocks are retained in `part_name_write_readback_raw.txt`. That raw diagnostic session also contains unrelated harness expectation failures and is not used as an overall PASS. |
+| P-05 | Part name write/readback | S3 | `partname`, `dirty`, record value, `partname <bench_text>`, `partname`, `dirty` | Write returns OK and readback matches; dirty diagnostics checked on failure. | PASS | COM20 same-value `EE871` write returned OK and read back `EE871`; the verified block and the broader session limitation are retained in `niche_diagnostics_20260730.md`. The ad-hoc session was not used as an overall PASS. |
 | P-06 | Bus address write | S3 | `addr`, record value, `addr <bench_addr>`, power cycle, `scan`; then rebuild/reconfigure firmware for the new address or use a dedicated test wrapper | Address change behaves as documented and does not retarget the current session until power cycle. | NOT APPLICABLE | COM20 sensor flags do not advertise address configuration. Valid `addr 0` returned `NOT_SUPPORTED`; invalid `addr 8` returned `OUT_OF_RANGE` without bus/health side effects. |
 
 ## Fault And Recovery Matrix
@@ -426,7 +474,7 @@ Run these only on a bench sensor after recording original values.
 | ID | Scenario | Board(s) | CLI/API sequence | Expected behavior | Status | Evidence to capture |
 | --- | --- | --- | --- | --- | --- | --- |
 | R-01 | Wrong wiring or no sensor | S3 | Disconnect sensor, boot, `drv`, `buscheck`, `probe`, `read`, `dirty` | Initialization or reads fail with bounded non-OK status; no hang. | PASS | COM20 absent-sensor boot: `begin()` returned bounded `NACK`, driver stayed UNINIT, both lines high, counters zero, dirty clean. |
-| R-02 | Unplug/replug recovery | S3 | Start connected, `read`, unplug, repeated `read`, replug, `recover`, `drv` | Tracked failures degrade/offline as configured; successful `recover` returns READY. | PASS | COM20: raw probe NACK/health-neutral; five tracked NACK reads reached OFFLINE at threshold 5; replug preserved OFFLINE; explicit recover OK in 16 ms, READY, selftest 27/27, stress_mix 100/100. Historical COM17 evidence also retained. |
+| R-02 | Unplug/replug recovery | S3 | Start connected, `read`, unplug, repeated `read`, replug, `recover`, `drv` | Tracked failures degrade/offline as configured; successful `recover` returns READY. | PASS | Historical `54.03.20` COM20 run: raw probe NACK/health-neutral; five tracked NACK reads reached OFFLINE at threshold 5; replug preserved OFFLINE; explicit recover OK in 16 ms, READY, selftest 27/27, stress_mix 100/100. Historical COM17 evidence also retained. |
 | R-03 | SDA stuck low | S3 | Use fault resistor to pull SDA low, `buscheck`, `libreset`, `drv` | `BUS_STUCK` or precise bounded error; no unbounded wait. | PASS | COM20 470-ohm fault: SDA low/SCL high; BUS_STUCK; raw probe PEC_MISMATCH health-neutral; tracked read PEC_MISMATCH in 16 ms; library reset BUS_STUCK; release/recover restored READY. |
 | R-04 | SCL stuck low / clock stretch timeout | S3 | Pull SCL low, `buscheck`, `probe`, `read`, `busreset`, `libreset` | Timeout or `BUS_STUCK` within configured deadline; no hang. | PASS | COM20 470-ohm fault: SCL low/SDA high; raw probe TIMEOUT in 31 ms detail 25000 without health change; tracked read TIMEOUT in 32 ms; library reset BUS_STUCK in 31 ms; release/recover restored READY. |
 | R-05 | Sensor absent/open line/no ACK | S3 | Unplug sensor, `probe`, tracked reads | NACK/no-response error is bounded and health rules match raw probe versus tracked reads. | PASS | COM20 sensor unplug: raw probe NACK in 15 ms without health change; tracked reads returned NACK and updated health through DEGRADED to OFFLINE. |

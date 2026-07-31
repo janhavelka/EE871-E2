@@ -1,107 +1,82 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
+All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-07-31
+
+### Added
+
+- Added bounded HIL tooling for safe, extended, niche, persistent-maintenance,
+  physical-fault, scheduled-soak, and serial-only framing tests.
+- Added native fake-transport coverage for feature-cache failures, validation
+  order, unsupported operating-mode access, persistent dirty-state transitions,
+  and recovery behavior.
+- Added synchronized version generation for `Version.h`, `idf_component.yml`,
+  and Doxygen from the `library.json` version source of truth.
+
 ### Changed
 
-- Exact-pinned the Arduino example and HIL environments to the same pioarduino
-  `platform-espressif32` `54.03.20` release used by TunnelMonitor-node
-  (Arduino-ESP32 `3.2.0`, ESP-IDF `5.4.1`, GCC `14.2.0`) instead of allowing
-  `platform = espressif32` to drift with the local PlatformIO installation.
-- Configured the ESP32-S3 example/HIL target explicitly for its detected
-  4 MB embedded flash and 2 MB QSPI PSRAM.
-- Documented that the repository pin controls its example/HIL firmware while
-  consuming applications continue to own their platform version.
-- Consolidated the HIL-runner parser regressions into one test module and added
-  parser/version checks to CI.
-- Version tooling now synchronizes `Version.h`, `idf_component.yml`, and the
-  Doxygen project number from `library.json`.
-- Restricted Doxygen input to maintained public documentation and enabled
-  undocumented-member/parameter warnings as build-breaking errors.
-- Clarified raw MV3/MV4 and side-effecting status-read semantics, persistent
-  write contracts, feature-cache limits, electrical integration, and current
-  qualification boundaries.
-- Replaced the Arduino CLI's unbounded input accumulation with the shared
-  127-byte bounded line reader while preserving prompt/trace draining.
+- Exact-pinned Arduino example and HIL builds to pioarduino
+  `platform-espressif32` `55.03.311` (Arduino-ESP32 `3.3.11`, ESP-IDF `5.5.5`)
+  and configured the qualified ESP32-S3 target for 4 MB flash with 2 MB QSPI
+  PSRAM.
+- Retained a build-only TunnelMonitor compatibility environment on pioarduino
+  `54.03.20`; the framework-neutral library source builds on both platform
+  generations without compatibility shims.
+- Clarified raw measurement versus side-effecting status-read behavior,
+  application-owned retry policy, cached-feature semantics, persistent-write
+  diagnostics, and task/ISR ownership contracts.
+- Replaced unbounded Arduino CLI input accumulation with a 127-byte bounded
+  line reader and condensed generated HIL artifacts into a short evidence
+  ledger.
 
 ### Fixed
 
-- Validate bus-address and measurement-interval ranges before optional-feature
-  capability checks, preserving the documented `OUT_OF_RANGE` result without
-  touching the bus even when the feature is unsupported.
-- Commit the three optional-feature bytes atomically during `begin()` so a
-  mid-cache read failure leaves every optional capability disabled.
-- Retry E2 address scans a bounded five times so a single transient NACK after
-  another diagnostic operation does not falsely report an absent sensor.
-- Require a complete CLI prompt and the command-specific value line in the
-  Python HIL runner, settle native USB briefly between commands, and stop the
-  plan on a framing timeout instead of shifting later responses onto the wrong
-  command.
-- Deassert serial DTR/RTS before opening a live HIL port to avoid intentionally
-  resetting native-USB targets; no-reset attachment was verified on COM20.
-- Drain queued bus-trace output before emitting the next CLI prompt.
-- Terminate each diagnostic CLI prompt with a newline so native USB CDC does
-  not strand a short final packet and shift rapid command responses.
-- Report detected MCU revision, flash size, and initialized PSRAM size in the
-  Arduino diagnostic CLI `version` output.
-- Removed an ESP32 revision-1 PSRAM cache workaround from the ESP32-S3 build;
-  the tested S3 target uses its explicit QIO/QSPI memory configuration.
+- Validate bus-address and measurement-interval ranges before capability
+  checks, returning `OUT_OF_RANGE` without bus traffic for invalid values.
+- Commit optional-feature cache bytes only after the complete cache read
+  succeeds, preventing partially updated capabilities during `begin()`.
+- Fail closed with `NOT_SUPPORTED` for operating-mode reads and writes when the
+  sensor does not advertise the feature; reject returned reserved bits.
+- Require ACK plus valid PEC before the diagnostic address scanner reports a
+  device, and route library-command diagnostics through the production
+  clock-stretch-aware, PEC-validating driver path.
+- Preserve complete sensor NACKs as hard failures. The core performs no hidden
+  retry; the soak harness records its one optional scheduled retry separately.
+- Require command-specific completion plus a newline-terminated CLI prompt in
+  HIL tools, preventing truncated or shifted responses.
+- Synchronize every HIL, soak, and serial-discriminator attachment with
+  `\ndirty\n`, fixing the false native-USB reattachment timeout caused by a
+  blank-line probe that the CLI intentionally ignored.
+- Drain queued trace output before printing the next prompt and classify
+  parsed non-OK status before checking for success-only value fields.
 
 ### Removed
 
-- Removed unused example compatibility wrappers, the empty sniffer tick/class
-  wrapper, obsolete native Arduino/Wire stubs, legacy PlatformIO CLI aliases,
-  and TunnelMonitor-only dependency-header generation code.
-- Removed 39 superseded COM20 runner attempts and wrapper logs while retaining
-  the authoritative positive and negative evidence under a documented index.
+- Removed obsolete Arduino/Wire native stubs, unused compatibility wrappers,
+  legacy PlatformIO aliases, duplicate diagnostic transaction code, and
+  superseded generated HIL transcripts.
 
 ### Validation
 
-- Native tests: 33 passing.
-- Consolidated HIL-runner parser tests: 27 passing.
-- Arduino ESP32-S3 and ESP32-S2 example builds: passing with pioarduino
-  `54.03.20`.
-- ESP32-S3 COM20 automated safe/extended HIL: 33/33 PASS, including
-  `selftest` 27/27, `stress 50` 50/50, and `stress 500` 500/500.
-- Final ESP32-S3 COM20 runtime-memory smoke HIL: 10/10 PASS; firmware reported
-  4,194,304 bytes flash and PSRAM ready with 2,097,152 bytes.
-- ESP32-S3 COM20 same-value persistent HIL: 25/25 PASS for interval
-  `150 ds`, CO2 offset `0 ppm`, and CO2 gain `32768`, with verified readback,
-  resync, and clean dirty state.
-- ESP32-S3 COM20 niche checks: range/capability guards 11/11 PASS; bus
-  trace/sniffer/mixed-stress 11/11 PASS; `stress_mix 500` 500/500; full bus
-  diagnostics found address 0 and completed six in-spec timing points plus two
-  out-of-spec characterization points.
-- ESP32-S3 COM20 operator-assisted physical HIL: sensor-absent boot PASS; hot
-  unplug transitioned to OFFLINE at threshold 5 and explicit replug recovery
-  restored READY; 470-ohm SDA and SCL stuck-low tests returned bounded precise
-  failures and recovered; interval `160 ds` persisted across a complete
-  sensor/MCU power cycle and the `150 ds` baseline was restored.
-- ESP32-S3 COM20 immediate warm-up HIL: PASS after the newline-framed CLI fix.
-  Sampling started 0.250 s after COM20 reappeared; MV3/MV4 were `0 ppm` with
-  status `0x08` through 4 s and became `678 ppm` with status `0x00` at 5 s.
-  All 33 scheduled commands were correctly framed; final driver health was
-  READY with 65 transport successes, zero failures, clean persistent state,
-  and interval `150 ds`. A separate delayed-start attempt recorded one bounded
-  fast-read `NACK` at 20.094 s and recovered immediately; it remains retained
-  in the attempt ledger. A post-fix automated safe run also passed 10/10.
-- ESP32-S3 COM20 10-minute post-power-cycle stability/stale characterization:
-  strict result FAIL because one of 63 scheduled CLI commands returned a bounded
-  `NACK` on the t=330 s fast read; the other 62 scheduled CLI commands and the
-  status/stale sequence succeeded. This earlier capture's first sample was
-  approximately 66 seconds after MCU boot, so it is classified separately from
-  the later immediate warm-up PASS. Manually normalized interactive output
-  from immediate `stress_mix 1000` and `stress 1000` follow-ups recorded
-  1000/1000 for each; the NACK was not reproduced and no hidden core retry was
-  added.
-- The retained COM20 artifacts identify their exact firmware metadata. The
-  final example-only cleanup was revalidated with native/parser tests and S2/S3
-  builds; no post-cleanup hardware rerun is claimed.
+- GitHub Actions passes Arduino ESP32-S3/S2 builds, native tests, library
+  validation, and native ESP-IDF v6.0.1 ESP32-S3/S2 example builds.
+- Native driver tests: 34/34 passing. HIL/parser tooling tests: 40/40 passing.
+- ESP32-S3 COM20 full safe/extended/niche HIL on `55.03.311`: 184/184 PASS;
+  self-test 26 PASS / 0 FAIL / 1 unsupported-feature SKIP; repeated stress
+  500/500; mixed stress 500/500; final READY and persistent state clean with
+  3,109 successful transfers and zero failures.
+- Native-USB process reattachment: 100/100 separate open/close sessions PASS.
+  After the full HIL closed COM20, a new process completed 10,000/10,000
+  identical state-only replies without reset or cable replug.
+- Physical HIL passed sensor absence, unplug to OFFLINE plus explicit recovery,
+  SDA/SCL held-low faults, and measurement-interval power-cycle persistence
+  with restoration to the original value.
 
 ## [1.0.0] - 2026-06-02
 
@@ -237,7 +212,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial release with template structure
 - ESP32-S2 and ESP32-S3 support
 
-[Unreleased]: https://github.com/janhavelka/EE871-E2/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/janhavelka/EE871-E2/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/janhavelka/EE871-E2/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/janhavelka/EE871-E2/compare/v0.3.0...v1.0.0
 [0.3.0]: https://github.com/janhavelka/EE871-E2/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/janhavelka/EE871-E2/compare/v0.2.0...v0.2.1

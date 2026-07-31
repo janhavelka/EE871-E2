@@ -1759,7 +1759,11 @@ void runSelfTest() {
 
   uint8_t mode = 0;
   st = device.readOperatingMode(mode);
-  reportCheck("readOperatingMode", st.ok(), st.ok() ? "" : errToStr(st.code));
+  if (st.code == EE871::Err::NOT_SUPPORTED) {
+    reportSkip("readOperatingMode", "not supported");
+  } else {
+    reportCheck("readOperatingMode", st.ok(), st.ok() ? "" : errToStr(st.code));
+  }
 
   uint8_t ctrl = 0;
   st = device.readControlByte(EE871::cmd::MAIN_STATUS, ctrl);

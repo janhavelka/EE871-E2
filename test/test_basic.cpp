@@ -312,6 +312,45 @@ void test_persistent_write_ranges_precede_capability_checks() {
   TEST_ASSERT_EQUAL_UINT32(failuresBefore, dev.totalFailures());
 }
 
+void test_operating_mode_access_fails_closed() {
+  FakeE2Transport unsupportedFake;
+  unsupportedFake.setMemory(cmd::CUSTOM_OPERATING_MODE_SUPPORT, 0);
+  unsupportedFake.setMemory(cmd::CUSTOM_OPERATING_MODE, 0x55);
+  EE871::EE871 unsupportedDev;
+  TEST_ASSERT_TRUE(beginFakeDevice(unsupportedDev, unsupportedFake).ok());
+
+  const uint32_t successBefore = unsupportedDev.totalSuccess();
+  const uint32_t failuresBefore = unsupportedDev.totalFailures();
+  uint8_t mode = 0xA5;
+  Status st = unsupportedDev.readOperatingMode(mode);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_SUPPORTED),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_HEX8(0xA5, mode);
+  TEST_ASSERT_EQUAL_UINT32(successBefore, unsupportedDev.totalSuccess());
+  TEST_ASSERT_EQUAL_UINT32(failuresBefore, unsupportedDev.totalFailures());
+
+  st = unsupportedDev.writeOperatingMode(0);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_SUPPORTED),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_UINT32(successBefore, unsupportedDev.totalSuccess());
+  TEST_ASSERT_EQUAL_UINT32(failuresBefore, unsupportedDev.totalFailures());
+
+  FakeE2Transport invalidFake;
+  invalidFake.setMemory(cmd::CUSTOM_OPERATING_MODE, 0x04);
+  EE871::EE871 invalidDev;
+  TEST_ASSERT_TRUE(beginFakeDevice(invalidDev, invalidFake).ok());
+  mode = 0xA5;
+  st = invalidDev.readOperatingMode(mode);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::OUT_OF_RANGE),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_HEX8(0xA5, mode);
+
+  invalidFake.setMemory(cmd::CUSTOM_OPERATING_MODE, 0x03);
+  st = invalidDev.readOperatingMode(mode);
+  TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_EQUAL_HEX8(0x03, mode);
+}
+
 void test_clock_stretch_timeout_is_bounded_and_tracked() {
   FakeE2Transport fake;
   EE871::EE871 dev;
@@ -646,6 +685,7 @@ int main() {
   RUN_TEST(test_fake_transport_begin_succeeds);
   RUN_TEST(test_feature_cache_failure_disables_all_optional_capabilities);
   RUN_TEST(test_persistent_write_ranges_precede_capability_checks);
+  RUN_TEST(test_operating_mode_access_fails_closed);
   RUN_TEST(test_clock_stretch_timeout_is_bounded_and_tracked);
   RUN_TEST(test_pec_mismatch_probe_is_raw_but_tracked_read_updates_health);
   RUN_TEST(test_device_absent_probe_has_no_health_side_effect_tracked_read_fails);
