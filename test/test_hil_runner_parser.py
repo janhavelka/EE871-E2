@@ -554,6 +554,75 @@ After:
         self.assertEqual("prompt", reason)
         self.assertIn("> ", text)
 
+    def test_cli_sync_terminates_partial_input_and_requires_dirty_reply(self) -> None:
+        class FakeSerial:
+            def __init__(self) -> None:
+                self.written = bytearray()
+                self.flush_count = 0
+                self.chunks = [
+                    b"boot output\r\n> \r\n",
+                    b"[W] Unknown command: partial\r\n> \r\n",
+                    b"persistentConfigDirty: no\r\nresyncNeeded: no\r\n> \r\n",
+                ]
+
+            @property
+            def in_waiting(self) -> int:
+                return 0
+
+            def write(self, data: bytes) -> int:
+                self.written.extend(data)
+                return len(data)
+
+            def flush(self) -> None:
+                self.flush_count += 1
+
+            def read(self, _size: int) -> bytes:
+                if self.chunks:
+                    return self.chunks.pop(0)
+                time.sleep(0.001)
+                return b""
+
+        ser = FakeSerial()
+        text, reason, timed_out = runner.synchronize_cli(
+            ser,
+            timeout_s=0.1,
+        )
+
+        self.assertFalse(timed_out)
+        self.assertEqual("prompt", reason)
+        self.assertEqual(b"\ndirty\n", bytes(ser.written))
+        self.assertEqual(1, ser.flush_count)
+        self.assertIn("Unknown command: partial", text)
+        self.assertIn("persistentConfigDirty: no", text)
+
+    def test_cli_sync_does_not_accept_a_queued_prompt_without_reply(self) -> None:
+        class FakeSerial:
+            @property
+            def in_waiting(self) -> int:
+                return 0
+
+            def write(self, data: bytes) -> int:
+                return len(data)
+
+            def flush(self) -> None:
+                pass
+
+            def read(self, _size: int) -> bytes:
+                if not hasattr(self, "sent_prompt"):
+                    self.sent_prompt = True
+                    return b"> \r\n"
+                time.sleep(0.001)
+                return b""
+
+        text, reason, timed_out = runner.synchronize_cli(
+            FakeSerial(),
+            timeout_s=0.02,
+        )
+
+        self.assertTrue(timed_out)
+        self.assertEqual("timeout", reason)
+        self.assertEqual("> \r\n", text)
+
     def test_command_prompt_requirement_prevents_response_shift(self) -> None:
         class FakeSerial:
             def __init__(self) -> None:

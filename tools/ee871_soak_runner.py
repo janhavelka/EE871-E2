@@ -14,7 +14,7 @@ from typing import Any
 import ee871_hil_runner as hil
 
 
-SCRIPT_VERSION = "1.2"
+SCRIPT_VERSION = "1.3"
 DEFAULT_DURATION_HOURS = 8.0
 DEFAULT_SAMPLE_INTERVAL_SECONDS = 60.0
 DEFAULT_STRESS_PERIOD_MINUTES = 30.0
@@ -478,11 +478,17 @@ def write_summary_md(path: Path, payload: dict[str, Any]) -> None:
 def open_serial(args: argparse.Namespace) -> object:
     serial_args = command_args(args)
     ser = hil.open_serial(serial_args)
-    reset_input = getattr(ser, "reset_input_buffer", None)
-    if callable(reset_input):
-        time.sleep(0.2)
-        reset_input()
-    return ser
+    try:
+        _, _, timed_out = hil.synchronize_cli(
+            ser,
+            args.command_timeout,
+        )
+        if timed_out:
+            raise RuntimeError("serial CLI synchronization timed out")
+        return ser
+    except Exception:
+        close_serial(ser)
+        raise
 
 
 def close_serial(ser: object | None) -> None:

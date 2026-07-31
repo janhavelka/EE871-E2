@@ -68,6 +68,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Arduino-ESP32 PR #12606.
 - Deassert serial DTR/RTS before opening a live HIL port to avoid intentionally
   resetting native-USB targets; no-reset attachment was verified on COM20.
+- Synchronize every HIL, soak, and serial-discriminator attachment with the
+  non-E2 `\ndirty\n` sequence. The leading newline terminates stale partial
+  input, and the non-empty `dirty` command produces a deterministic reply;
+  queued startup prompts are ignored until the dirty-state marker arrives.
+  This fixes the false USB reattachment timeout caused by probing with a blank
+  line that the CLI intentionally ignores.
 - Drain queued bus-trace output before emitting the next CLI prompt.
 - Terminate each diagnostic CLI prompt with a newline so native USB CDC does
   not strand a short final packet and shift rapid command responses.
@@ -87,7 +93,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Validation
 
 - Native tests: 34 passing.
-- Consolidated HIL-runner/parser tests: 38 passing.
+- Consolidated HIL-runner/parser tests: 40 passing.
 - Current Arduino example builds: ESP32-S3 and ESP32-S2 pass on pioarduino
   `55.03.311`; the build-only `compat_tunnelmonitor_s3` environment also passes
   on TunnelMonitor-node commit `0f240ab`'s pioarduino `54.03.20` pin without
@@ -96,6 +102,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   commands PASS from clean firmware `3bce89e`; final READY with 3,109 tracked
   successes, zero failures, clean persistent state, repeated stress 500/500,
   and mixed stress 500/500.
+- Current ESP32-S3 COM20 native-USB session regression: the old blank-line
+  handshake failure was reproduced, a real `version` command then succeeded
+  without reset/replug, and the explicit synchronization fix passed 100/100
+  separate Python process open/close/reopen sessions. The full 184-command HIL
+  passed again, followed immediately by 10,000/10,000 state-only replies from
+  a new process after HIL closed COM20.
 - Prior ESP32-S3 COM20 targeted HIL on pioarduino `55.03.39`: 144/144
   PASS; final READY state, zero transport failures, clean persistent state,
   `stress 500` at 500/500, and library version `1.0.1`. Selftest reported

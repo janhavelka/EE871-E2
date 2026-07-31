@@ -19,12 +19,14 @@ from pathlib import Path
 from typing import Any
 
 
-SCRIPT_VERSION = "1.2"
+SCRIPT_VERSION = "1.3"
 DEFAULT_BAUD = 115200
 DEFAULT_TIMEOUT_S = 8.0
 DEFAULT_COMMAND_TIMEOUT_S = 20.0
 DEFAULT_IDLE_S = 0.35
 DEFAULT_OUTPUT_DIR = Path("hil_logs")
+CLI_SYNC_COMMAND = "dirty"
+CLI_SYNC_BYTES = b"\ndirty\n"
 PERSISTENT_CONFIRM_TEXT = "I UNDERSTAND EE871 PERSISTENT WRITES"
 PERSISTENT_RUNTIME_CONFIRM_TEXT = "RUN EE871 PERSISTENT WRITES"
 
@@ -562,6 +564,32 @@ def read_until_ready(
             return "".join(chunks), "serial-idle", False
 
     return "".join(chunks), "timeout", True
+
+
+def synchronize_cli(
+    ser: object,
+    timeout_s: float,
+    idle_s: float = 0.0,
+) -> tuple[str, str, bool]:
+    """Establish command framing without touching the E2 transport.
+
+    The leading newline terminates any partial command left by a previous host
+    session. ``dirty`` is non-empty, so the CLI must answer even though it
+    intentionally ignores blank lines. ``read_until_ready`` also requires the
+    dirty-state marker before accepting a prompt, which makes a queued startup
+    prompt harmless.
+    """
+    ser.write(CLI_SYNC_BYTES)
+    flush = getattr(ser, "flush", None)
+    if callable(flush):
+        flush()
+    return read_until_ready(
+        ser,
+        timeout_s,
+        idle_s,
+        command=CLI_SYNC_COMMAND,
+        require_prompt=True,
+    )
 
 
 def safe_specs() -> list[CommandSpec]:
@@ -1129,7 +1157,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", help="Serial port, for example COM5 or /dev/ttyUSB0.")
     parser.add_argument("--baud", type=int, default=DEFAULT_BAUD)
-    parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_S, help="Startup/initial serial drain timeout in seconds.")
+    parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_S, help="Initial CLI synchronization timeout in seconds.")
     parser.add_argument("--command-timeout", type=float, default=DEFAULT_COMMAND_TIMEOUT_S)
     parser.add_argument("--idle", type=float, default=DEFAULT_IDLE_S, help="Settle delay after a complete CLI prompt before sending the next command.")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
@@ -1209,7 +1237,13 @@ def main(argv: list[str] | None = None) -> int:
         else:
             ser = open_serial(args)
             try:
-                initial_output, _, _ = read_until_ready(ser, args.timeout, args.idle, None, require_prompt=True)
+                initial_output, _, sync_timed_out = synchronize_cli(
+                    ser,
+                    args.timeout,
+                    args.idle,
+                )
+                if sync_timed_out:
+                    raise RuntimeError("serial CLI synchronization timed out")
                 if args.idle > 0:
                     time.sleep(args.idle)
                 for spec in plan:

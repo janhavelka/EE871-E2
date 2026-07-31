@@ -24,7 +24,7 @@ fully field-proven across every physical fault case.
 
 Recorded evidence:
 
-- Native tests: 34 passing; consolidated HIL-runner/parser tests: 38 passing.
+- Native tests: 34 passing; consolidated HIL-runner/parser tests: 40 passing.
 - The current example/HIL platform is exact-pinned to pioarduino
   `platform-espressif32` `55.03.311`, Arduino-ESP32 `3.3.11`, and ESP-IDF
   `5.5.5`. The earlier TunnelMonitor-node parity work on pioarduino
@@ -35,6 +35,13 @@ Recorded evidence:
   finished READY with 3,109 tracked successes, zero transport failures, clean
   persistent state, `stress 500` at 500/500, and `stress_mix 500` at 500/500.
   The self-test reported 26 PASS / 0 FAIL / 1 unsupported-mode SKIP.
+- Native-USB reattachment on the current COM20 stack is verified. The former
+  timeout was a host-tool framing bug: it sent only a blank line, while the CLI
+  intentionally ignores blank lines and therefore emitted no new prompt. The
+  shared explicit `\ndirty\n` synchronization passed 10,000/10,000 replies
+  from a new process immediately after the full HIL closed COM20,
+  100/100 separate process open/close/reopen sessions, and an immediate
+  184/184 full HIL rerun without a reset or physical replug.
 - The current COM20 target was detected as ESP32-S3 revision 0.2 with 4 MB
   embedded flash and 2 MB embedded QSPI PSRAM; the S3 PlatformIO environment
   configures that QSPI PSRAM explicitly. The prior `55.03.39` firmware reported
@@ -101,7 +108,7 @@ Recorded evidence:
 - Historical COM17 physical unplug/replug recovery: PASS, operator-confirmed
   manual test; no automated transcript is recorded for that historical run.
 
-The compact [HIL evidence ledger](hil_results/README.md) identifies the exact
+The compact HIL evidence ledger in `hil_results/README.md` identifies the exact
 firmware/build metadata. Results from different platform stacks are not
 combined into one platform claim. The new
 `55.03.311` pin has passed S2/S3 builds and the post-commit COM20 run above.

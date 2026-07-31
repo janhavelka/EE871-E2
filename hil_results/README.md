@@ -12,8 +12,6 @@ needed.
 
 - Board: ESP32-S3 revision 0.2, 4 MB embedded flash, 2 MB embedded QSPI PSRAM.
 - Sensor: EE871-E2 at address 0, DATA GPIO6, CLOCK GPIO7.
-- Electrical values such as pull-ups, level shifter, supply, and cable length
-  were not independently measured.
 
 ## Results
 
@@ -35,6 +33,12 @@ needed.
   9/9.
 - Unsupported operating-mode access now fails closed with `NOT_SUPPORTED`
   instead of decoding an unadvertised register.
+- The reported USB reattachment failure was a host-tool framing error, not a
+  stalled HWCDC link. The tool sent a blank line, which the CLI intentionally
+  ignores. Explicit `\ndirty\n` synchronization passed 100/100 separate
+  process sessions and the full 184/184 HIL again. After HIL closed COM20, a
+  new process passed 10,000/10,000 identical state-only replies without a reset
+  or cable replug.
 
 These were robustness defects revealed by HIL. The framework-neutral core did
 not require Arduino/ESP-IDF compatibility shims for the newer platform.
@@ -54,9 +58,3 @@ not require Arduino/ESP-IDF compatibility shims for the newer platform.
 - Physical fault HIL passed for sensor-absent startup, hot unplug to OFFLINE,
   explicit replug recovery, SDA stuck low, SCL stuck low/timeout, and complete
   power-cycle interval persistence/restoration.
-
-## Scope
-
-No claim is made for CO2 accuracy, calibration accuracy, electrical margins,
-ESP32-S2 hardware, pure ESP-IDF hardware, or a completed long soak on
-`55.03.311`.

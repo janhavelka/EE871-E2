@@ -17,7 +17,7 @@ from typing import Any
 import ee871_hil_runner as hil
 
 
-SCRIPT_VERSION = "1.0"
+SCRIPT_VERSION = "1.1"
 
 
 def utc_text() -> str:
@@ -127,19 +127,13 @@ def main(argv: list[str] | None = None) -> int:
     serial_args = SimpleNamespace(port=args.port, baud=args.baud)
     try:
         ser = hil.open_serial(serial_args)
-        ser.write(b"\n")
-        flush = getattr(ser, "flush", None)
-        if callable(flush):
-            flush()
-        _, _, handshake_timeout = hil.read_until_ready(
+        _, _, handshake_timeout = hil.synchronize_cli(
             ser,
             args.timeout,
             0.0,
-            command=None,
-            require_prompt=True,
         )
         if handshake_timeout:
-            raise RuntimeError("serial prompt handshake timed out")
+            raise RuntimeError("serial CLI synchronization timed out")
 
         version_spec = hil.CommandSpec(
             "version",

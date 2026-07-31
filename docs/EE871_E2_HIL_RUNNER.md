@@ -78,6 +78,14 @@ remaining plan so later commands cannot be credited with shifted responses.
 The serial port is opened with DTR and RTS already deasserted so attaching the
 runner does not intentionally reset native-USB ESP32 targets.
 
+Each live attachment begins with `\ndirty\n`. A blank line alone is not a
+valid handshake because the bounded CLI line reader intentionally ignores
+empty lines and emits no prompt for them. The leading newline terminates any
+partial command left by an interrupted host session; `dirty` then guarantees a
+known response without E2 traffic. Synchronization accepts a prompt only after
+the `persistentConfigDirty` marker, so a queued boot prompt cannot shift the
+first real command response.
+
 Live serial runs require `pyserial`; install it in the active Python
 environment:
 
