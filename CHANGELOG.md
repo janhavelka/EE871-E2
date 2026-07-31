@@ -93,6 +93,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `55.03.311`; the build-only `compat_tunnelmonitor_s3` environment also passes
   on TunnelMonitor-node commit `0f240ab`'s pioarduino `54.03.20` pin without
   source shims.
+- Current ESP32-S3 COM20 HIL on `55.03.311`: 184/184 safe, extended, and niche
+  commands PASS from clean firmware `3bce89e`; final READY with 3,109 tracked
+  successes, zero failures, clean persistent state, repeated stress 500/500,
+  and mixed stress 500/500.
 - Prior ESP32-S3 COM20 targeted HIL on pioarduino `55.03.39`: 144/144
   PASS; final READY state, zero transport failures, clean persistent state,
   `stress 500` at 500/500, and library version `1.0.1`. Selftest reported
@@ -159,8 +163,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   measurement phase, while mixed stress blocks otherwise passed. Arduino-ESP32
   PR #12606 identifies and fixes the separate HWCDC TX lost-wakeup mechanism in
   3.3.9.
-- The current `55.03.311` source passed ESP32-S2/S3 builds before the
-  post-commit COM20 rerun. No completed long-soak result is claimed for it.
+- The current `55.03.311` source passed ESP32-S2/S3 builds and the post-commit
+  184/184 COM20 HIL run. No completed long-soak result is claimed for it.
 
 ## [1.0.0] - 2026-06-02
 

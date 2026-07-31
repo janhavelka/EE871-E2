@@ -23,6 +23,10 @@ Current evidence summary:
 
 - Current build pin: pioarduino `platform-espressif32` `55.03.311`,
   Arduino-ESP32 `3.3.11`, ESP-IDF `5.5.5`; ESP32-S3 and ESP32-S2 builds pass.
+- Current ESP32-S3 Arduino diagnostic CLI on `COM20`, pioarduino
+  `55.03.311`: 184/184 safe/extended/niche commands PASS from clean firmware
+  `3bce89e`; final READY, 3,109 tracked successes, zero failures, persistent
+  state clean, `stress 500` 500/500, and `stress_mix 500` 500/500.
 - Prior ESP32-S3 Arduino diagnostic CLI on `COM20`, pioarduino
   `platform-espressif32` `55.03.39`, Arduino-ESP32 `3.3.9`, ESP-IDF `5.5.4`:
   targeted HIL 144/144 PASS and serial-only `dirty` discriminator
@@ -222,8 +226,19 @@ python tools/ee871_hil_runner.py --port COMx --include-power-cycle
 - ESP32-S3 and ESP32-S2 example builds: PASS.
 - TunnelMonitor compatibility build on retained `54.03.20`: PASS without
   source shims.
-- COM20 evidence is added only after flashing the committed source and running
-  the recorded plans; prior-platform results below are not relabeled.
+- COM20 full HIL: PASS, 184 PASS / 0 FAIL / 0 SKIP / 0 review from clean
+  firmware `3bce89e`.
+- Runtime target: ESP32-S3 revision 0.2, 4 MB embedded flash, 2 MB embedded
+  QSPI PSRAM.
+- Final state: READY, online, 3,109 tracked successes, zero consecutive/total
+  failures, persistent state clean; selftest 26/0/1, repeated stress 500/500,
+  mixed stress 500/500.
+- Evidence:
+  `hil_results/platform_55_03_311_com20/full_hil_final_exact_commit/ee871_20260731T094932Z/`.
+- Two preceding review runs are retained beside the PASS artifact. They proved
+  that the example scanner accepted ACK-only malformed frames and that
+  `libtest` duplicated an incomplete raw bus path. The scanner now requires
+  valid PEC, and `libtest` now uses the production driver.
 
 ## Prior Platform Evidence (`55.03.39`)
 
@@ -458,7 +473,7 @@ historical `54.03.20` COM20 results are recorded separately above.
 
 | ID | Board | Framework/example | Target | Sensor | Pull-ups/level shift | Status | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| B-S3-A | ESP32-S3 dev board | `examples/01_basic_bringup_cli` | `ex_bringup_s3` | EE871-E2 bench sensor | Pull-up values and level-shifter implementation not independently recorded | BUILD PASS; CURRENT HIL NOT RUN | Current `55.03.311` build passes; its post-commit HIL has not yet been recorded. Prior `55.03.39` targeted HIL 144/144 and serial discriminator 10,000/10,000 PASS on `COM20`; rev 0.2, 4 MB flash, 2 MB QSPI PSRAM. Historical `54.03.20` broad/niche/physical PASS and strict stability/soak FAIL evidence remain separate. GPIOs: DATA=6, CLOCK=7. |
+| B-S3-A | ESP32-S3 dev board | `examples/01_basic_bringup_cli` | `ex_bringup_s3` | EE871-E2 bench sensor | Pull-up values and level-shifter implementation not independently recorded | BUILD PASS; HIL PASS | Current `55.03.311` clean-commit HIL passed 184/184 on `COM20`; rev 0.2, 4 MB flash, 2 MB QSPI PSRAM, READY/clean, zero transport failures. Prior-platform results remain separately labeled. GPIOs: DATA=6, CLOCK=7. |
 | B-S2-A | ESP32-S2 dev board | `examples/01_basic_bringup_cli` | `ex_bringup_s2` | EE871-E2 bench sensor | External pull-ups, level shifter as required | NOT RUN | Record GPIOs, supply, cable length. |
 | B-S3-IDF | ESP32-S3 dev board | `examples/idf/basic_bringup` | `esp32s3` | EE871-E2 bench sensor | External pull-ups, level shifter as required | NOT RUN | Requires local or CI pure ESP-IDF build. |
 | B-S2-IDF | ESP32-S2 dev board | `examples/idf/basic_bringup` | `esp32s2` | EE871-E2 bench sensor | External pull-ups, level shifter as required | NOT RUN | Requires local or CI pure ESP-IDF build. |
@@ -486,6 +501,7 @@ historical `54.03.20` COM20 results are recorded separately above.
 | F-17 | Prior `55.03.39` HWCDC serial discriminator | S3 | Repeat state-only `dirty` 10,000 times and compare complete response lengths | No missing/truncated replies and every complete response has identical framing. | PASS | COM20: 10,000/10,000 in 14.078 s; all replies exactly 201 bytes. `dirty` performs no E2 operation, so this isolates CLI/HWCDC framing only. |
 | F-18 | Prior `55.03.39` scheduled-NACK policy regression | S3 | Sample MV3/MV4/status every 5 s, periodically run mixed stress, and retry only a fully framed scheduled MV3/MV4 control-byte NACK once after 1,500 ms | Preserve both attempts; no hidden core retry; finish READY/clean without omitted commands. | PASS | 108 cycles / 543.594 s: 564 ordinary PASS, 2 `SCHEDULED_CONTROL_NACK_RECOVERED`, 0 FAIL/review/SKIP/reconnect/counter regression. Both failures were MV3 control-byte NACKs; both retries passed. NACKs were about 105 s apart at nearly identical 15 s phase. Internal sensor cause remains unknown. |
 | F-19 | Unsupported operating-mode fail-closed guard | S3 | `drv`, `mode`, `drv` on a sensor advertising no mode capability | Return `NOT_SUPPORTED`, decode no mode value, perform no tracked E2 transfer, and preserve health. | PASS | Library 1.0.1 on COM20 returned `NOT_SUPPORTED` code 14; transport counters stayed 3,908 successes / 2 failures and state stayed READY with zero consecutive failures. Native fake coverage also proves read output preservation and no-I/O read/write guards. |
+| F-20 | Current `55.03.311` full regression HIL | S3 | Run safe, extended, identity/capability, invalid-parameter, bus diagnostic, trace/sniffer, and stress plans | Every selected command is framed and classified; finish READY with no transport failure or persistent dirty state. | PASS | Clean firmware `3bce89e`: 184/184 PASS, selftest 26/0/1, `stress 500` 500/500, `stress_mix 500` 500/500, address 0 only with valid PEC, library control-byte test 9/9, final READY/clean with 3,109 successes and zero failures. |
 
 ## Persistent Configuration Matrix
 

@@ -52,6 +52,9 @@ PDF if there is any ambiguity.
 
 - Current example/HIL build platform: pioarduino `55.03.311`,
   Arduino-ESP32 `3.3.11`, ESP-IDF `5.5.5`, 4 MB flash, and 2 MB QSPI PSRAM.
+- Current `55.03.311` COM20 HIL: 184/184 PASS from clean firmware `3bce89e`;
+  safe/extended/niche coverage finished READY with zero transport failures,
+  clean persistent state, repeated stress 500/500, and mixed stress 500/500.
 - Prior `55.03.39` targeted HIL: 144/144 PASS. Its serial-only discriminator:
   10,000/10,000 identical 201-byte `dirty` replies PASS; `dirty` performs no
   E2 operation, so this is CLI-framing evidence rather than a long-soak claim.
@@ -78,8 +81,8 @@ PDF if there is any ambiguity.
 - Historical eight-hour `54.03.20` soak: strict FAIL with 29 Arduino-ESP32
   3.2.0 HWCDC mid-line stalls and 11 real MV3 `0xC1` control-byte NACKs.
   Arduino-ESP32 PR #12606 fixes the HWCDC lost-wakeup path in 3.3.9. The
-  current `55.03.311` source passed S2/S3 builds; its post-commit COM20 rerun
-  has not yet been recorded, and no completed long soak is recorded for it.
+  current `55.03.311` source passed S2/S3 builds and 184/184 COM20 HIL; no
+  completed long soak is recorded for it.
 - Historical COM17 safe/persistent and manual unplug/replug evidence is
   retained in the hardware matrix.
 - ESP32-S2 hardware HIL: not recorded.

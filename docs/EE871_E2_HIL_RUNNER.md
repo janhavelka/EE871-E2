@@ -11,11 +11,12 @@ claim without the matching bench record.
 Recorded bench evidence is summarized in
 [EE871_E2_HARDWARE_VALIDATION_MATRIX.md](EE871_E2_HARDWARE_VALIDATION_MATRIX.md).
 The current example/HIL build pin is pioarduino `55.03.311`,
-Arduino-ESP32 `3.3.11`, and ESP-IDF `5.5.5`. Its post-commit COM20 rerun has
-not yet been recorded. The prior `55.03.39` firmware's targeted HIL passed 144/144,
-and a serial-only discriminator passed 10,000/10,000 identical 201-byte
-`dirty` replies. Because `dirty` performs no E2 operation, that discriminator
-qualifies CLI framing only.
+Arduino-ESP32 `3.3.11`, and ESP-IDF `5.5.5`. Its clean-commit COM20 run passed
+184/184 safe, extended, and niche commands with final READY state, zero
+transport failures, and clean persistent state. The prior `55.03.39`
+firmware's targeted HIL passed 144/144, and a serial-only discriminator passed
+10,000/10,000 identical 201-byte `dirty` replies. Because `dirty` performs no
+E2 operation, that discriminator qualifies CLI framing only.
 
 An accelerated 543.594-second scheduled-read regression then completed 108
 sample cycles with 564 ordinary passes, two recorded first-attempt

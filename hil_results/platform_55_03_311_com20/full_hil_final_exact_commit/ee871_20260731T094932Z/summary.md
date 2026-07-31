@@ -251,6 +251,5 @@ PASS is limited to the selected automated serial EE871 CLI command groups. It do
 
 ## Artifacts
 
-- `serial_transcript.txt`
 - `summary.json`
 - `summary.md`

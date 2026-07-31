@@ -29,6 +29,12 @@ Recorded evidence:
   `platform-espressif32` `55.03.311`, Arduino-ESP32 `3.3.11`, and ESP-IDF
   `5.5.5`. The earlier TunnelMonitor-node parity work on pioarduino
   `54.03.20` / Arduino-ESP32 `3.2.0` remains recorded as historical evidence.
+- Current ESP32-S3 COM20 `55.03.311` HIL: 184/184 PASS from clean firmware
+  commit `3bce89e`, covering safe, extended, identity/capability, range guards,
+  GPIO/E2 diagnostics, trace/sniffer, repeated reads, and mixed stress. It
+  finished READY with 3,109 tracked successes, zero transport failures, clean
+  persistent state, `stress 500` at 500/500, and `stress_mix 500` at 500/500.
+  The self-test reported 26 PASS / 0 FAIL / 1 unsupported-mode SKIP.
 - The current COM20 target was detected as ESP32-S3 revision 0.2 with 4 MB
   embedded flash and 2 MB embedded QSPI PSRAM; the S3 PlatformIO environment
   configures that QSPI PSRAM explicitly. The prior `55.03.39` firmware reported
@@ -97,8 +103,8 @@ Recorded evidence:
 
 The COM20 artifacts identify their exact firmware/build metadata. Results from
 different platform stacks are not combined into one platform claim. The new
-`55.03.311` pin has passed S2/S3 builds; its post-commit COM20 rerun has not yet
-been recorded, and no completed long-soak result is currently claimed for it.
+`55.03.311` pin has passed S2/S3 builds and the post-commit COM20 run above.
+No completed long-soak result is currently claimed for this pin.
 
 Outside the current qualification scope:
 
