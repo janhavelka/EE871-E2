@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 
-SCRIPT_VERSION = "1.0"
+SCRIPT_VERSION = "1.2"
 DEFAULT_BAUD = 115200
 DEFAULT_TIMEOUT_S = 8.0
 DEFAULT_COMMAND_TIMEOUT_S = 20.0
@@ -39,7 +39,7 @@ VERDICT_OPERATOR = "OPERATOR_REVIEW_REQUIRED"
 VERDICT_INCOMPLETE = "INCOMPLETE"
 
 ANSI_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
-PROMPT_RE = re.compile(r"(^|\r?\n)>\s*$")
+PROMPT_RE = re.compile(r"(?:^|\r?\n)>[ \t]*\r?\n\Z")
 BOOL_TRUE = {"yes", "true", "1", "on"}
 BOOL_FALSE = {"no", "false", "0", "off"}
 
@@ -52,6 +52,8 @@ class CommandSpec:
     description: str
     group: str = "safe"
     expected_any: tuple[str, ...] = ()
+    expected_all: tuple[str, ...] = ()
+    expected_status: str | None = None
     validators: tuple[str, ...] = ()
     timeout_s: float | None = None
     send: bool = True
@@ -142,6 +144,8 @@ def parse_version(text: str) -> dict[str, Any]:
     parsed: dict[str, Any] = {}
     patterns = {
         "firmware_build": r"Example firmware build:\s*([^\r\n]+)",
+        "arduino_esp32_version": r"Arduino-ESP32:\s*([^\r\n]+)",
+        "esp_idf_version": r"ESP-IDF:\s*([^\r\n]+)",
         "library_version": r"EE871 library version:\s*([^\r\n]+)",
         "library_full": r"EE871 library full:\s*([^\r\n]+)",
         "library_build": r"EE871 library build:\s*([^\r\n]+)",
@@ -306,11 +310,14 @@ def command_count(command: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def expected_token_present(clean: str, spec: CommandSpec) -> bool:
-    if not spec.expected_any:
-        return True
+def expected_tokens_present(clean: str, spec: CommandSpec) -> bool:
     lowered = clean.lower()
-    return any(token.lower() in lowered for token in spec.expected_any)
+    any_ok = (
+        not spec.expected_any
+        or any(token.lower() in lowered for token in spec.expected_any)
+    )
+    all_ok = all(token.lower() in lowered for token in spec.expected_all)
+    return any_ok and all_ok
 
 
 def validate_parsed(
@@ -332,6 +339,16 @@ def validate_parsed(
                 reviews.append("status line not parsed")
             elif status.get("name") != "OK" or status.get("code") != 0:
                 failures.append(f"status is {status.get('name')}")
+        elif validator == "status_expected":
+            status = parsed.get("status")
+            if not status:
+                reviews.append("status line not parsed")
+            elif not spec.expected_status:
+                reviews.append("expected status not configured")
+            elif status.get("name") != spec.expected_status:
+                failures.append(
+                    f"status is {status.get('name')}, expected {spec.expected_status}"
+                )
         elif validator == "co2_avg":
             if "co2_avg_ppm" not in parsed:
                 reviews.append("CO2 averaged value not parsed")
@@ -456,12 +473,11 @@ def classify_response(
     if not clean.strip():
         return RESULT_OPERATOR, "no serial response captured"
 
-    if not expected_token_present(clean, spec):
-        return RESULT_OPERATOR, "expected output token missing"
-
     failures, reviews = validate_parsed(spec, parsed, state)
     if failures:
         return RESULT_FAIL, "; ".join(failures)
+    if not expected_tokens_present(clean, spec):
+        return RESULT_OPERATOR, "expected output token missing"
     if reviews:
         return RESULT_OPERATOR, "; ".join(reviews)
     return RESULT_PASS, ""
@@ -471,6 +487,9 @@ def response_has_completion(command: str, text: str) -> bool:
     clean = strip_ansi(text)
     if not clean.strip():
         return False
+    status = parse_status(clean).get("status")
+    if status and (status.get("name") != "OK" or status.get("code") != 0):
+        return True
     if command.startswith("stress_mix"):
         return "=== stress_mix summary ===" in clean and re.search(r"\bTotal:\s*ok=\d+\s+fail=\d+", clean) is not None
     if command.startswith("stress"):
@@ -584,6 +603,53 @@ def extended_specs(read_count: int, cycle_count: int) -> list[CommandSpec]:
     return specs
 
 
+def niche_specs() -> list[CommandSpec]:
+    """Safe, fixed coverage for identity, guards, bus diagnostics, and tracing."""
+    ok = ("status_ok",)
+    return [
+        CommandSpec("id", "Verify EE871 identity and CO2 capability bits.", group="niche-identity", expected_all=("Status: OK", "Group=0x0367", "Subgroup=0x09", "Available=0x08"), validators=ok),
+        CommandSpec("status", "Read the sensor status byte.", group="niche-identity", expected_all=("Status: OK", "hasCo2Error(): NO"), validators=ok),
+        CommandSpec("co2fast", "Read MV3 fast CO2.", group="niche-identity", expected_any=("CO2 fast:",), validators=ok),
+        CommandSpec("co2avg", "Read MV4 averaged CO2.", group="niche-identity", expected_any=("CO2 avg:",), validators=ok),
+        CommandSpec("error", "Read the supported CO2 error-code register.", group="niche-identity", expected_any=("Error code:",), validators=ok),
+        CommandSpec("fw", "Read sensor firmware version.", group="niche-identity", expected_any=("Firmware:",), validators=ok),
+        CommandSpec("e2spec", "Read E2 specification version.", group="niche-identity", expected_any=("E2 spec version:",), validators=ok),
+        CommandSpec("features", "Read and decode feature flags.", group="niche-identity", expected_all=("Status: OK", "Operating functions", "Mode support", "Special features"), validators=ok),
+        CommandSpec("caps", "Print cached capability booleans.", group="niche-identity", expected_all=("Capabilities", "hasGlobalInterval:", "hasAutoAdjust:")),
+        CommandSpec("serial", "Read the fixed-size sensor serial number.", group="niche-identity", expected_all=("Status: OK", "Serial:", "Hex:"), validators=ok),
+        CommandSpec("partname", "Read the fixed-size sensor part name.", group="niche-identity", expected_all=("Status: OK", "Part name:"), validators=ok),
+        CommandSpec("addr", "Read the current E2 address.", group="niche-config", expected_any=("Bus address:",), validators=ok),
+        CommandSpec("interval", "Read the global measurement interval.", group="niche-config", expected_any=("Interval:",), validators=("status_ok", "interval_read")),
+        CommandSpec("factor", "Read the CO2 interval-factor register.", group="niche-config", expected_any=("CO2 interval factor:",), validators=ok),
+        CommandSpec("filter", "Read the CO2 filter register.", group="niche-config", expected_any=("CO2 filter:",), validators=ok),
+        CommandSpec("mode", "Reject an operating-mode read when capability bits say it is unsupported.", group="niche-guards", expected_any=("Status:",), expected_status="NOT_SUPPORTED", validators=("status_expected",)),
+        CommandSpec("addr 8", "Reject an out-of-range address before any persistent write.", group="niche-guards", expected_any=("Status:",), expected_status="OUT_OF_RANGE", validators=("status_expected",)),
+        CommandSpec("interval 149", "Reject a below-minimum interval before any persistent write.", group="niche-guards", expected_any=("Status:",), expected_status="OUT_OF_RANGE", validators=("status_expected",)),
+        CommandSpec("interval 36001", "Reject an above-maximum interval before any persistent write.", group="niche-guards", expected_any=("Status:",), expected_status="OUT_OF_RANGE", validators=("status_expected",)),
+        CommandSpec("mode 4", "Reject invalid operating-mode bits before any persistent write.", group="niche-guards", expected_any=("Status:",), expected_status="OUT_OF_RANGE", validators=("status_expected",)),
+        CommandSpec("drv", "Confirm rejected parameters did not degrade transport health.", group="niche-guards", expected_any=("Driver Health",), validators=("health_ready",)),
+        CommandSpec("dirty", "Confirm rejected parameters did not dirty persistent state.", group="niche-guards", expected_any=("persistentConfigDirty",), validators=("dirty_clean",)),
+        CommandSpec("buscheck", "Verify both E2 lines are idle.", group="niche-bus", expected_all=("Status: OK", "Bus is idle (both lines high)"), validators=ok),
+        CommandSpec("levels", "Read physical E2 line levels.", group="niche-bus", expected_all=("SCL: HIGH (idle)", "SDA: HIGH (idle)", "Bus idle (both HIGH)")),
+        CommandSpec("clocktest", "Drive and sample ten bounded clock pulses.", group="niche-bus", expected_all=("Results: 10/10 LOW ok, 10/10 HIGH ok",)),
+        CommandSpec("scan", "Scan all eight E2 addresses.", group="niche-bus", expected_all=("Address 0:", "PEC=OK", "Found 1 device(s)"), timeout_s=45.0),
+        CommandSpec("timing", "Characterize the fixed diagnostic timing set.", group="niche-bus", expected_all=("Timing Discovery", "timing(s) worked"), timeout_s=45.0, notes="75 us and 50 us are characterization outside the supported E2 timing range."),
+        CommandSpec("libtest", "Exercise every control byte used by begin and CO2 reads.", group="niche-bus", expected_all=("Library Command Test", "Passed: 9/9"), timeout_s=45.0),
+        CommandSpec("diag", "Run the full GPIO/E2 diagnostic sequence.", group="niche-bus", expected_all=("FULL E2 BUS DIAGNOSTICS", "Bus idle (both HIGH)", "Results: 5/5 LOW ok, 5/5 HIGH ok", "Found 1 device(s)", "DIAGNOSTICS COMPLETE"), timeout_s=90.0),
+        CommandSpec("trace clear", "Clear the fixed-capacity bus trace.", group="niche-trace", expected_any=("Bus trace cleared",)),
+        CommandSpec("verbose 1", "Enable buffered bus tracing.", group="niche-trace", expected_any=("Verbose mode: ON",)),
+        CommandSpec("status", "Generate a traced E2 transaction.", group="niche-trace", expected_all=("Status: OK", "hasCo2Error(): NO"), validators=ok),
+        CommandSpec("trace stats", "Verify the trace drained without drops.", group="niche-trace", expected_all=("Bus Trace", "Pending: 0", "Dropped: 0", "Capacity: 512")),
+        CommandSpec("verbose 0", "Disable buffered bus tracing.", group="niche-trace", expected_any=("Verbose mode: OFF",)),
+        CommandSpec("sniff", "Enable the protocol sniffer.", group="niche-trace", expected_any=("[SNIFF] ON",)),
+        CommandSpec("status", "Generate a transaction for the protocol sniffer.", group="niche-trace", expected_all=("Status: OK", "hasCo2Error(): NO"), validators=ok),
+        CommandSpec("sniff", "Disable the protocol sniffer and report captured edges.", group="niche-trace", expected_any=("[SNIFF] OFF",)),
+        CommandSpec("stress_mix 500", "Run 500 mixed safe protocol reads.", group="niche-stress", expected_any=("stress_mix summary",), validators=("stress",), timeout_s=420.0),
+        CommandSpec("drv", "Confirm READY health after niche coverage.", group="niche-final", expected_any=("Driver Health",), validators=("health_ready",)),
+        CommandSpec("dirty", "Confirm clean persistent state after niche coverage.", group="niche-final", expected_any=("persistentConfigDirty",), validators=("dirty_clean",)),
+    ]
+
+
 def maintenance_specs(args: argparse.Namespace) -> list[CommandSpec]:
     specs = [
         CommandSpec("dirty", "Confirm clean dirty state before persistent writes.", group="maintenance", expected_any=("persistentConfigDirty",), validators=("dirty_clean",), requires_opt_in="--include-persistent-writes"),
@@ -683,6 +749,8 @@ def build_plan(args: argparse.Namespace) -> list[CommandSpec]:
     specs = safe_specs()
     if args.include_extended:
         specs.extend(extended_specs(args.read_loop_count, args.cycle_loop_count))
+    if args.include_niche:
+        specs.extend(niche_specs())
     if args.include_persistent_writes:
         specs.extend(maintenance_specs(args))
     specs.extend(operator_fault_specs(args))
@@ -807,6 +875,8 @@ def update_state(state: dict[str, Any], row: dict[str, Any]) -> None:
     parsed = row.get("parsed") or {}
     for key in (
         "firmware_build",
+        "arduino_esp32_version",
+        "esp_idf_version",
         "library_version",
         "library_full",
         "library_build",
@@ -952,6 +1022,37 @@ def write_summary_json(
     initial_output: str,
     aggregate_counts: dict[str, int],
 ) -> None:
+    def compact_summary_row(row: dict[str, Any]) -> dict[str, Any]:
+        compact = {
+            key: row[key]
+            for key in (
+                "command",
+                "group",
+                "result",
+                "elapsed_s",
+                "wait_reason",
+                "attempt",
+                "attempt_started_utc",
+                "attempt_id",
+                "retry_of",
+            )
+            if key in row
+        }
+        if row.get("planned_command") != row.get("command"):
+            compact["planned_command"] = row.get("planned_command")
+        for key in ("reason", "requires_opt_in", "notes"):
+            if row.get(key):
+                compact[key] = row[key]
+        for key in ("destructive", "operator_required"):
+            if row.get(key):
+                compact[key] = True
+        if row.get("result") != RESULT_PASS:
+            if row.get("parsed"):
+                compact["parsed"] = row["parsed"]
+        if row.get("result") != RESULT_PASS and row.get("clean_excerpt"):
+            compact["failure_excerpt"] = row["clean_excerpt"]
+        return compact
+
     payload = {
         "metadata": meta,
         "final_verdict": final,
@@ -963,10 +1064,7 @@ def write_summary_json(
             "It does not prove CO2 accuracy, warm-up suitability, persistent-write safety, "
             "fault tolerance, long-soak stability, calibration validity, or production readiness."
         ),
-        "commands": [
-            {key: value for key, value in row.items() if key != "raw"}
-            for row in results
-        ],
+        "commands": [compact_summary_row(row) for row in results],
     }
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
@@ -1038,6 +1136,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--address", "--device-address", dest="device_address", default="0", help="Expected E2 device address metadata. This does not retarget firmware.")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--include-extended", "--extended-safe", dest="include_extended", action="store_true")
+    parser.add_argument("--include-niche", action="store_true", help="Run safe identity, guard, bus-diagnostic, trace, and mixed-stress coverage.")
     parser.add_argument("--read-loop-count", type=int, default=10)
     parser.add_argument("--cycle-loop-count", type=int, default=3)
     parser.add_argument("--include-persistent-writes", action="store_true")

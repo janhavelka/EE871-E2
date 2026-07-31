@@ -17,26 +17,27 @@ runs were verified.
   regression run, 10/10 PASS.
 - `runtime_psram_final/ee871_20260730T110655Z/` - runtime flash/PSRAM smoke,
   10/10 PASS.
+- `overnight_preflight/ee871_20260730T172216Z/` - immediate pre-soak safe
+  baseline, 10/10 PASS.
+- `overnight_soak_20260730T173126Z/` - eight-hour soak, strict FAIL:
+  2,376 PASS, 29 incomplete HWCDC replies, 11 real scheduled MV3 control-byte
+  NACKs, and 41 planned command records absent after framing timeouts. The old
+  runner emitted no explicit SKIP rows for those unsent commands.
 
-Each runner directory contains the raw serial transcript, structured JSON, and
-Markdown summary produced by `tools/ee871_hil_runner.py`.
+For successful generated runs, the Markdown command ledger is authoritative;
+duplicate raw serial and JSON outputs were removed. The failed overnight soak
+retains its raw transcript plus compact JSON because its incomplete replies
+and NACKs are unique negative evidence.
 
 ## Focused Diagnostic Evidence
 
-- `full_diagnostics_final.txt`
-- `range_capability_guards_final.txt`
-- `trace_sniffer_mixed_stress_final.txt`
-- `read_identity_diagnostics_final.txt`
-- `part_name_write_readback_raw.txt`
-
-`part_name_write_readback_raw.txt` is retained only for its clean same-value
-part-name write/readback blocks. The broader ad-hoc session contains unrelated
-harness expectation failures and is not an overall PASS artifact.
+- `niche_diagnostics_20260730.md` - curated identity/capability, guard,
+  GPIO/E2 diagnostic, trace/sniffer, mixed-stress, and same-value part-name
+  evidence condensed from five ad-hoc normalized console captures.
 
 ## Physical And Power-Cycle Evidence
 
 - `operator_physical_faults_20260730.md`
-- `operator_physical_faults_20260730_serial_transcript.txt`
 - `post_power_cycle_stability_20260730.txt`
 - `warmup_stale_followup_20260730.md`
 - `immediate_warmup_final_20260730.txt`
@@ -49,10 +50,22 @@ NACK. The delayed-start warm-up attempt records a second bounded NACK and is
 retained as negative transport evidence. Both failures recovered on the next
 successful operation; neither is hidden or reclassified.
 
-The operator-assisted transcript is explicitly normalized, not byte-for-byte
-raw serial. The stability follow-up report explicitly identifies manually
-normalized interactive observations for which no raw follow-up transcript was
-retained.
+The eight-hour soak is also retained as negative evidence, not promoted to
+PASS. Its 29 incomplete replies were reproduced interactively with a
+serial-only command; the exact 64-byte-boundary truncation/queued-suffix pattern
+matches the Arduino-ESP32 3.2.0 HWCDC lost-wakeup defect fixed upstream. The
+serial-only raw stream was not retained, so the characterization note states
+that limitation. Its 11 complete NACK replies originated at the sensor-facing
+transaction boundary; their sensor-internal cause is not inferred from NACK
+alone.
+
+- `serial_only_hwcdc_characterization_20260731.md` - retrospective lab note for
+  the pre-upgrade serial-only discriminator; exact counts and missing-raw
+  boundary are stated explicitly.
+
+The operator-assisted report explicitly identifies its normalized interactive
+origin. The stability follow-up likewise identifies observations for which no
+raw follow-up transcript was retained.
 
 ## Scope
 

@@ -13,7 +13,7 @@
 
 #ifndef EE871_VERSION_STRING
 /// @brief Semantic version string synchronized from library.json.
-#define EE871_VERSION_STRING "1.0.0"
+#define EE871_VERSION_STRING "1.0.1"
 #endif
 
 #ifndef EE871_BUILD_DATE
@@ -55,16 +55,16 @@ static constexpr uint16_t VERSION_MAJOR = 1;
 static constexpr uint16_t VERSION_MINOR = 0;
 
 /// @brief Patch semantic version; incremented for backward-compatible fixes.
-static constexpr uint16_t VERSION_PATCH = 0;
+static constexpr uint16_t VERSION_PATCH = 1;
 
 /// @brief Full semantic version string from library.json.
 static constexpr const char* VERSION = EE871_VERSION_STRING;
 
 /// @brief Encoded version for numeric comparison: MAJOR*10000 + MINOR*100 + PATCH.
-static constexpr uint32_t VERSION_CODE = 10000;
+static constexpr uint32_t VERSION_CODE = 10001;
 
 /// @brief Backward-compatible numeric version alias.
-static constexpr int VERSION_INT = 10000;
+static constexpr int VERSION_INT = 10001;
 
 /// @brief Build date string injected by PlatformIO or compiler defaults.
 static constexpr const char* BUILD_DATE = EE871_BUILD_DATE;

@@ -639,9 +639,7 @@ Safe default HIL result:
 - Key results: `read` Status OK with CO2 avg `567 ppm`; `probe` Status OK;
   `selftest` pass=27 fail=0 skip=0; `drv` READY/online yes/zero consecutive
   failures; `stress 50` success=50 errors=0; persistent dirty stayed clean.
-- Artifacts:
-  - `hil_results/safe_default/ee871_20260601T185912Z/serial_transcript.txt`
-  - `hil_results/safe_default/ee871_20260601T185912Z/summary.json`
+- Retained artifact:
   - `hil_results/safe_default/ee871_20260601T185912Z/summary.md`
 
 Extended safe HIL result:
@@ -656,18 +654,14 @@ Extended safe HIL result:
   Status OK; repeated selftests reported pass=27 fail=0 skip=0; final driver
   state READY/online yes/zero consecutive failures; persistent dirty stayed
   clean.
-- Artifacts:
-  - `hil_results/extended_safe/ee871_20260601T185921Z/serial_transcript.txt`
-  - `hil_results/extended_safe/ee871_20260601T185921Z/summary.json`
+- Retained artifact:
   - `hil_results/extended_safe/ee871_20260601T185921Z/summary.md`
 
 Manual resync check:
 - Commands: `dirty`, `resync`, `dirty`.
 - Final verdict: PASS.
 - Result: pre-resync dirty clean, `resync` Status OK, post-resync dirty clean.
-- Artifacts:
-  - `hil_results/manual_resync/ee871_20260601T190024Z/serial_transcript.txt`
-  - `hil_results/manual_resync/ee871_20260601T190024Z/summary.json`
+- Retained artifact:
   - `hil_results/manual_resync/ee871_20260601T190024Z/summary.md`
 
 CLI alias note:
@@ -704,7 +698,8 @@ Approval and hardware:
 Baseline persistent values:
 - Measurement interval: `150 ds` (`15.0 s`).
 - CO2 interval factor: `85`.
-- Operating mode: `0x55` (low power, measurement priority).
+- Raw operating-mode memory: `0x55`. The sensor did not advertise operating
+  mode capability; current code therefore does not decode this as a valid mode.
 - Bus address: `0`.
 - Part name: `EE871`.
 - Serial: `1920935602368A..`
@@ -742,9 +737,7 @@ Scope boundaries:
 - Failed-write/operator recovery was not physically induced. Native fake tests
   remain the evidence for partial persistent-write dirty/resync behavior.
 
-Artifacts:
-- `hil_results/persistent_config_validation/ee871_20260601T193500Z_interval_restore/serial_transcript.txt`
-- `hil_results/persistent_config_validation/ee871_20260601T193500Z_interval_restore/summary.json`
+Retained artifact:
 - `hil_results/persistent_config_validation/ee871_20260601T193500Z_interval_restore/summary.md`
 
 Validation commands for this pass:

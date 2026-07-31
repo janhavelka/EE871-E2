@@ -82,8 +82,7 @@ Final verdict: `PASS`
 | 30 | `gain` | `final` | `PASS` |  |
 | 31 | `drv` | `final` | `PASS` |  |
 
-## Artifacts
+## Retention
 
-- `serial_transcript.txt`
-- `summary.json`
-- `summary.md`
+This command ledger is the retained evidence. The duplicate generated raw
+transcript and JSON were removed during the 2026-07-31 evidence condensation.

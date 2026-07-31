@@ -291,6 +291,16 @@ Specific interval factors (signed 8-bit convention described as):
   - bit0 Measuremode: 0 = freerunning/trigger mode, 1 = low power mode (measure after status read)
   - bit1 E2 priority: 0 = measurement priority (NACK during measurement), 1 = communication priority
 
+The generic E2 specification permits a control-byte NACK during a
+measurement-priority window, but AN0105 names EE871 among the devices that can
+process enquiries while measuring. In addition, runtime mode `0xD8` is not
+meaningful when neither capability bit is advertised. Therefore, an observed
+NACK is a precise result for that request but does not, by itself, prove sensor
+absence or measurement activity. The EE871 core performs no hidden retry and
+returns the NACK to the caller. Product or test-harness policy may make a
+bounded later attempt when appropriate, but must preserve the original failure
+and own the delay/backoff explicitly.
+
 #### 7.4.9 Special features register
 - `0xD9` Auto adjustment control/status:
   - read=1 -> auto adjustment running

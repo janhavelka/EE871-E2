@@ -1,6 +1,6 @@
 # EE871-E2 Documentation Index
 
-Last updated: 2026-07-30
+Last updated: 2026-07-31
 
 Use this index to choose the right document. The repository contains maintained
 engineering docs, historical audit records, curated protocol notes, and raw
@@ -50,18 +50,36 @@ PDF if there is any ambiguity.
 
 ## Validation Status Snapshot
 
-- Current ESP32-S3 COM20 safe/extended, persistent-write, diagnostics,
-  range/capability, trace/sniffer, stress, and runtime QSPI PSRAM HIL: PASS.
-- Current ESP32-S3 COM20 operator-assisted absent-sensor boot, hot
+- Current example/HIL build platform: pioarduino `55.03.311`,
+  Arduino-ESP32 `3.3.11`, ESP-IDF `5.5.5`, 4 MB flash, and 2 MB QSPI PSRAM.
+- Prior `55.03.39` targeted HIL: 144/144 PASS. Its serial-only discriminator:
+  10,000/10,000 identical 201-byte `dirty` replies PASS; `dirty` performs no
+  E2 operation, so this is CLI-framing evidence rather than a long-soak claim.
+- Prior `55.03.39` accelerated scheduled-read regression: PASS over 108 cycles and
+  543.594 s, with 564 ordinary passes, two recorded sensor NACK attempts each
+  recovered by one 1,500 ms harness retry, and no hard failure, omission,
+  reconnect, or counter regression. Final state was READY/clean. This is not a
+  completed long soak.
+- Prior `55.03.39` unsupported operating-mode HIL: `NOT_SUPPORTED`, no decoded stale
+  value, unchanged tracked transport counters, and READY state.
+- Historical `54.03.20` ESP32-S3 COM20 safe/extended, persistent-write,
+  diagnostics, range/capability, trace/sniffer, stress, and runtime QSPI PSRAM
+  HIL: PASS.
+- Historical ESP32-S3 COM20 operator-assisted absent-sensor boot, hot
   unplug/OFFLINE/replug recovery, SDA/SCL stuck-low faults, and complete
   sensor/MCU power cycle with measurement-interval persistence: PASS.
-- Current immediate warm-up capture: PASS. Sampling began 0.250 s after COM20
+- Historical immediate warm-up capture: PASS. Sampling began 0.250 s after COM20
   reappeared; values/status transitioned from `0 ppm`/`0x08` through 4 s to
   `678 ppm`/`0x00` at 5 s; final READY with zero transport failures.
-- Current strict 10-minute COM20 post-power-cycle stability capture: FAIL from
+- Historical strict 10-minute COM20 post-power-cycle stability capture: FAIL from
   one bounded NACK among 63 scheduled CLI commands at t=330 s. Manually
   normalized interactive output from the immediate 2,000-operation follow-up
   recorded zero errors; no raw follow-up transcript was retained.
+- Historical eight-hour `54.03.20` soak: strict FAIL with 29 Arduino-ESP32
+  3.2.0 HWCDC mid-line stalls and 11 real MV3 `0xC1` control-byte NACKs.
+  Arduino-ESP32 PR #12606 fixes the HWCDC lost-wakeup path in 3.3.9. The
+  current `55.03.311` source passed S2/S3 builds; its post-commit COM20 rerun
+  has not yet been recorded, and no completed long soak is recorded for it.
 - Historical COM17 safe/persistent and manual unplug/replug evidence is
   retained in the hardware matrix.
 - ESP32-S2 hardware HIL: not recorded.

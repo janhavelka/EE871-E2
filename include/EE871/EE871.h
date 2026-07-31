@@ -60,6 +60,11 @@ struct SettingsSnapshot {
 /// ISR-safe because they may perform bus I/O and call the configured delay
 /// callback. Transport callbacks must be bounded and deterministic, and must
 /// not call public methods on the same EE871 instance recursively.
+///
+/// A failed E2 transfer is not retried internally. The driver preserves a
+/// control-byte NACK and updates health for that attempt; the application owns
+/// any later retry, delay/backoff, and sampling-cadence policy. A NACK alone
+/// does not identify the sensor's internal reason.
 class EE871 {
 public:
   /// @brief Construct an uninitialized driver instance.
@@ -236,7 +241,8 @@ public:
   /// Read a control-byte addressed value.
   /// @param mainCommandNibble EE871-supported main-command nibble.
   /// @param[out] data Returned data byte.
-  /// @return Status::Ok() on success; NOT_SUPPORTED for EE871-unsupported measurement commands.
+  /// @return Status::Ok() on success; NOT_SUPPORTED for EE871-unsupported
+  /// measurement commands. A slave NACK is returned without retry.
   Status readControlByte(uint8_t mainCommandNibble, uint8_t& data);
 
   /// Read a 16-bit value using low/high control bytes.
@@ -461,9 +467,12 @@ public:
   /// @return Status::Ok() when the byte verifies. This is a persistent single-byte write.
   Status writeCo2Filter(uint8_t filter);
 
-  /// Read operating mode (0xD8)
+  /// Read operating mode (0xD8).
+  ///
+  /// Fails closed with NOT_SUPPORTED when neither operating-mode capability is
+  /// advertised. Reserved bits in a returned value produce OUT_OF_RANGE.
   /// @param[out] mode Operating-mode byte.
-  /// @return Status::Ok() when the byte is read.
+  /// @return Status::Ok() only when a supported, valid mode byte is read.
   /// @see cmd::OPERATING_MODE_* constants
   Status readOperatingMode(uint8_t& mode);
 
@@ -471,6 +480,8 @@ public:
   ///
   /// bit0: 0=freerunning, 1=low power. bit1: 0=measurement priority,
   /// 1=E2 priority.
+  /// Fails closed with NOT_SUPPORTED when neither operating-mode capability is
+  /// advertised, including for mode 0.
   /// @param mode Operating-mode byte.
   /// @return Status::Ok() when the byte verifies. This is a persistent single-byte write.
   Status writeOperatingMode(uint8_t mode);
@@ -535,7 +546,8 @@ public:
   /// counter. For checked sampling, read MV3/MV4 first and status second so
   /// status describes the last measured value while starting the next cycle.
   /// @param[out] status Status byte.
-  /// @return Status::Ok() when the status byte and PEC verify.
+  /// @return Status::Ok() when the status byte and PEC verify. A slave NACK is
+  /// returned without retry.
   Status readStatus(uint8_t& status);
 
   /// Check if CO2 error bit is set in a status byte
@@ -554,6 +566,8 @@ public:
   ///
   /// This is a raw value API. It does not read status, reject the CO2 error
   /// bit, validate warm-up/freshness, or enforce a product-specific ppm range.
+  /// A control-byte NACK is returned without retry and without inferring the
+  /// sensor's internal reason.
   /// @param[out] ppm CO2 concentration in ppm.
   /// @return Status::Ok() when MV3 low/high reads succeed.
   Status readCo2Fast(uint16_t& ppm);
@@ -562,6 +576,8 @@ public:
   ///
   /// This is a raw value API. It does not read status, reject the CO2 error
   /// bit, validate warm-up/freshness, or enforce a product-specific ppm range.
+  /// A control-byte NACK is returned without retry and without inferring the
+  /// sensor's internal reason.
   /// @param[out] ppm CO2 concentration in ppm.
   /// @return Status::Ok() when MV4 low/high reads succeed.
   Status readCo2Average(uint16_t& ppm);

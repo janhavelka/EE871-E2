@@ -9,16 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Exact-pinned the Arduino example and HIL environments to the same pioarduino
-  `platform-espressif32` `54.03.20` release used by TunnelMonitor-node
-  (Arduino-ESP32 `3.2.0`, ESP-IDF `5.4.1`, GCC `14.2.0`) instead of allowing
-  `platform = espressif32` to drift with the local PlatformIO installation.
+- Exact-pinned the Arduino example and HIL environments to pioarduino
+  `platform-espressif32` `55.03.311` (Arduino-ESP32 `3.3.11`, ESP-IDF `5.5.5`).
+  This supersedes the earlier TunnelMonitor-node parity pin `54.03.20` /
+  Arduino-ESP32 `3.2.0`, whose HIL evidence remains retained and labeled.
 - Configured the ESP32-S3 example/HIL target explicitly for its detected
   4 MB embedded flash and 2 MB QSPI PSRAM.
 - Documented that the repository pin controls its example/HIL firmware while
   consuming applications continue to own their platform version.
 - Consolidated the HIL-runner parser regressions into one test module and added
   parser/version checks to CI.
+- Added a read-only soak harness that checkpoints its evidence and permits one
+  explicitly recorded application-level retry only for a scheduled MV3/MV4
+  control-byte NACK. The default retry delay is 1,500 ms; the core driver
+  remains retry-free and the harness does not infer the sensor-internal cause.
+- Added a fixed, non-persistent niche HIL plan for identity/capability,
+  parameter guards, GPIO/E2 diagnostics, trace/sniffer behavior, and mixed
+  stress, plus a reusable state-only native-USB framing discriminator.
+- Condensed retained HIL evidence from 4.53 MB to 1.21 MB: ordinary successful
+  runs keep their complete Markdown command ledgers, while raw serial is
+  retained for unique failure and time-series evidence. Future structured
+  summaries omit ordinary PASS payloads and retain bounded abnormal excerpts.
 - Version tooling now synchronizes `Version.h`, `idf_component.yml`, and the
   Doxygen project number from `library.json`.
 - Restricted Doxygen input to maintained public documentation and enabled
@@ -42,6 +53,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Python HIL runner, settle native USB briefly between commands, and stop the
   plan on a framing timeout instead of shifting later responses onto the wrong
   command.
+- Classify a parsed non-OK status before checking for a success-value token, so
+  a complete MV3 NACK response is a hard failure rather than operator review.
+- Fail closed for both operating-mode reads and writes when capability is
+  absent, and reject returned `0xD8` values containing reserved bits, instead
+  of decoding or writing the unsupported `0x55` register.
+- Upgrade the S3 example/HIL build baseline to Arduino-ESP32 3.3.11, which retains the
+  upstream HWCDC lost-wakeup/data-loss fix introduced in 3.3.9 by
+  Arduino-ESP32 PR #12606.
 - Deassert serial DTR/RTS before opening a live HIL port to avoid intentionally
   resetting native-USB targets; no-reset attachment was verified on COM20.
 - Drain queued bus-trace output before emitting the next CLI prompt.
@@ -62,27 +81,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Validation
 
-- Native tests: 33 passing.
-- Consolidated HIL-runner parser tests: 27 passing.
-- Arduino ESP32-S3 and ESP32-S2 example builds: passing with pioarduino
-  `54.03.20`.
-- ESP32-S3 COM20 automated safe/extended HIL: 33/33 PASS, including
-  `selftest` 27/27, `stress 50` 50/50, and `stress 500` 500/500.
-- Final ESP32-S3 COM20 runtime-memory smoke HIL: 10/10 PASS; firmware reported
-  4,194,304 bytes flash and PSRAM ready with 2,097,152 bytes.
-- ESP32-S3 COM20 same-value persistent HIL: 25/25 PASS for interval
-  `150 ds`, CO2 offset `0 ppm`, and CO2 gain `32768`, with verified readback,
-  resync, and clean dirty state.
-- ESP32-S3 COM20 niche checks: range/capability guards 11/11 PASS; bus
-  trace/sniffer/mixed-stress 11/11 PASS; `stress_mix 500` 500/500; full bus
-  diagnostics found address 0 and completed six in-spec timing points plus two
-  out-of-spec characterization points.
-- ESP32-S3 COM20 operator-assisted physical HIL: sensor-absent boot PASS; hot
+- Native tests: 34 passing.
+- Consolidated HIL-runner/parser tests: 38 passing.
+- Current Arduino example builds: ESP32-S3 and ESP32-S2 pass on pioarduino
+  `55.03.311`; the build-only `compat_tunnelmonitor_s3` environment also passes
+  on TunnelMonitor-node commit `0f240ab`'s pioarduino `54.03.20` pin without
+  source shims.
+- Prior ESP32-S3 COM20 targeted HIL on pioarduino `55.03.39`: 144/144
+  PASS; final READY state, zero transport failures, clean persistent state,
+  `stress 500` at 500/500, and library version `1.0.1`. Selftest reported
+  26 PASS / 0 FAIL / 1 unsupported-mode SKIP.
+- Prior ESP32-S3 COM20 serial-only discriminator on pioarduino `55.03.39`:
+  10,000/10,000 `dirty` round trips PASS, with 10,000 identical 201-byte
+  replies. Because `dirty` performs no E2 traffic, this is CLI-framing evidence
+  only, not sensor transport or long-soak evidence.
+- Prior `55.03.39` ESP32-S3 COM20 accelerated scheduled-read regression: PASS over
+  108 sample cycles and 543.594 seconds. It recorded 564 ordinary passes, two
+  fully framed control-byte NACK attempts each recovered by one application
+  retry after 1,500 ms, and zero hard failures, reviews, skips, reconnects, or
+  transport-counter regressions; final state was READY and clean. The two
+  NACKs occurred about 105 seconds apart at nearly identical phase within the
+  15-second configured interval. This records schedule-correlated recurrence
+  at the E2 control-byte ACK boundary, but it does not identify the electrical
+  or sensor-internal cause.
+- Prior `55.03.39` ESP32-S3 COM20 operating-mode guard: PASS. An unsupported `mode`
+  command returned `NOT_SUPPORTED`, decoded no value, left tracked transport
+  counters unchanged, and preserved READY state.
+- Historical Arduino ESP32-S3 and ESP32-S2 example builds: passing with
+  pioarduino `54.03.20`.
+- Historical ESP32-S3 COM20 automated safe/extended HIL on `54.03.20`: 33/33
+  PASS, including `selftest` 27/27, `stress 50` 50/50, and `stress 500`
+  500/500.
+- Historical `54.03.20` ESP32-S3 COM20 runtime-memory smoke HIL: 10/10 PASS;
+  firmware reported 4,194,304 bytes flash and PSRAM ready with 2,097,152 bytes.
+- Historical `54.03.20` ESP32-S3 COM20 same-value persistent HIL: 25/25 PASS
+  for interval `150 ds`, CO2 offset `0 ppm`, and CO2 gain `32768`, with
+  verified readback, resync, and clean dirty state.
+- Historical `54.03.20` ESP32-S3 COM20 niche checks: range/capability guards
+  11/11 PASS; bus trace/sniffer/mixed-stress 11/11 PASS; `stress_mix 500`
+  500/500; full bus diagnostics found address 0 and completed six in-spec
+  timing points plus two out-of-spec characterization points.
+- Historical `54.03.20` ESP32-S3 COM20 operator-assisted physical HIL:
+  sensor-absent boot PASS; hot
   unplug transitioned to OFFLINE at threshold 5 and explicit replug recovery
   restored READY; 470-ohm SDA and SCL stuck-low tests returned bounded precise
   failures and recovered; interval `160 ds` persisted across a complete
   sensor/MCU power cycle and the `150 ds` baseline was restored.
-- ESP32-S3 COM20 immediate warm-up HIL: PASS after the newline-framed CLI fix.
+- Historical `54.03.20` ESP32-S3 COM20 immediate warm-up HIL: PASS after the
+  newline-framed CLI fix.
   Sampling started 0.250 s after COM20 reappeared; MV3/MV4 were `0 ppm` with
   status `0x08` through 4 s and became `678 ppm` with status `0x00` at 5 s.
   All 33 scheduled commands were correctly framed; final driver health was
@@ -90,7 +136,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and interval `150 ds`. A separate delayed-start attempt recorded one bounded
   fast-read `NACK` at 20.094 s and recovered immediately; it remains retained
   in the attempt ledger. A post-fix automated safe run also passed 10/10.
-- ESP32-S3 COM20 10-minute post-power-cycle stability/stale characterization:
+- Historical `54.03.20` ESP32-S3 COM20 10-minute post-power-cycle
+  stability/stale characterization:
   strict result FAIL because one of 63 scheduled CLI commands returned a bounded
   `NACK` on the t=330 s fast read; the other 62 scheduled CLI commands and the
   status/stale sequence succeeded. This earlier capture's first sample was
@@ -99,9 +146,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from immediate `stress_mix 1000` and `stress 1000` follow-ups recorded
   1000/1000 for each; the NACK was not reproduced and no hidden core retry was
   added.
-- The retained COM20 artifacts identify their exact firmware metadata. The
-  final example-only cleanup was revalidated with native/parser tests and S2/S3
-  builds; no post-cleanup hardware rerun is claimed.
+- Historical ESP32-S3 COM20 eight-hour soak on pioarduino `54.03.20`: strict
+  FAIL with 2,376 PASS, 29 HWCDC mid-line reply stalls, and 11 real MV3
+  `0xC1` control-byte NACKs. The old runner labeled those NACKs as review due
+  to validator order; they remain failures. NACKs clustered at the same
+  measurement phase, while mixed stress blocks otherwise passed. Arduino-ESP32
+  PR #12606 identifies and fixes the separate HWCDC TX lost-wakeup mechanism in
+  3.3.9.
+- The current `55.03.311` source passed ESP32-S2/S3 builds before the
+  post-commit COM20 rerun. No completed long-soak result is claimed for it.
 
 ## [1.0.0] - 2026-06-02
 

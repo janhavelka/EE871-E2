@@ -1,0 +1,18 @@
+{
+  "test": "serial-only dirty command discriminator",
+  "started_utc": "2026-07-31T07:03:45.771074Z",
+  "completed_utc": "2026-07-31T07:03:59.845055Z",
+  "port": "COM20",
+  "platform": "pioarduino 55.03.39",
+  "arduino_esp32": "3.3.9",
+  "round_trips": 10000,
+  "passes": 10000,
+  "failures": 0,
+  "elapsed_seconds": 14.078,
+  "response_byte_lengths": {
+    "201": 10000
+  },
+  "firmware_identity": "=== Version Info ===\r\n  Example firmware build: Jul 31 2026 09:01:46\n  MCU: ESP32-S3 rev 2, flash 4194304 bytes, PSRAM ready (2097152 bytes)\n  EE871 library version: 1.0.1\n  EE871 library full: 1.0.1 (2ee66cf, 2026-07-31 09:01:44, dirty)\n  EE871 library build: 2026-07-31 09:01:44\n  EE871 library commit: 2ee66cf (dirty)\n  Sensor firmware: use command 'fw'\r\n> \r\n",
+  "failure_records": [],
+  "claim_boundary": "Serial CLI framing only; dirty performs no E2 bus operation."
+}

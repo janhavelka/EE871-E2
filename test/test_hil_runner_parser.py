@@ -19,6 +19,26 @@ runner = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 sys.modules[SPEC.name] = runner
 SPEC.loader.exec_module(runner)
+SOAK_MODULE_PATH = ROOT / "tools" / "ee871_soak_runner.py"
+SOAK_SPEC = importlib.util.spec_from_file_location(
+    "ee871_soak_runner",
+    SOAK_MODULE_PATH,
+)
+assert SOAK_SPEC is not None
+soak = importlib.util.module_from_spec(SOAK_SPEC)
+assert SOAK_SPEC.loader is not None
+sys.modules[SOAK_SPEC.name] = soak
+SOAK_SPEC.loader.exec_module(soak)
+SERIAL_MODULE_PATH = ROOT / "tools" / "ee871_serial_discriminator.py"
+SERIAL_SPEC = importlib.util.spec_from_file_location(
+    "ee871_serial_discriminator",
+    SERIAL_MODULE_PATH,
+)
+assert SERIAL_SPEC is not None
+serial_discriminator = importlib.util.module_from_spec(SERIAL_SPEC)
+assert SERIAL_SPEC.loader is not None
+sys.modules[SERIAL_SPEC.name] = serial_discriminator
+SERIAL_SPEC.loader.exec_module(serial_discriminator)
 
 
 class HilRunnerParserTest(unittest.TestCase):
@@ -44,6 +64,24 @@ class HilRunnerParserTest(unittest.TestCase):
         self.assertEqual((False, False), ser.open_snapshot)
         self.assertEqual("COM20", ser.port)
         self.assertEqual(115200, ser.baudrate)
+
+    def test_parse_version_records_framework_stack(self) -> None:
+        text = """
+=== Version Info ===
+  Example firmware build: Jul 31 2026 12:00:00
+  MCU: ESP32-S3 rev 2, flash 4194304 bytes, PSRAM ready (2097152 bytes)
+  Arduino-ESP32: 3.3.11
+  ESP-IDF: v5.5.5
+  EE871 library version: 1.0.1
+  EE871 library full: 1.0.1 (0123456, 2026-07-31 12:00:00, clean)
+  EE871 library build: 2026-07-31 12:00:00
+  EE871 library commit: 0123456 (clean)
+> """
+        parsed = runner.parse_response("version", text)
+
+        self.assertEqual("3.3.11", parsed["arduino_esp32_version"])
+        self.assertEqual("v5.5.5", parsed["esp_idf_version"])
+        self.assertEqual("1.0.1", parsed["library_version"])
 
     def test_parse_selftest_counts_ansi_output(self) -> None:
         text = """
@@ -326,6 +364,53 @@ After:
         self.assertEqual(runner.RESULT_OPERATOR, result)
         self.assertIn("expected output token missing", reason)
 
+    def test_expected_all_tokens_and_exact_status_are_enforced(self) -> None:
+        spec = runner.CommandSpec(
+            "mode",
+            "unsupported mode read",
+            expected_all=("Status:", "Message:"),
+            expected_status="NOT_SUPPORTED",
+            validators=("status_expected",),
+        )
+        good_text = (
+            "Status: NOT_SUPPORTED (code=13, detail=0)\n"
+            "Message: Operating mode not supported\n"
+        )
+        parsed = runner.parse_response("mode", good_text)
+        result, reason = runner.classify_response(spec, good_text, False, parsed)
+        self.assertEqual(runner.RESULT_PASS, result)
+        self.assertEqual("", reason)
+
+        wrong_text = "Status: OUT_OF_RANGE (code=12, detail=85)\nMessage: invalid\n"
+        result, reason = runner.classify_response(
+            spec,
+            wrong_text,
+            False,
+            runner.parse_response("mode", wrong_text),
+        )
+        self.assertEqual(runner.RESULT_FAIL, result)
+        self.assertIn("expected NOT_SUPPORTED", reason)
+
+        missing_text = "Status: NOT_SUPPORTED (code=13, detail=0)\n"
+        result, reason = runner.classify_response(
+            spec,
+            missing_text,
+            False,
+            runner.parse_response("mode", missing_text),
+        )
+        self.assertEqual(runner.RESULT_OPERATOR, result)
+        self.assertIn("expected output token missing", reason)
+
+    def test_niche_plan_is_fixed_and_has_no_persistent_write(self) -> None:
+        args = runner.parse_args(["--dry-run", "--include-niche"])
+        plan = runner.build_plan(args)
+        niche = [spec for spec in plan if spec.group.startswith("niche-")]
+
+        self.assertGreaterEqual(len(niche), 35)
+        self.assertTrue(any(spec.command == "stress_mix 500" for spec in niche))
+        self.assertTrue(any(spec.command == "diag" for spec in niche))
+        self.assertFalse(any(spec.destructive for spec in niche))
+
     def test_persistent_read_completion_waits_for_value_line(self) -> None:
         self.assertFalse(runner.response_has_completion("interval", "  Status: OK\n"))
         self.assertFalse(runner.response_has_completion("offset", "  Status: OK\n"))
@@ -455,7 +540,7 @@ After:
                 if self.read_count < 5:
                     time.sleep(0.002)
                     return b""
-                return b"> "
+                return b"> \r\n"
 
         text, reason, timed_out = runner.read_until_ready(
             FakeSerial(),
@@ -476,7 +561,7 @@ After:
                     b"  Status: OK\n  CO2 offset: 0 ppm\n",
                     b"",
                     b"",
-                    b"> ",
+                    b"> \r\n",
                 ]
 
             @property
@@ -507,7 +592,7 @@ After:
     def test_prompt_without_value_line_times_out(self) -> None:
         class FakeSerial:
             def __init__(self) -> None:
-                self.chunks = [b"> "]
+                self.chunks = [b"> \r\n"]
 
             @property
             def in_waiting(self) -> int:
@@ -529,7 +614,196 @@ After:
 
         self.assertTrue(timed_out)
         self.assertEqual("timeout", reason)
-        self.assertEqual("> ", text)
+        self.assertEqual("> \r\n", text)
+
+    def test_prompt_framed_value_nack_completes_without_timeout(self) -> None:
+        class FakeSerial:
+            def __init__(self) -> None:
+                self.chunks = [
+                    b"  Status: NACK (code=8, detail=0)\r\n",
+                    b"  Message: Control byte NACK\r\n> \r\n",
+                ]
+
+            @property
+            def in_waiting(self) -> int:
+                return 0
+
+            def read(self, _size: int) -> bytes:
+                if self.chunks:
+                    return self.chunks.pop(0)
+                time.sleep(0.001)
+                return b""
+
+        text, reason, timed_out = runner.read_until_ready(
+            FakeSerial(),
+            timeout_s=0.1,
+            idle_s=0.001,
+            command="interval",
+            require_prompt=True,
+        )
+
+        self.assertFalse(timed_out)
+        self.assertEqual("prompt", reason)
+        self.assertIn("Status: NACK", text)
+
+    def test_prompt_waits_for_terminating_newline(self) -> None:
+        class FakeSerial:
+            def __init__(self) -> None:
+                self.chunks = [
+                    b"  Status: OK\n  CO2 offset: 0 ppm\n> ",
+                    b"",
+                    b"\r\n",
+                ]
+
+            @property
+            def in_waiting(self) -> int:
+                return 0
+
+            def read(self, _size: int) -> bytes:
+                if not self.chunks:
+                    return b""
+                chunk = self.chunks.pop(0)
+                if not chunk:
+                    time.sleep(0.002)
+                return chunk
+
+        text, reason, timed_out = runner.read_until_ready(
+            FakeSerial(),
+            timeout_s=0.2,
+            idle_s=0.001,
+            command="offset",
+            require_prompt=True,
+        )
+
+        self.assertFalse(timed_out)
+        self.assertEqual("prompt", reason)
+        self.assertTrue(text.endswith("> \r\n"))
+
+    def test_non_ok_status_is_failure_before_missing_value_review(self) -> None:
+        spec = runner.CommandSpec(
+            "co2fast",
+            "Read MV3.",
+            expected_any=("CO2 fast:",),
+            validators=("status_ok",),
+        )
+        text = (
+            "  Status: NACK (code=8, detail=0)\r\n"
+            "  Message: Control byte NACK\r\n"
+            "> \r\n"
+        )
+        parsed = runner.parse_response("co2fast", text)
+
+        result, reason = runner.classify_response(
+            spec,
+            text,
+            False,
+            parsed,
+        )
+
+        self.assertEqual(runner.RESULT_FAIL, result)
+        self.assertEqual("status is NACK", reason)
+
+    def test_soak_recognizes_only_scheduled_sample_control_nack(self) -> None:
+        spec = runner.CommandSpec(
+            "co2fast",
+            "Read MV3.",
+            group="soak-sample",
+            expected_any=("CO2 fast:",),
+            validators=("status_ok",),
+        )
+        row = {
+            "command": "co2fast",
+            "result": runner.RESULT_FAIL,
+            "raw": (
+                "Status: NACK (code=8, detail=0)\r\n"
+                "Message: Control byte NACK\r\n> \r\n"
+            ),
+            "parsed": {"status": {"name": "NACK", "code": 8, "detail": 0}},
+        }
+
+        self.assertTrue(soak.is_scheduled_control_nack(spec, row))
+
+        wrong_group = runner.CommandSpec(
+            "co2fast",
+            "Read MV3.",
+            group="soak-final",
+        )
+        self.assertFalse(soak.is_scheduled_control_nack(wrong_group, row))
+
+        wrong_failure = dict(row)
+        wrong_failure["raw"] = "Status: NACK (code=8, detail=0)\r\n> \r\n"
+        self.assertFalse(soak.is_scheduled_control_nack(spec, wrong_failure))
+
+    def test_soak_counts_scheduled_control_nack_recovery_separately(self) -> None:
+        counts = soak.aggregate_counts(
+            [
+                {"result": runner.RESULT_PASS},
+                {"result": soak.RESULT_SCHEDULED_CONTROL_NACK_RECOVERED},
+            ]
+        )
+
+        self.assertEqual(1, counts[runner.RESULT_PASS])
+        self.assertEqual(1, counts[soak.RESULT_SCHEDULED_CONTROL_NACK_RECOVERED])
+
+    def test_soak_compaction_keeps_only_abnormal_excerpt(self) -> None:
+        passing = soak.compact_row(
+            {
+                "command": "dirty",
+                "result": runner.RESULT_PASS,
+                "raw": "full reply",
+                "clean_excerpt": "full reply",
+            }
+        )
+        self.assertNotIn("raw", passing)
+        self.assertNotIn("clean_excerpt", passing)
+        self.assertNotIn("failure_excerpt", passing)
+
+        failing = soak.compact_row(
+            {
+                "command": "co2fast",
+                "result": runner.RESULT_FAIL,
+                "raw": "Status: NACK",
+                "clean_excerpt": "Status: NACK",
+            }
+        )
+        self.assertNotIn("raw", failing)
+        self.assertNotIn("clean_excerpt", failing)
+        self.assertEqual("Status: NACK", failing["failure_excerpt"])
+
+    def test_soak_default_scheduled_nack_retry_is_bounded(self) -> None:
+        args = soak.parse_args(["--port", "COM20"])
+
+        self.assertEqual(1500, args.scheduled_nack_retry_ms)
+
+    def test_serial_discriminator_checks_exact_requested_stack(self) -> None:
+        args = serial_discriminator.parse_args(
+            [
+                "--port",
+                "COM20",
+                "--run-dir",
+                "unused",
+                "--expected-arduino-version",
+                "3.3.11",
+                "--expected-idf-version",
+                "v5.5.5",
+                "--expected-library-version",
+                "1.0.1",
+            ]
+        )
+        state = {
+            "arduino_esp32_version": "3.3.11",
+            "esp_idf_version": "v5.5.5",
+            "library_version": "1.0.1",
+        }
+        self.assertEqual(
+            [],
+            serial_discriminator.expected_version_failures(state, args),
+        )
+        state["esp_idf_version"] = "v5.5.4"
+        self.assertIn(
+            "ESP-IDF 'v5.5.4' != expected 'v5.5.5'",
+            serial_discriminator.expected_version_failures(state, args),
+        )
 
 if __name__ == "__main__":
     unittest.main()

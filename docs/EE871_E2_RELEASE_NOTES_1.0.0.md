@@ -66,27 +66,18 @@ across every physical fault case.
   needs either a passing GitHub Actions matrix or local `idf.py` builds to prove
   pure IDF success.
 
-## Hardware Artifacts
+## Retained Hardware Artifacts
 
-- Safe default HIL transcript:
-  `hil_results/safe_default/ee871_20260601T185912Z/serial_transcript.txt`
-- Safe default HIL JSON/Markdown:
-  `hil_results/safe_default/ee871_20260601T185912Z/summary.json`,
+The generated PASS transcripts and JSON were condensed after this release note
+was written. Their command ledgers and parsed final states remain in:
+
+- Safe default HIL:
   `hil_results/safe_default/ee871_20260601T185912Z/summary.md`
-- Extended safe HIL transcript:
-  `hil_results/extended_safe/ee871_20260601T185921Z/serial_transcript.txt`
-- Extended safe HIL JSON/Markdown:
-  `hil_results/extended_safe/ee871_20260601T185921Z/summary.json`,
+- Extended safe HIL:
   `hil_results/extended_safe/ee871_20260601T185921Z/summary.md`
-- Manual resync transcript:
-  `hil_results/manual_resync/ee871_20260601T190024Z/serial_transcript.txt`
-- Manual resync JSON/Markdown:
-  `hil_results/manual_resync/ee871_20260601T190024Z/summary.json`,
+- Manual resync:
   `hil_results/manual_resync/ee871_20260601T190024Z/summary.md`
-- Persistent interval validation transcript:
-  `hil_results/persistent_config_validation/ee871_20260601T193500Z_interval_restore/serial_transcript.txt`
-- Persistent interval validation JSON/Markdown:
-  `hil_results/persistent_config_validation/ee871_20260601T193500Z_interval_restore/summary.json`,
+- Persistent interval validation:
   `hil_results/persistent_config_validation/ee871_20260601T193500Z_interval_restore/summary.md`
 
 ## Known Limitations

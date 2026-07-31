@@ -6,11 +6,11 @@ Claim boundary: these results cover the listed ESP32-S3/EE871 bench operations
 only. They do not prove CO2 accuracy, warm-up policy, long-soak behavior,
 calibration accuracy, ESP32-S2 hardware, or pure ESP-IDF hardware.
 
-The normalized CLI transcript captured during the operator phases is:
-`operator_physical_faults_20260730_serial_transcript.txt`. It preserves command
-responses and measured command durations with ANSI terminal color removed; it
-is not a byte-for-byte serial capture and does not invent wall-clock timestamps
-that were unavailable from the interactive console.
+This report retains the command outcomes and measured durations transcribed
+during the operator phases. The duplicate normalized console transcript was
+removed during the 2026-07-31 evidence condensation. The source session was
+not a byte-for-byte serial capture and had no independently available
+wall-clock timestamps.
 
 ## Setup
 
@@ -123,4 +123,5 @@ Result: PASS. Baseline configuration was restored.
 
 PASS for sensor-absent boot, hot unplug/OFFLINE/replug recovery, SDA stuck-low,
 SCL stuck-low/clock-timeout recovery, and a complete sensor/MCU power cycle with
-measurement-interval persistence on the current COM20 ESP32-S3 bench.
+measurement-interval persistence on the recorded `54.03.20` COM20 ESP32-S3
+bench.

@@ -94,8 +94,7 @@ PASS is limited to the selected automated serial EE871 CLI command groups. It do
 | 32 | `drv` | `extended` | `PASS` | `0.0` |  |
 | 33 | `dirty` | `extended` | `PASS` | `0.0` |  |
 
-## Artifacts
+## Retention
 
-- `serial_transcript.txt`
-- `summary.json`
-- `summary.md`
+This command ledger is the retained evidence. The duplicate generated raw
+transcript and JSON were removed during the 2026-07-31 evidence condensation.

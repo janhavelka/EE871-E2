@@ -6,17 +6,17 @@ PASS is limited to the selected automated serial EE871 CLI command groups. It do
 
 ## Run Metadata
 
-- timestamp_utc: `2026-07-30T11:06:55Z`
+- timestamp_utc: `2026-07-30T17:22:16Z`
 - port: `COM20`
 - baud: `115200`
 - dry_run: `False`
-- board: `ESP32-S3_4MB_2MB-QSPI-PSRAM`
-- target_name: `ex_bringup_s3-pioarduino-54.03.20-runtime-memory-report`
-- operator: `Codex-automated-HIL`
+- board: `ESP32-S3 rev 0.2, 4MB flash, 2MB QSPI PSRAM`
+- target_name: `ex_bringup_s3`
+- operator: `Codex`
 - expected_device_address: `0`
 - git_branch: `main`
-- git_commit: `1fbe7d814b06`
-- git_worktree: `dirty`
+- git_commit: `2ee66cf06de9`
+- git_worktree: `clean`
 
 ## Counts
 
@@ -29,12 +29,12 @@ PASS is limited to the selected automated serial EE871 CLI command groups. It do
 
 ```json
 {
-  "firmware_build": "Jul 30 2026 13:06:41",
+  "firmware_build": "Jul 30 2026 19:22:00",
   "library_version": "1.0.0",
-  "library_full": "1.0.0 (1fbe7d8, 2026-07-30 13:06:39, dirty)",
-  "library_build": "2026-07-30 13:06:39",
-  "library_commit": "1fbe7d8",
-  "library_git_status": "dirty",
+  "library_full": "1.0.0 (2ee66cf, 2026-07-30 19:21:58, clean)",
+  "library_build": "2026-07-30 19:21:58",
+  "library_commit": "2ee66cf",
+  "library_git_status": "clean",
   "last_selftest": {
     "pass": 27,
     "fail": 0,
@@ -61,9 +61,9 @@ PASS is limited to the selected automated serial EE871 CLI command groups. It do
 | # | Command | Group | Result | Elapsed s | Reason |
 | --- | --- | --- | --- | --- | --- |
 | 1 | `version` | `safe` | `PASS` | `0.0` |  |
-| 2 | `help` | `safe` | `PASS` | `0.016` |  |
-| 3 | `probe` | `safe` | `PASS` | `0.016` |  |
-| 4 | `read` | `safe` | `PASS` | `0.0` |  |
+| 2 | `help` | `safe` | `PASS` | `0.015` |  |
+| 3 | `probe` | `safe` | `PASS` | `0.015` |  |
+| 4 | `read` | `safe` | `PASS` | `0.016` |  |
 | 5 | `selftest` | `safe` | `PASS` | `0.5` |  |
 | 6 | `drv` | `safe` | `PASS` | `0.0` |  |
 | 7 | `dirty` | `safe` | `PASS` | `0.0` |  |
