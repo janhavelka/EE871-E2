@@ -1488,7 +1488,7 @@ void processCommand(const String& cmd) {
     uint8_t ctrlByte = (uint8_t)strtol(hexStr.c_str(), nullptr, 16);
     e2diag::testTransaction(deviceCfg, ctrlByte);
   } else if (trimmed == "libtest") {
-    e2diag::testLibraryCommands(deviceCfg);
+    e2diag::testLibraryCommands(device);
   } else if (trimmed == "selftest") {
     runSelfTest();
   } else if (trimmed == "stress_mix") {

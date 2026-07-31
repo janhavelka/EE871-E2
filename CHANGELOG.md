@@ -52,6 +52,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Require both an ACK and valid PEC before the example diagnostic scanner
   reports an address as an E2 device; malformed responses remain visible as
   invalid diagnostics instead of false device discoveries.
+- Route the example `libtest` command through the production driver's bounded,
+  clock-stretch-aware, PEC-validating control-byte API instead of maintaining a
+  duplicate raw transaction implementation.
 - Require a complete CLI prompt and the command-specific value line in the
   Python HIL runner, settle native USB briefly between commands, and stop the
   plan on a framing timeout instead of shifting later responses onto the wrong
