@@ -121,6 +121,14 @@ def git_value(*args: str, empty_value: str = "unknown") -> str:
     return result.stdout.strip() or empty_value
 
 
+def worktree_state() -> str:
+    """Three-state worktree summary: clean, dirty, or unknown when git fails."""
+    status = git_value("status", "--porcelain", empty_value="")
+    if status == "unknown":
+        return "unknown"
+    return "clean" if not status else "dirty"
+
+
 def parse_status(text: str) -> dict[str, Any]:
     clean = strip_ansi(text)
     statuses: list[dict[str, Any]] = []

@@ -253,8 +253,11 @@ public:
   Status readU16(uint8_t mainCommandLow, uint8_t mainCommandHigh, uint16_t& value);
 
   /// Set internal custom pointer using command 0x50.
-  /// @param address Custom-memory address; only the low byte is sent for EE871.
-  /// @return Status::Ok() after the pointer write and configured write delay.
+  ///
+  /// This is a pointer update, not a flash write; no write delay is applied.
+  /// @param address Custom-memory address; the high byte is sent but ignored by
+  /// the EE871 (its custom memory is 256 bytes).
+  /// @return Status::Ok() after the pointer write is acknowledged.
   Status setCustomPointer(uint16_t address);
 
   /// Read one custom-memory byte.

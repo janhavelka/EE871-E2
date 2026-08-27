@@ -47,6 +47,10 @@ pio run -e ex_bringup_s3
 pio run -e ex_bringup_s2
 ```
 
+On Windows, run PlatformIO through the portable wrapper `scripts\pio.cmd`
+(for example `.\scripts\pio.cmd test -e native`) instead of a globally
+installed `pio`.
+
 ### What We Accept
 - Bug fixes
 - Documentation improvements

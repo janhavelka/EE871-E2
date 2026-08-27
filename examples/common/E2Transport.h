@@ -29,6 +29,9 @@ inline void initE2(E2Pins& pins, int sclPin, int sdaPin) {
   pins.scl = sclPin;
   pins.sda = sdaPin;
 
+  // arduino-esp32 specific: its OUTPUT_OPEN_DRAIN keeps the input buffer
+  // enabled so digitalRead() returns the real line level. Other Arduino cores
+  // may need explicit input+output configuration for the readback to work.
   pinMode(pins.scl, OUTPUT_OPEN_DRAIN);
   pinMode(pins.sda, OUTPUT_OPEN_DRAIN);
 

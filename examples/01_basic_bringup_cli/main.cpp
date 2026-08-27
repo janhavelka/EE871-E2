@@ -206,6 +206,26 @@ bool parseU8Token(const String& token, uint8_t& out) {
   return true;
 }
 
+// Strict bounded signed parse for persistent-write arguments; String::toInt()
+// silently yields 0 for garbage, which must never reach a sensor write.
+// Bounds here are only what the target type can hold: semantic range policy
+// belongs to the driver, which must still see in-type out-of-range values so
+// it can report OUT_OF_RANGE itself.
+bool parseLongToken(const String& tokenIn, long minVal, long maxVal, long& out) {
+  String token = tokenIn;
+  token.trim();
+  if (token.isEmpty()) {
+    return false;
+  }
+  char* end = nullptr;
+  const long value = strtol(token.c_str(), &end, 0);
+  if (end == token.c_str() || *end != '\0' || value < minVal || value > maxVal) {
+    return false;
+  }
+  out = value;
+  return true;
+}
+
 bool parseU16Token(const String& token, uint16_t& out) {
   if (token.isEmpty()) {
     return false;
@@ -1328,8 +1348,12 @@ void processCommand(const String& cmd) {
       Serial.printf("  Bus address: %u\n", addr);
     }
   } else if (trimmed.startsWith("addr ")) {
-    int val = trimmed.substring(5).toInt();
-    LOGI("Writing bus address %d (power cycle required)...", val);
+    long val = 0;
+    if (!parseLongToken(trimmed.substring(5), 0, 255, val)) {
+      LOGW("addr must be a number 0..255");
+      return;
+    }
+    LOGI("Writing bus address %ld (power cycle required)...", val);
     auto st = device.writeBusAddress(static_cast<uint8_t>(val));
     printStatus(st);
   } else if (trimmed == "interval") {
@@ -1340,8 +1364,12 @@ void processCommand(const String& cmd) {
       Serial.printf("  Interval: %u deciseconds (%.1f s)\n", interval, interval / 10.0f);
     }
   } else if (trimmed.startsWith("interval ")) {
-    int val = trimmed.substring(9).toInt();
-    LOGI("Writing interval %d deciseconds...", val);
+    long val = 0;
+    if (!parseLongToken(trimmed.substring(9), 0, 65535, val)) {
+      LOGW("interval must be a number 0..65535 deciseconds");
+      return;
+    }
+    LOGI("Writing interval %ld deciseconds...", val);
     auto st = device.writeMeasurementInterval(static_cast<uint16_t>(val));
     printStatus(st);
   } else if (trimmed == "factor") {
@@ -1352,8 +1380,8 @@ void processCommand(const String& cmd) {
       Serial.printf("  CO2 interval factor: %d\n", static_cast<int>(factor));
     }
   } else if (trimmed.startsWith("factor ")) {
-    const int val = trimmed.substring(7).toInt();
-    if (val < -128 || val > 127) {
+    long val = 0;
+    if (!parseLongToken(trimmed.substring(7), -128, 127, val)) {
       LOGW("factor must be -128..127");
       return;
     }
@@ -1367,7 +1395,11 @@ void processCommand(const String& cmd) {
       Serial.printf("  CO2 filter: %u\n", filter);
     }
   } else if (trimmed.startsWith("filter ")) {
-    int val = trimmed.substring(7).toInt();
+    long val = 0;
+    if (!parseLongToken(trimmed.substring(7), 0, 255, val)) {
+      LOGW("filter must be 0..255");
+      return;
+    }
     auto st = device.writeCo2Filter(static_cast<uint8_t>(val));
     printStatus(st);
   } else if (trimmed == "mode") {
@@ -1380,7 +1412,11 @@ void processCommand(const String& cmd) {
       Serial.printf("    Priority: %s\n", (mode & 0x02) ? "E2 comm" : "measurement");
     }
   } else if (trimmed.startsWith("mode ")) {
-    int val = trimmed.substring(5).toInt();
+    long val = 0;
+    if (!parseLongToken(trimmed.substring(5), 0, 255, val)) {
+      LOGW("mode must be a number 0..255");
+      return;
+    }
     auto st = device.writeOperatingMode(static_cast<uint8_t>(val));
     printStatus(st);
   
@@ -1393,8 +1429,12 @@ void processCommand(const String& cmd) {
       Serial.printf("  CO2 offset: %d ppm\n", offset);
     }
   } else if (trimmed.startsWith("offset ")) {
-    int val = trimmed.substring(7).toInt();
-    LOGI("Writing CO2 offset %d...", val);
+    long val = 0;
+    if (!parseLongToken(trimmed.substring(7), -32768, 32767, val)) {
+      LOGW("offset must be -32768..32767");
+      return;
+    }
+    LOGI("Writing CO2 offset %ld...", val);
     auto st = device.writeCo2Offset(static_cast<int16_t>(val));
     printStatus(st);
   } else if (trimmed == "gain") {
@@ -1405,8 +1445,8 @@ void processCommand(const String& cmd) {
       Serial.printf("  CO2 gain: %u (factor=%.4f)\n", gain, gain / 32768.0f);
     }
   } else if (trimmed.startsWith("gain ")) {
-    int val = trimmed.substring(5).toInt();
-    if (val < 0 || val > 65535) {
+    long val = 0;
+    if (!parseLongToken(trimmed.substring(5), 0, 65535, val)) {
       LOGW("gain must be 0..65535");
       return;
     }
@@ -1497,12 +1537,11 @@ void processCommand(const String& cmd) {
     int count = trimmed.substring(11).toInt();
     if (count <= 0) count = 100;
     runStressMix(count);
-  } else if (trimmed.startsWith("stress")) {
-    int count = 100;
-    if (trimmed.length() > 6) {
-      count = trimmed.substring(6).toInt();
-      if (count <= 0) count = 100;
-    }
+  } else if (trimmed == "stress") {
+    runStress(100);
+  } else if (trimmed.startsWith("stress ")) {
+    int count = trimmed.substring(7).toInt();
+    if (count <= 0) count = 100;
     runStress(count);
 
   } else {

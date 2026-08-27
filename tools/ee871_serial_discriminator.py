@@ -196,11 +196,7 @@ def main(argv: list[str] | None = None) -> int:
             "operator": args.operator,
             "git_branch": hil.git_value("branch", "--show-current"),
             "git_commit": hil.git_value("rev-parse", "--short=12", "HEAD"),
-            "git_worktree": (
-                "clean"
-                if not hil.git_value("status", "--porcelain", empty_value="")
-                else "dirty"
-            ),
+            "git_worktree": hil.worktree_state(),
         },
         "final_verdict": hil.VERDICT_PASS if complete else hil.VERDICT_FAIL,
         "counts": {"pass": pass_count, "fail": 0 if complete else 1},

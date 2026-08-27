@@ -15,8 +15,8 @@ feature/capability inspection, configuration/calibration helpers, register/raw
 access, diagnostics, bus reset, trace, self-test, stress, and mixed stress
 workflows.
 
-- Default SCL: GPIO6
-- Default SDA: GPIO7
+- Default SCL: GPIO7
+- Default SDA: GPIO6
 - Default E2 address: `0`
 - Pull-ups: external pull-ups are expected; internal weak pull-ups are disabled
   by default in `ee871_idf::init()`.

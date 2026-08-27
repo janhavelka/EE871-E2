@@ -23,7 +23,7 @@ bench setup. See `CHANGELOG.md` for release notes.
 
 Recorded evidence:
 
-- Native tests: 34 passing; consolidated HIL-runner/parser tests: 40 passing.
+- Native tests: 35 passing; consolidated HIL-runner/parser tests: 40 passing.
 - The current example/HIL platform is exact-pinned to pioarduino
   `platform-espressif32` `55.03.311`, Arduino-ESP32 `3.3.11`, and ESP-IDF
   `5.5.5`. The earlier TunnelMonitor-node parity work on pioarduino
@@ -410,7 +410,6 @@ why the sensor NACKed.
 - `docs/EE871_E2_HIL_RUNNER.md` - automatic serial HIL runner usage and verdict rules
 - `docs/IDF_PORT.md` - ESP-IDF portability and validation guidance
 - `docs/IDF_PORT_IMPLEMENTATION.md` - ESP-IDF implementation notes
-- `docs/EE871_E2_RELEASE_NOTES_1.0.0.md` - release notes and tagging checklist
 
 ## License
 

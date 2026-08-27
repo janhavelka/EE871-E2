@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added a native test asserting low/high byte order for every adjacent
+  custom-memory register pair (firmware version, global interval, CO2 offset,
+  CO2 gain), which the zero-valued fake defaults previously left unverified.
+
+### Changed
+
+- Adjacent custom-memory register pairs (firmware version, global interval,
+  CO2 offset, CO2 gain, and the interval write verify) are now read with one
+  pointer set plus auto-increment reads, matching the AN1611-1 procedure and
+  halving the bus traffic for those operations.
+
+### Fixed
+
+- Fixed the ESP-IDF example GPIO transport: `GPIO_MODE_OUTPUT_OD` disables the
+  pad input buffer so `gpio_get_level()` always read 0, breaking clock-stretch
+  detection and bus-idle checks; now `GPIO_MODE_INPUT_OUTPUT_OD`.
+- Fixed the ESP-IDF example pin defaults, which had SCL/SDA swapped relative
+  to the HIL-validated Arduino reference wiring (E2 DATA = GPIO6,
+  E2 CLOCK = GPIO7).
+- Both example CLIs now reject unparseable arguments to persistent-write
+  commands (`addr`, `interval`, `filter`, `mode`, `offset`, `gain`, `factor`)
+  instead of silently writing 0 to the sensor when parsing failed. Parse
+  bounds are the target type's range only; semantic range policy stays in the
+  driver, so in-type out-of-range values still reach it and return
+  `OUT_OF_RANGE` as before.
+- The Arduino CLI `stress` command no longer accepts arbitrary suffixes
+  (`stressXYZ` previously ran `stress 100`).
+- HIL tooling: soak runner and serial discriminator now record the worktree as
+  `unknown` (not `dirty`) when git itself fails; the soak runner's
+  `stress_mix` timeout now carries the same margin as the HIL runner (the old
+  60 s budget was under 2x the observed runtime); soak metadata uses the same
+  12-character commit hashes as the other tools.
+- Corrected API documentation: `setCustomPointer()` performs no flash write
+  delay (0x50 is a pointer update, not a flash write), `Config::writeDelayMs`
+  applies to 0x10 custom writes only, and `Err::IN_PROGRESS` is documented as
+  reserved (nothing in the current driver returns it).
+- The zero-offline-threshold native test now verifies the normalized threshold
+  through a successful fake-transport `begin()` instead of only checking that
+  validation passed.
+
+### Removed
+
+- Removed the superseded AI prompt series and dated one-shot audit/report
+  snapshots from `docs/`; release history stays in `CHANGELOG.md` and bench
+  evidence in `hil_results/README.md` plus
+  `docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md`. All removed files remain
+  recoverable from git history.
+
 ## [1.0.1] - 2026-07-31
 
 ### Added

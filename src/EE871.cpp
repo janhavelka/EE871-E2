@@ -425,11 +425,7 @@ Status EE871::recover() {
 
   // Probe device (tracked - updates health state)
   uint16_t group = 0;
-  Status st = readGroup(group);
-  if (st.ok()) {
-    return Status::Ok();
-  }
-  return st;
+  return readGroup(group);
 }
 
 Status EE871::resyncPersistentConfig() {
@@ -642,20 +638,14 @@ Status EE871::writeMeasurementInterval(uint16_t intervalDeciSeconds) {
 
   sleepMs(_config, _config.intervalWriteDelayMs);
 
-  uint8_t verifyLow = 0;
-  uint8_t verifyHigh = 0;
-  st = customRead(cmd::CUSTOM_INTERVAL_L, verifyLow);
+  uint8_t verifyBuf[2] = {0};
+  st = customRead(cmd::CUSTOM_INTERVAL_L, verifyBuf, 2);
   if (!st.ok()) {
     _markPersistentConfigDirty(st);
     return st;
   }
-  st = customRead(cmd::CUSTOM_INTERVAL_H, verifyHigh);
-  if (!st.ok()) {
-    _markPersistentConfigDirty(st);
-    return st;
-  }
-  const uint16_t verify = static_cast<uint16_t>(verifyLow) |
-                          (static_cast<uint16_t>(verifyHigh) << 8);
+  const uint16_t verify = static_cast<uint16_t>(verifyBuf[0]) |
+                          (static_cast<uint16_t>(verifyBuf[1]) << 8);
   if (verify != intervalDeciSeconds) {
     Status err = Status::Error(Err::E2_ERROR, "Interval verify failed", verify);
     _markPersistentConfigDirty(err);
@@ -717,11 +707,14 @@ Status EE871::readCo2Average(uint16_t& ppm) {
 // ============================================================================
 
 Status EE871::readFirmwareVersion(uint8_t& main, uint8_t& sub) {
-  Status st = customRead(cmd::CUSTOM_FW_VERSION_MAIN, main);
+  uint8_t buf[2] = {0};
+  Status st = customRead(cmd::CUSTOM_FW_VERSION_MAIN, buf, 2);
   if (!st.ok()) {
     return st;
   }
-  return customRead(cmd::CUSTOM_FW_VERSION_SUB, sub);
+  main = buf[0];
+  sub = buf[1];
+  return Status::Ok();
 }
 
 Status EE871::readE2SpecVersion(uint8_t& version) {
@@ -825,17 +818,12 @@ Status EE871::writeBusAddress(uint8_t address) {
 
 Status EE871::readMeasurementInterval(uint16_t& intervalDeciSeconds) {
   // Interval can always be read, guard only applies to write
-  uint8_t low = 0;
-  uint8_t high = 0;
-  Status st = customRead(cmd::CUSTOM_INTERVAL_L, low);
+  uint8_t buf[2] = {0};
+  Status st = customRead(cmd::CUSTOM_INTERVAL_L, buf, 2);
   if (!st.ok()) {
     return st;
   }
-  st = customRead(cmd::CUSTOM_INTERVAL_H, high);
-  if (!st.ok()) {
-    return st;
-  }
-  intervalDeciSeconds = static_cast<uint16_t>(low) | (static_cast<uint16_t>(high) << 8);
+  intervalDeciSeconds = static_cast<uint16_t>(buf[0]) | (static_cast<uint16_t>(buf[1]) << 8);
   return Status::Ok();
 }
 
@@ -951,17 +939,13 @@ Status EE871::startAutoAdjust() {
 // ============================================================================
 
 Status EE871::readCo2Offset(int16_t& offset) {
-  uint8_t low = 0;
-  uint8_t high = 0;
-  Status st = customRead(cmd::CUSTOM_CO2_OFFSET_L, low);
+  uint8_t buf[2] = {0};
+  Status st = customRead(cmd::CUSTOM_CO2_OFFSET_L, buf, 2);
   if (!st.ok()) {
     return st;
   }
-  st = customRead(cmd::CUSTOM_CO2_OFFSET_H, high);
-  if (!st.ok()) {
-    return st;
-  }
-  offset = static_cast<int16_t>(static_cast<uint16_t>(low) | (static_cast<uint16_t>(high) << 8));
+  offset = static_cast<int16_t>(static_cast<uint16_t>(buf[0]) |
+                                (static_cast<uint16_t>(buf[1]) << 8));
   return Status::Ok();
 }
 
@@ -985,17 +969,12 @@ Status EE871::writeCo2Offset(int16_t offset) {
 }
 
 Status EE871::readCo2Gain(uint16_t& gain) {
-  uint8_t low = 0;
-  uint8_t high = 0;
-  Status st = customRead(cmd::CUSTOM_CO2_GAIN_L, low);
+  uint8_t buf[2] = {0};
+  Status st = customRead(cmd::CUSTOM_CO2_GAIN_L, buf, 2);
   if (!st.ok()) {
     return st;
   }
-  st = customRead(cmd::CUSTOM_CO2_GAIN_H, high);
-  if (!st.ok()) {
-    return st;
-  }
-  gain = static_cast<uint16_t>(low) | (static_cast<uint16_t>(high) << 8);
+  gain = static_cast<uint16_t>(buf[0]) | (static_cast<uint16_t>(buf[1]) << 8);
   return Status::Ok();
 }
 

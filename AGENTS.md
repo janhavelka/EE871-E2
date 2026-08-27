@@ -13,7 +13,7 @@ wrapper cannot find it, stop and report the missing installation.
 ## Role and Target
 You are a professional embedded software engineer building a production-grade EE871 CO2 sensor library using the E2 bus.
 
-- Target: ESP32-S2 / ESP32-S3, Arduino framework, PlatformIO.
+- Target: ESP32-S2 / ESP32-S3 with Arduino (PlatformIO) or native ESP-IDF; the core is framework-neutral C++.
 - Goals: deterministic behavior, long-term stability, clean API contracts, portability, no surprises in the field.
 - These rules are binding.
 
@@ -33,7 +33,14 @@ examples/
   01_*/
   common/               - Example-only helpers (Log.h, BoardConfig.h, E2Transport.h,
                           E2Diagnostics.h, BuildConfig.h)
+  idf/                  - Native ESP-IDF example project and E2 GPIO transport
+test/                   - Native unit tests plus fake transport support
+tools/                  - HIL runner, soak runner, contract-check scripts
+scripts/                - Version generator, portable PlatformIO wrapper
+docs/                   - Maintained docs, protocol reference, vendor PDFs/extracts
 platformio.ini
+CMakeLists.txt
+idf_component.yml
 library.json
 README.md
 CHANGELOG.md
@@ -54,7 +61,7 @@ Rules:
 - Deterministic: no unbounded loops or waits; all timeouts use explicit deadlines.
 - Lifecycle: `Status begin(const Config&)`, `void tick(uint32_t nowMs)`, `void end()`.
 - E2 bus operations are synchronous but bounded by documented timeouts; `tick()` is for periodic polling or scheduling.
-- No `delay()` in library code. Only `delay_us()` from the E2 HAL for bit timing.
+- No `delay()` in library code. Only `delayUs()` from the E2 HAL for bit timing.
 - No heap allocation in steady state (no `String`, `std::vector`, `new` in normal ops).
 - No logging in library code; examples may log.
 - No macros for constants; use `static constexpr`. Macros only for conditional compile or logging helpers.
@@ -103,9 +110,9 @@ Rules:
 - EE871-E2 is a GPIO-style E2 bus driver, not a hardware I2C driver.
 - The library MUST NOT own the bus. It never touches `Wire` or I2C drivers directly.
 - `Config` MUST accept a transport adapter for the E2 HAL:
-  - `set_scl(level)` / `set_sda(level)` where level=1 means release line (open-drain high), level=0 means pull low.
-  - `read_scl()` / `read_sda()` for clock stretching and data sampling.
-  - `delay_us(t)` for bit timing.
+  - `setScl(level)` / `setSda(level)` where level=1 means release line (open-drain high), level=0 means pull low.
+  - `readScl()` / `readSda()` for clock stretching and data sampling.
+  - `delayUs(t)` for bit timing.
 - E2 line control, delays, and timebase MUST remain injected through callbacks or public inputs.
 - Transport errors MUST map to `Status` (no leaking platform-specific error codes).
 - The library MUST NOT configure bus timeouts, pull-ups, pins, GPIO drivers,
@@ -124,7 +131,7 @@ Rules:
 - STOP: DATA low->high while CLK high.
 - Data stable while CLK high; transitions only while CLK low (except START/STOP).
 - Clock stretching: slave may hold CLK low up to 25 ms after any bit; total per byte <= 35 ms.
-  - When releasing CLK high, read back `read_scl()` and enforce timeouts.
+  - When releasing CLK high, read back `readScl()` and enforce timeouts.
 
 ---
 
@@ -292,15 +299,15 @@ State transitions:
 All E2 bus operations go through layered wrappers:
 
 ```
-Public API (readStatus, readMeasurement, customRead, customWrite)
+Public API (readStatus, readCo2Fast, readCo2Average, customRead, customWrite)
     v
 Protocol helpers (readControlByte, customRead/write)
     v
-TRACKED wrappers (_e2TransferTracked, _e2WriteTracked)
+TRACKED wrappers (_readControlByteTracked, _writeCommandTracked)
     v  <- _updateHealth() called here ONLY
-RAW wrappers (_e2TransferRaw, _e2WriteRaw)
+RAW wrappers (_readControlByteRaw, _writeCommandRaw)
     v
-Transport callbacks (Config::set_scl/set_sda/read_scl/read_sda/delay_us)
+Transport callbacks (Config::setScl/setSda/readScl/readSda/delayUs)
 ```
 
 **Rules:**

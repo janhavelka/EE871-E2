@@ -67,7 +67,7 @@ struct Config {
   uint32_t bitTimeoutUs = 25000;  ///< Clock-stretch timeout per bit, must be > 0.
   uint32_t byteTimeoutUs = 35000; ///< Clock-stretch timeout per byte, must be >= bitTimeoutUs.
 
-  uint32_t writeDelayMs = 150;    ///< Flash write delay for 0x10/0x50, max 5000 ms.
+  uint32_t writeDelayMs = 150;    ///< Flash write delay after a 0x10 custom write, max 5000 ms.
   uint32_t intervalWriteDelayMs = 300; ///< Flash delay for 0xC6/0xC7 pair, max 5000 ms.
 
   // === Health Tracking ===

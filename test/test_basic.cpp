@@ -142,20 +142,14 @@ void test_begin_rejects_clock_timing_below_spec() {
 }
 
 void test_begin_normalizes_zero_offline_threshold() {
+  FakeE2Transport fake;
   EE871::EE871 dev;
-  Config cfg;
-  cfg.setScl = [](bool, void*) {};
-  cfg.setSda = [](bool, void*) {};
-  cfg.readScl = [](void*) { return true; };
-  cfg.readSda = [](void*) { return true; };
-  cfg.delayUs = [](uint32_t, void*) {};
+  Config cfg = fake.makeConfig();
   cfg.offlineThreshold = 0;
   Status st = dev.begin(cfg);
-  TEST_ASSERT_NOT_EQUAL(static_cast<uint8_t>(Err::INVALID_CONFIG),
-                        static_cast<uint8_t>(st.code));
-  TEST_ASSERT_FALSE(dev.isInitialized());
-  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::UNINIT),
-                          static_cast<uint8_t>(dev.driverState()));
+  TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_TRUE(dev.isInitialized());
+  TEST_ASSERT_EQUAL_UINT8(1, dev.offlineThreshold());
 }
 
 void test_default_health_aliases() {
@@ -265,6 +259,38 @@ void test_fake_transport_begin_succeeds() {
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::READY),
                           static_cast<uint8_t>(dev.state()));
   TEST_ASSERT_TRUE(dev.hasGlobalInterval());
+}
+
+// Adjacent register pairs are read with one pointer set plus auto-increment
+// reads, so a swapped byte order would be silent on zero-valued defaults.
+void test_adjacent_register_pairs_assemble_in_low_high_order() {
+  FakeE2Transport fake;
+  fake.setMemory(cmd::CUSTOM_FW_VERSION_MAIN, 0x0A);
+  fake.setMemory(cmd::CUSTOM_FW_VERSION_SUB, 0x0B);
+  fake.setMemory(cmd::CUSTOM_CO2_OFFSET_L, 0x34);
+  fake.setMemory(cmd::CUSTOM_CO2_OFFSET_H, 0x12);
+  fake.setMemory(cmd::CUSTOM_CO2_GAIN_L, 0x78);
+  fake.setMemory(cmd::CUSTOM_CO2_GAIN_H, 0x56);
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+
+  uint8_t main = 0;
+  uint8_t sub = 0;
+  TEST_ASSERT_TRUE(dev.readFirmwareVersion(main, sub).ok());
+  TEST_ASSERT_EQUAL_UINT8(0x0A, main);
+  TEST_ASSERT_EQUAL_UINT8(0x0B, sub);
+
+  int16_t offset = 0;
+  TEST_ASSERT_TRUE(dev.readCo2Offset(offset).ok());
+  TEST_ASSERT_EQUAL_INT16(0x1234, offset);
+
+  uint16_t gain = 0;
+  TEST_ASSERT_TRUE(dev.readCo2Gain(gain).ok());
+  TEST_ASSERT_EQUAL_UINT16(0x5678, gain);
+
+  uint16_t interval = 0;
+  TEST_ASSERT_TRUE(dev.readMeasurementInterval(interval).ok());
+  TEST_ASSERT_EQUAL_UINT16(cmd::INTERVAL_MIN_DECISEC, interval);
 }
 
 void test_feature_cache_failure_disables_all_optional_capabilities() {
@@ -691,6 +717,7 @@ int main() {
   RUN_TEST(test_device_absent_probe_has_no_health_side_effect_tracked_read_fails);
   RUN_TEST(test_custom_write_verify_mismatch_returns_precise_error);
   RUN_TEST(test_offline_threshold_and_recover_after_replug);
+  RUN_TEST(test_adjacent_register_pairs_assemble_in_low_high_order);
   RUN_TEST(test_interval_low_byte_write_failure_does_not_dirty);
   RUN_TEST(test_interval_high_byte_write_failure_sets_dirty);
   RUN_TEST(test_interval_verify_failure_sets_dirty_and_unrelated_read_does_not_clear);

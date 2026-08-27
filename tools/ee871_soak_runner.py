@@ -220,7 +220,9 @@ def stress_spec(count: int, group: str) -> hil.CommandSpec:
         group=group,
         expected_any=("=== stress_mix summary ===",),
         validators=("stress",),
-        timeout_s=max(60.0, count * 0.05),
+        # Match the HIL runner's margin for the same command (420 s for 500 ops);
+        # 0.05 s/op left under 2x headroom at the observed ~13-15 ops/s.
+        timeout_s=max(120.0, count * 0.84),
     )
 
 
@@ -536,12 +538,8 @@ def main(argv: list[str] | None = None) -> int:
         "target_name": args.target_name,
         "operator": args.operator,
         "git_branch": hil.git_value("branch", "--show-current"),
-        "git_commit": hil.git_value("rev-parse", "--short", "HEAD"),
-        "git_worktree": (
-            "clean"
-            if not hil.git_value("status", "--porcelain", empty_value="")
-            else "dirty"
-        ),
+        "git_commit": hil.git_value("rev-parse", "--short=12", "HEAD"),
+        "git_worktree": hil.worktree_state(),
         "claim_boundary": (
             "Transport/health/persistent-state soak only; no CO2 accuracy or "
             "calibration claim. A fully framed control-byte NACK on a scheduled "

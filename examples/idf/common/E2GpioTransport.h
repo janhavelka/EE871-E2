@@ -29,7 +29,10 @@ inline esp_err_t init(E2GpioBus& bus, gpio_num_t scl, gpio_num_t sda,
   gpio_config_t cfg = {};
   cfg.pin_bit_mask = (1ULL << static_cast<uint32_t>(scl)) |
                      (1ULL << static_cast<uint32_t>(sda));
-  cfg.mode = GPIO_MODE_OUTPUT_OD;
+  // INPUT_OUTPUT_OD keeps the input buffer enabled; with GPIO_MODE_OUTPUT_OD
+  // gpio_get_level() always returns 0, which breaks clock-stretch detection
+  // and bus-idle checks.
+  cfg.mode = GPIO_MODE_INPUT_OUTPUT_OD;
   cfg.pull_up_en = enableInternalPullups ? GPIO_PULLUP_ENABLE : GPIO_PULLUP_DISABLE;
   cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
   cfg.intr_type = GPIO_INTR_DISABLE;

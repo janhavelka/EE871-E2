@@ -38,8 +38,10 @@ static constexpr uint16_t CUSTOM_MEM_SIZE = 0x100;
 static constexpr size_t REG_DUMP_CHUNK_LEN = 16;
 static constexpr uint32_t STRESS_PROGRESS_UPDATES = 10U;
 
-static constexpr gpio_num_t E2_SCL = GPIO_NUM_6;
-static constexpr gpio_num_t E2_SDA = GPIO_NUM_7;
+// Matches the HIL-validated reference wiring in examples/common/BoardConfig.h
+// (E2 DATA = GPIO6, E2 CLOCK = GPIO7).
+static constexpr gpio_num_t E2_SCL = GPIO_NUM_7;
+static constexpr gpio_num_t E2_SDA = GPIO_NUM_6;
 static constexpr uint8_t EE871_ADDRESS = EE871::cmd::DEFAULT_DEVICE_ADDRESS;
 static constexpr uint16_t E2_CLOCK_LOW_US = 100;
 static constexpr uint16_t E2_CLOCK_HIGH_US = 100;
@@ -2185,8 +2187,11 @@ void processCommand(const char* input) {
     long val = 0;
     Tokens tok;
     splitTokens(trimmed, tok);
-    if (tok.argc < 2 || !parseIntToken(tok.argv[1], val)) {
-      val = 0;
+    // Reject only unparseable input; the driver owns the 0..7 range policy and
+    // must still see an in-type out-of-range value to report OUT_OF_RANGE.
+    if (tok.argc < 2 || !parseIntToken(tok.argv[1], val) || val < 0L || val > 255L) {
+      logWarn("addr must be a number 0..255");
+      return;
     }
     logInfo("Writing bus address %ld (power cycle required)...", val);
     auto st = device.writeBusAddress(static_cast<uint8_t>(val));
@@ -2204,8 +2209,9 @@ void processCommand(const char* input) {
     long val = 0;
     Tokens tok;
     splitTokens(trimmed, tok);
-    if (tok.argc < 2 || !parseIntToken(tok.argv[1], val)) {
-      val = 0;
+    if (tok.argc < 2 || !parseIntToken(tok.argv[1], val) || val < 0L || val > 65535L) {
+      logWarn("interval must be a number 0..65535 deciseconds");
+      return;
     }
     logInfo("Writing interval %ld deciseconds...", val);
     auto st = device.writeMeasurementInterval(static_cast<uint16_t>(val));
@@ -2238,8 +2244,9 @@ void processCommand(const char* input) {
     long val = 0;
     Tokens tok;
     splitTokens(trimmed, tok);
-    if (tok.argc < 2 || !parseIntToken(tok.argv[1], val)) {
-      val = 0;
+    if (tok.argc < 2 || !parseIntToken(tok.argv[1], val) || val < 0L || val > 255L) {
+      logWarn("filter must be 0..255");
+      return;
     }
     auto st = device.writeCo2Filter(static_cast<uint8_t>(val));
     printStatus(st);
@@ -2256,8 +2263,9 @@ void processCommand(const char* input) {
     long val = 0;
     Tokens tok;
     splitTokens(trimmed, tok);
-    if (tok.argc < 2 || !parseIntToken(tok.argv[1], val)) {
-      val = 0;
+    if (tok.argc < 2 || !parseIntToken(tok.argv[1], val) || val < 0L || val > 255L) {
+      logWarn("mode must be a number 0..255");
+      return;
     }
     auto st = device.writeOperatingMode(static_cast<uint8_t>(val));
     printStatus(st);
@@ -2272,8 +2280,9 @@ void processCommand(const char* input) {
     long val = 0;
     Tokens tok;
     splitTokens(trimmed, tok);
-    if (tok.argc < 2 || !parseIntToken(tok.argv[1], val)) {
-      val = 0;
+    if (tok.argc < 2 || !parseIntToken(tok.argv[1], val) || val < -32768L || val > 32767L) {
+      logWarn("offset must be -32768..32767");
+      return;
     }
     logInfo("Writing CO2 offset %ld...", val);
     auto st = device.writeCo2Offset(static_cast<int16_t>(val));

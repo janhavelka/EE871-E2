@@ -22,7 +22,7 @@ enum class Err : uint8_t {
   PEC_MISMATCH,              ///< PEC validation failed
   NACK,                      ///< Expected slave ACK was not received
   BUSY,                      ///< Device is busy
-  IN_PROGRESS,               ///< Operation scheduled; call tick() to complete
+  IN_PROGRESS,               ///< Reserved for future asynchronous operations; not returned by the current driver
   BUS_STUCK,                 ///< Bus lines stuck (SDA or SCL held low)
   ALREADY_INITIALIZED,       ///< begin() called without end()
   OUT_OF_RANGE,              ///< Value out of valid range
