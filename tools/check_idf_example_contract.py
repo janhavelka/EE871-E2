@@ -59,6 +59,7 @@ IDF_REQUIRED_PATTERNS = {
     "status dirty summary": r"hasCo2Error\(\):[\s\S]*?printPersistentDirtySummaryIfDirty\s*\(",
     "resync before after output": r'std::strcmp\(\s*trimmed\s*,\s*"resync"\s*\)\s*==\s*0[\s\S]*?Before:[\s\S]*?resyncPersistentConfig\s*\(\s*\)[\s\S]*?After:',
     "dirty error code detail output": r"persistentConfigDirtyError:[\s\S]*?code=%u,\s*detail=%ld",
+    "library test dispatch": r"testLibraryCommands\s*\(\s*device\s*\)",
 }
 
 STALE_IDF_WORDING = [
@@ -84,6 +85,14 @@ def extract_help(text: str) -> tuple[list[str], list[tuple[str, str]]]:
     return HELP_SECTION_RE.findall(text), HELP_ITEM_RE.findall(text)
 
 
+def extract_section(text: str, start: str, end: str) -> str:
+    start_index = text.find(start)
+    end_index = text.find(end, start_index + len(start))
+    if start_index < 0 or end_index < 0:
+        fail(f"cannot locate source section from {start!r} to {end!r}")
+    return text[start_index:end_index]
+
+
 def main() -> int:
     arduino = read(ARDUINO_MAIN)
     idf = read(IDF_MAIN)
@@ -107,6 +116,59 @@ def main() -> int:
     for label, pattern in IDF_REQUIRED_PATTERNS.items():
         if re.search(pattern, idf) is None:
             fail(f"IDF CLI missing {label}")
+
+    scanner = extract_section(idf, "void scanAddresses", "struct TimingResult")
+    if re.search(r"SCAN_ATTEMPTS\s*=\s*5\s*;", scanner) is None:
+        fail("IDF scanner must use five bounded attempts")
+    if re.search(
+        r"for\s*\(\s*uint8_t\s+attempt\s*=\s*0\s*;"
+        r"\s*attempt\s*<\s*SCAN_ATTEMPTS\s*;\s*\+\+attempt\s*\)",
+        scanner,
+    ) is None:
+        fail("IDF scanner must retry through SCAN_ATTEMPTS")
+    if scanner.count("found[addr] = true") != 1:
+        fail("IDF scanner must have exactly one successful discovery assignment")
+    pec_gate_pattern = (
+        r"if\s*\(\s*pec\s*==\s*expectedPec\s*\)\s*\{"
+        r"[\s\S]*?found\s*\[\s*addr\s*\]\s*=\s*true\s*;"
+        r"[\s\S]*?\}\s*else\s*\{"
+        r"[\s\S]*?invalidResponse\s*\[\s*addr\s*\]\s*=\s*true\s*;"
+        r"[\s\S]*?\}"
+    )
+    if re.search(pec_gate_pattern, scanner) is None:
+        fail("IDF scanner must gate discovery on PEC and flag invalid responses")
+    if "found++" in scanner:
+        fail("IDF scanner still counts ACK-only responses")
+
+    libtest = extract_section(idf, "void testLibraryCommands", "void runFullDiagnostics")
+    if "void testLibraryCommands(EE871::EE871& driver)" not in libtest:
+        fail("IDF library test must accept the initialized driver")
+    if "driver.readControlByte(" not in libtest:
+        fail("IDF library test must use the production control-byte path")
+    for raw_call in ("sendStart(", "sendByteRaw(", "readByteRaw("):
+        if raw_call in libtest:
+            fail(f"IDF library test still uses raw diagnostic call {raw_call!r}")
+
+    process_command = extract_section(idf, "void processCommand", "void configureConsoleInput")
+    warning_pattern = (
+        r"if\s*\(\s*std::strcmp\s*\(\s*trimmed\s*,\s*LINE_TOO_LONG_MARKER\s*\)"
+        r"\s*==\s*0\s*\)\s*\{"
+        r"[\s\S]*?Input line too long"
+        r"[\s\S]*?return\s*;"
+        r"[\s\S]*?\}"
+    )
+    if re.search(warning_pattern, process_command) is None:
+        fail("IDF command processor must report overlength input explicitly")
+
+    poll_line = extract_section(idf, "bool pollLine", "void configureDevice")
+    line_reader_pattern = (
+        r"if\s*\(\s*overflowed\s*\)\s*\{"
+        r"[\s\S]*?std::strncpy\s*\(\s*out\s*,\s*LINE_TOO_LONG_MARKER\s*,"
+        r"[\s\S]*?return\s+true\s*;"
+        r"[\s\S]*?\}"
+    )
+    if re.search(line_reader_pattern, poll_line) is None:
+        fail("IDF line reader must return the overlength marker and preserve prompt flow")
 
     if "driver/gpio.h" not in transport:
         fail("ESP-IDF E2 GPIO transport must use driver/gpio.h")

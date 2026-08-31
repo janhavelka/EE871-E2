@@ -59,19 +59,19 @@ struct Config {
   uint8_t deviceAddress = 0;      ///< E2 protocol device address (0-7), not a hardware I2C address.
 
   // === Timing (E2 spec) ===
-  uint16_t clockLowUs = 100;      ///< Minimum CLK low time, must be >= 100 us.
-  uint16_t clockHighUs = 100;     ///< Minimum CLK high time, must be >= 100 us.
+  uint16_t clockLowUs = 100;      ///< >= 100 us; high + low + 10 us must be <= 2000 us.
+  uint16_t clockHighUs = 100;     ///< >= 100 us; high + low + 10 us must be <= 2000 us.
   uint16_t startHoldUs = 100;     ///< START hold time, must be >= 4 us.
   uint16_t stopHoldUs = 100;      ///< STOP hold time, must be >= 4 us.
 
   uint32_t bitTimeoutUs = 25000;  ///< Clock-stretch timeout per bit, must be > 0.
-  uint32_t byteTimeoutUs = 35000; ///< Clock-stretch timeout per byte, must be >= bitTimeoutUs.
+  uint32_t byteTimeoutUs = 35000; ///< Byte deadline; must exceed nominal time and be >= bitTimeoutUs.
 
   uint32_t writeDelayMs = 150;    ///< Flash write delay after a 0x10 custom write, max 5000 ms.
   uint32_t intervalWriteDelayMs = 300; ///< Flash delay for 0xC6/0xC7 pair, max 5000 ms.
 
   // === Health Tracking ===
-  uint8_t offlineThreshold = 5;   ///< Consecutive failures before OFFLINE; zero normalizes to 1 in begin().
+  uint8_t offlineThreshold = 5;   ///< Tracked E2 transfer failures before OFFLINE; zero normalizes to 1.
 };
 
 } // namespace EE871

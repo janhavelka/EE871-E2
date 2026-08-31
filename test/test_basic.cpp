@@ -139,6 +139,111 @@ void test_begin_rejects_clock_timing_below_spec() {
   Status st = dev.begin(cfg);
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_CONFIG),
                           static_cast<uint8_t>(st.code));
+
+  cfg.clockLowUs = 100;
+  cfg.clockHighUs = 99;
+  st = dev.begin(cfg);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_CONFIG),
+                          static_cast<uint8_t>(st.code));
+}
+
+void test_begin_validates_generated_clock_period() {
+  FakeE2Transport fake;
+  Config cfg = fake.makeConfig();
+
+  cfg.clockLowUs = 100;
+  cfg.clockHighUs = 1890;
+  EE871::EE871 boundaryDev;
+  TEST_ASSERT_TRUE(boundaryDev.begin(cfg).ok());
+  boundaryDev.end();
+
+  cfg.clockHighUs = 1891;
+  EE871::EE871 belowFrequencyDev;
+  Status st = belowFrequencyDev.begin(cfg);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_CONFIG),
+                          static_cast<uint8_t>(st.code));
+
+  cfg.clockLowUs = 1000;
+  cfg.clockHighUs = 1000;
+  EE871::EE871 setupMakesPeriodTooLongDev;
+  st = setupMakesPeriodTooLongDev.begin(cfg);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_CONFIG),
+                          static_cast<uint8_t>(st.code));
+
+  cfg.clockLowUs = UINT16_MAX;
+  cfg.clockHighUs = UINT16_MAX;
+  EE871::EE871 maximumTimingDev;
+  st = maximumTimingDev.begin(cfg);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_CONFIG),
+                          static_cast<uint8_t>(st.code));
+}
+
+void test_begin_validates_nominal_byte_deadline() {
+  FakeE2Transport fake;
+  Config cfg = fake.makeConfig();
+  cfg.byteTimeoutUs = 1890;
+
+  EE871::EE871 equalDeadlineDev;
+  Status st = equalDeadlineDev.begin(cfg);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_CONFIG),
+                          static_cast<uint8_t>(st.code));
+
+  cfg.byteTimeoutUs = 1889;
+  EE871::EE871 belowDeadlineDev;
+  st = belowDeadlineDev.begin(cfg);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_CONFIG),
+                          static_cast<uint8_t>(st.code));
+
+  cfg.byteTimeoutUs = 1891;
+  EE871::EE871 aboveDeadlineDev;
+  TEST_ASSERT_TRUE(aboveDeadlineDev.begin(cfg).ok());
+}
+
+void test_begin_bus_reset_reports_stuck_lines_precisely() {
+  FakeE2Transport sclFake;
+  sclFake.setHoldSclLow(true);
+  EE871::EE871 sclDev;
+  Config sclCfg = sclFake.makeConfig();
+  sclCfg.bitTimeoutUs = 27;
+  Status st = sclDev.begin(sclCfg);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::BUS_STUCK),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_STRING("SCL stuck during reset", st.msg);
+  TEST_ASSERT_FALSE(sclDev.isInitialized());
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::UNINIT),
+                          static_cast<uint8_t>(sclDev.state()));
+  TEST_ASSERT_EQUAL_UINT32(127U, sclFake.elapsedUs());
+
+  FakeE2Transport sdaLowFake;
+  sdaLowFake.setSdaStuckLow(true);
+  EE871::EE871 sdaLowDev;
+  st = sdaLowDev.begin(sdaLowFake.makeConfig());
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::BUS_STUCK),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_STRING("Bus stuck after reset", st.msg);
+  TEST_ASSERT_FALSE(sdaLowDev.isInitialized());
+
+  FakeE2Transport sdaHighFake;
+  sdaHighFake.setSdaStuckHigh(true);
+  EE871::EE871 sdaHighDev;
+  st = sdaHighDev.begin(sdaHighFake.makeConfig());
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::BUS_STUCK),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_STRING("SDA did not go low for START", st.msg);
+  TEST_ASSERT_FALSE(sdaHighDev.isInitialized());
+}
+
+void test_begin_recovers_sda_released_by_reset_clocks() {
+  FakeE2Transport fake;
+  fake.releaseSdaAfterClockRises(3);
+  EE871::EE871 dev;
+
+  Status st = dev.begin(fake.makeConfig());
+
+  TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_TRUE(dev.isInitialized());
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::READY),
+                          static_cast<uint8_t>(dev.state()));
 }
 
 void test_begin_normalizes_zero_offline_threshold() {
@@ -395,6 +500,91 @@ void test_clock_stretch_timeout_is_bounded_and_tracked() {
                           static_cast<uint8_t>(dev.state()));
 }
 
+void test_byte_deadline_includes_nominal_phases_after_stretch() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  Config cfg = fake.makeConfig();
+  cfg.byteTimeoutUs = 1900;
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+
+  fake.resetElapsed();
+  fake.stretchClockReleaseAfter(2, 10);
+  uint8_t status = 0;
+  TEST_ASSERT_TRUE(dev.readStatus(status).ok());
+
+  fake.resetElapsed();
+  fake.stretchClockReleaseAfter(2, 11);
+  Status st = dev.readStatus(status);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::TIMEOUT),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_STRING("Byte timeout", st.msg);
+  TEST_ASSERT_EQUAL_UINT8(1, dev.consecutiveFailures());
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::DEGRADED),
+                          static_cast<uint8_t>(dev.state()));
+}
+
+void test_bus_safety_checks_cover_sda_and_do_not_track_reset() {
+  EE871::EE871 uninitializedDev;
+  Status st = uninitializedDev.busReset();
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
+                          static_cast<uint8_t>(st.code));
+
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+
+  const uint32_t successBefore = dev.totalSuccess();
+  const uint32_t failuresBefore = dev.totalFailures();
+  TEST_ASSERT_TRUE(dev.busReset().ok());
+  TEST_ASSERT_EQUAL_UINT32(successBefore, dev.totalSuccess());
+  TEST_ASSERT_EQUAL_UINT32(failuresBefore, dev.totalFailures());
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::READY),
+                          static_cast<uint8_t>(dev.state()));
+
+  fake.setSdaStuckLow(true);
+  st = dev.checkBusIdle();
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::BUS_STUCK),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_STRING("SDA stuck low", st.msg);
+  TEST_ASSERT_EQUAL_UINT32(successBefore, dev.totalSuccess());
+  TEST_ASSERT_EQUAL_UINT32(failuresBefore, dev.totalFailures());
+
+  fake.setSdaStuckLow(false);
+  fake.setHoldSclLow(true);
+  st = dev.busReset();
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::BUS_STUCK),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_STRING("SCL stuck during reset", st.msg);
+  TEST_ASSERT_EQUAL_UINT32(successBefore, dev.totalSuccess());
+  TEST_ASSERT_EQUAL_UINT32(failuresBefore, dev.totalFailures());
+
+  fake.setHoldSclLow(false);
+  fake.stretchClockReleaseAfter(10, 26);
+  st = dev.busReset();
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::BUS_STUCK),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_STRING("SCL stuck during reset STOP", st.msg);
+  TEST_ASSERT_EQUAL_UINT32(successBefore, dev.totalSuccess());
+  TEST_ASSERT_EQUAL_UINT32(failuresBefore, dev.totalFailures());
+}
+
+void test_start_requires_sda_high_to_low_edge() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+  fake.setSdaStuckLow(true);
+
+  uint8_t status = 0;
+  Status st = dev.readStatus(status);
+
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::BUS_STUCK),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_STRING("SDA stuck low before START", st.msg);
+  TEST_ASSERT_EQUAL_UINT8(1, dev.consecutiveFailures());
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::DEGRADED),
+                          static_cast<uint8_t>(dev.state()));
+}
+
 void test_pec_mismatch_probe_is_raw_but_tracked_read_updates_health() {
   FakeE2Transport fake;
   EE871::EE871 dev;
@@ -443,6 +633,28 @@ void test_device_absent_probe_has_no_health_side_effect_tracked_read_fails() {
                           static_cast<uint8_t>(st.code));
   TEST_ASSERT_EQUAL_UINT32(totalFailuresBeforeProbe + 1U, dev.totalFailures());
   TEST_ASSERT_EQUAL_UINT8(1, dev.consecutiveFailures());
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::DEGRADED),
+                          static_cast<uint8_t>(dev.state()));
+}
+
+void test_absent_sampling_burst_short_circuits_to_three_failures() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake, 5).ok());
+  fake.setDevicePresent(false);
+
+  const uint32_t failuresBefore = dev.totalFailures();
+  uint16_t ppm = 0;
+  uint8_t status = 0;
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NACK),
+                          static_cast<uint8_t>(dev.readCo2Fast(ppm).code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NACK),
+                          static_cast<uint8_t>(dev.readCo2Average(ppm).code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NACK),
+                          static_cast<uint8_t>(dev.readStatus(status).code));
+
+  TEST_ASSERT_EQUAL_UINT32(failuresBefore + 3U, dev.totalFailures());
+  TEST_ASSERT_EQUAL_UINT8(3, dev.consecutiveFailures());
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::DEGRADED),
                           static_cast<uint8_t>(dev.state()));
 }
@@ -703,6 +915,10 @@ int main() {
   RUN_TEST(test_begin_rejects_missing_callbacks);
   RUN_TEST(test_begin_rejects_invalid_device_address);
   RUN_TEST(test_begin_rejects_clock_timing_below_spec);
+  RUN_TEST(test_begin_validates_generated_clock_period);
+  RUN_TEST(test_begin_validates_nominal_byte_deadline);
+  RUN_TEST(test_begin_bus_reset_reports_stuck_lines_precisely);
+  RUN_TEST(test_begin_recovers_sda_released_by_reset_clocks);
   RUN_TEST(test_begin_normalizes_zero_offline_threshold);
   RUN_TEST(test_default_health_aliases);
   RUN_TEST(test_probe_requires_begin);
@@ -713,8 +929,12 @@ int main() {
   RUN_TEST(test_persistent_write_ranges_precede_capability_checks);
   RUN_TEST(test_operating_mode_access_fails_closed);
   RUN_TEST(test_clock_stretch_timeout_is_bounded_and_tracked);
+  RUN_TEST(test_byte_deadline_includes_nominal_phases_after_stretch);
+  RUN_TEST(test_bus_safety_checks_cover_sda_and_do_not_track_reset);
+  RUN_TEST(test_start_requires_sda_high_to_low_edge);
   RUN_TEST(test_pec_mismatch_probe_is_raw_but_tracked_read_updates_health);
   RUN_TEST(test_device_absent_probe_has_no_health_side_effect_tracked_read_fails);
+  RUN_TEST(test_absent_sampling_burst_short_circuits_to_three_failures);
   RUN_TEST(test_custom_write_verify_mismatch_returns_precise_error);
   RUN_TEST(test_offline_threshold_and_recover_after_replug);
   RUN_TEST(test_adjacent_register_pairs_assemble_in_low_high_order);

@@ -241,7 +241,13 @@ Serial.printf("Failures: %u consecutive, %lu total\n",
               static_cast<unsigned long>(sensor.totalFailures()));
 ```
 
-Validation and precondition errors return before E2 traffic and do not update health counters. `probe()` uses raw E2 reads and is diagnostic-only; normal reads/writes use tracked wrappers. `IN_PROGRESS` is treated as neutral for health if future scheduled operations use it.
+Validation and precondition errors return before E2 traffic and do not update
+health counters. `probe()` uses raw E2 reads and is diagnostic-only; normal
+reads/writes use tracked wrappers. Health counts tracked bus transfers rather
+than application sampling cycles: a failed low byte short-circuits a 16-bit
+read before its high byte is attempted. `BUSY` and `IN_PROGRESS` are reserved
+for compatibility and are not returned by the current synchronous driver;
+`IN_PROGRESS` remains neutral for health if a future operation uses it.
 `Config::offlineThreshold = 0` is normalized to one failed operation. Failed
 `begin()` and `end()` paths clear stale runtime/cached feature state so later
 diagnostics do not report old sensor capabilities.
@@ -252,7 +258,13 @@ Cache-only diagnostics are available through `SettingsSnapshot`,
 
 ## Timing And Blocking
 
-The driver is managed synchronous: E2 transactions block for bounded protocol time, and `tick(nowMs)` only records the latest application timestamp for diagnostics. Clock stretching is bounded by `bitTimeoutUs` and `byteTimeoutUs`; flash writes are bounded by `writeDelayMs` or `intervalWriteDelayMs` with max 5000 ms validation.
+The driver is managed synchronous: E2 transactions block for bounded protocol
+time, and `tick(nowMs)` only records the latest application timestamp for
+diagnostics. `begin()` validates the generated bit period
+(`10 + clockLowUs + clockHighUs`) against the 500 Hz minimum and requires
+`byteTimeoutUs` to exceed the nominal nine-bit byte time. Clock stretching is
+bounded by `bitTimeoutUs` and the per-byte budget; flash writes are bounded by
+`writeDelayMs` or `intervalWriteDelayMs` with max 5000 ms validation.
 
 The library never owns GPIO pins or an I2C/Wire instance. Applications provide `setScl`, `setSda`, `readScl`, `readSda`, and `delayUs` callbacks.
 
@@ -328,6 +340,10 @@ on the same `EE871` instance recursively.
   callbacks into their own GPIO or bus manager and externally serialize access
   if multiple tasks can touch the same `EE871` instance or E2 lines. EE871-E2
   uses GPIO-style E2 signaling, not ESP-IDF `driver/i2c_master` or hardware I2C.
+
+The `sniff` command in both diagnostic CLIs decodes synchronously inside the
+transport callbacks. Its console output perturbs E2 timing, so do not use
+sniffer-enabled transactions as timing or protocol-stability evidence.
 
 ## Building And Validation
 

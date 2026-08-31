@@ -1067,10 +1067,6 @@ def write_summary_json(
                 "result",
                 "elapsed_s",
                 "wait_reason",
-                "attempt",
-                "attempt_started_utc",
-                "attempt_id",
-                "retry_of",
             )
             if key in row
         }

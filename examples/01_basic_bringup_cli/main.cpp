@@ -551,7 +551,7 @@ void printHelp() {
   cli::printHelpItem("levels", "Read current bus levels");
   cli::printHelpItem("pintest", "Test pin toggle (MCU bus control)");
   cli::printHelpItem("clocktest", "Generate clock pulses and verify");
-  cli::printHelpItem("sniff", "Toggle sniffer on/off");
+  cli::printHelpItem("sniff", "Toggle sniffer (diagnostic; perturbs bus timing)");
   cli::printHelpItem("timing", "Try different clock frequencies");
   cli::printHelpItem("busreset", "Send 9 clocks to recover stuck bus");
   cli::printHelpItem("tx <hex>", "Test transaction with control byte");
@@ -954,6 +954,12 @@ void runSelfTest() {
 void processCommand(const String& cmd) {
   String trimmed = cmd;
   trimmed.trim();
+
+  if (trimmed == cli_shell::LINE_TOO_LONG_MARKER) {
+    LOGW("Input line too long (maximum %u characters)",
+         static_cast<unsigned>(cli_shell::MAX_LINE_LENGTH));
+    return;
+  }
 
   if (trimmed == "help" || trimmed == "?") {
     printHelp();

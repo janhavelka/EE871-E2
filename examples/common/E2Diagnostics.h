@@ -931,7 +931,8 @@ inline void startSniffer(const EE871::Config& cfg) {
   s.active = true;
 
   transport::setSnifferCallback(snifferCallback);
-  Serial.println("[SNIFF] ON - 'sniff 0' to stop");
+  Serial.println("[SNIFF] ON - use 'sniff' to stop");
+  Serial.println("[SNIFF] WARNING: synchronous decode output perturbs E2 timing");
 }
 
 inline void stopSniffer() {

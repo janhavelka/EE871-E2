@@ -30,11 +30,15 @@ public:
     _skipNextFalling = false;
     _customPointer = 0;
     _elapsedUs = 0;
-    _delayCalls = 0;
     _devicePresent = true;
     _holdSclLow = false;
+    _clockReleasesUntilStretch = 0;
+    _scheduledStretchUs = 0;
+    _sclReleaseAtElapsedUs = 0;
+    _sclReleaseScheduled = false;
     _sdaStuckLow = false;
     _sdaStuckHigh = false;
+    _sdaReleaseAfterClockRises = 0;
     _corruptReadPec = false;
     _corruptNextCustomReadPec = false;
     _corruptNextCustomReadAddress = 0;
@@ -83,7 +87,7 @@ public:
     cfg.startHoldUs = 4;
     cfg.stopHoldUs = 4;
     cfg.bitTimeoutUs = 25;
-    cfg.byteTimeoutUs = 25;
+    cfg.byteTimeoutUs = 35000;
     cfg.writeDelayMs = 0;
     cfg.intervalWriteDelayMs = 0;
     cfg.offlineThreshold = offlineThreshold;
@@ -92,16 +96,27 @@ public:
 
   void resetElapsed() {
     _elapsedUs = 0;
-    _delayCalls = 0;
   }
 
   uint32_t elapsedUs() const { return _elapsedUs; }
-  uint32_t delayCalls() const { return _delayCalls; }
 
   void setDevicePresent(bool present) { _devicePresent = present; }
-  void setHoldSclLow(bool hold) { _holdSclLow = hold; }
+  void setHoldSclLow(bool hold) {
+    _holdSclLow = hold;
+    if (!hold) {
+      _sclReleaseScheduled = false;
+    }
+  }
+  void stretchClockReleaseAfter(uint8_t releaseCount, uint32_t stretchUs) {
+    _clockReleasesUntilStretch = releaseCount;
+    _scheduledStretchUs = stretchUs;
+  }
   void setSdaStuckLow(bool stuck) { _sdaStuckLow = stuck; }
   void setSdaStuckHigh(bool stuck) { _sdaStuckHigh = stuck; }
+  void releaseSdaAfterClockRises(uint8_t count) {
+    _sdaStuckLow = count != 0U;
+    _sdaReleaseAfterClockRises = count;
+  }
   void setCorruptReadPec(bool corrupt) { _corruptReadPec = corrupt; }
   void corruptNextCustomReadPec(uint8_t address) {
     _corruptNextCustomReadAddress = address;
@@ -166,6 +181,14 @@ private:
   void setScl(bool level) {
     const bool wasHigh = readScl();
     _masterSclReleased = level;
+    if (level && _clockReleasesUntilStretch > 0U) {
+      --_clockReleasesUntilStretch;
+      if (_clockReleasesUntilStretch == 0U) {
+        _holdSclLow = true;
+        _sclReleaseAtElapsedUs = _elapsedUs + _scheduledStretchUs;
+        _sclReleaseScheduled = true;
+      }
+    }
     const bool isHigh = readScl();
     if (!wasHigh && isHigh) {
       onSclRising();
@@ -205,7 +228,14 @@ private:
 
   void delayUs(uint32_t us) {
     _elapsedUs += us;
-    ++_delayCalls;
+    if (_holdSclLow && _sclReleaseScheduled &&
+        _elapsedUs >= _sclReleaseAtElapsedUs) {
+      _holdSclLow = false;
+      _sclReleaseScheduled = false;
+      if (_masterSclReleased) {
+        onSclRising();
+      }
+    }
   }
 
   void beginTransaction() {
@@ -222,6 +252,13 @@ private:
   }
 
   void onSclRising() {
+    if (_sdaStuckLow && _sdaReleaseAfterClockRises > 0U) {
+      --_sdaReleaseAfterClockRises;
+      if (_sdaReleaseAfterClockRises == 0U) {
+        _sdaStuckLow = false;
+      }
+    }
+
     switch (_phase) {
       case Phase::WRITE_CONTROL:
       case Phase::WRITE_ADDRESS:
@@ -471,11 +508,15 @@ private:
   bool _skipNextFalling = false;
   uint8_t _customPointer = 0;
   uint32_t _elapsedUs = 0;
-  uint32_t _delayCalls = 0;
   bool _devicePresent = true;
   bool _holdSclLow = false;
+  uint8_t _clockReleasesUntilStretch = 0;
+  uint32_t _scheduledStretchUs = 0;
+  uint32_t _sclReleaseAtElapsedUs = 0;
+  bool _sclReleaseScheduled = false;
   bool _sdaStuckLow = false;
   bool _sdaStuckHigh = false;
+  uint8_t _sdaReleaseAfterClockRises = 0;
   bool _corruptReadPec = false;
   bool _corruptNextCustomReadPec = false;
   uint8_t _corruptNextCustomReadAddress = 0;

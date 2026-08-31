@@ -7,6 +7,7 @@
 namespace cli_shell {
 
 inline constexpr size_t MAX_LINE_LENGTH = 127U;
+inline constexpr const char* LINE_TOO_LONG_MARKER = "__input_line_too_long__";
 
 inline bool readLine(String& outLine) {
   static String buffer;
@@ -32,7 +33,7 @@ inline bool readLine(String& outLine) {
       if (overflowed) {
         buffer = "";
         overflowed = false;
-        outLine = "__input_line_too_long__";
+        outLine = LINE_TOO_LONG_MARKER;
         return true;
       }
       if (buffer.length() == 0U) {

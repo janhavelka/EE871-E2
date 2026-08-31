@@ -1,6 +1,6 @@
 # EE871-E2 Documentation Index
 
-Last updated: 2026-08-26
+Last updated: 2026-08-31
 
 Use this index to choose the right document. The repository contains maintained
 engineering docs, curated protocol notes, and raw source-document extracts.
@@ -14,7 +14,7 @@ engineering docs, curated protocol notes, and raw source-document extracts.
 | [IDF_PORT.md](IDF_PORT.md) | ESP-IDF port architecture, constraints, and validation checklist. | Current guidance; ESP32-S3/S2 native IDF example builds pass in CI. |
 | [IDF_PORT_IMPLEMENTATION.md](IDF_PORT_IMPLEMENTATION.md) | Short implementation note for files added by the IDF port. | Current implementation summary. |
 | [EE871_E2_Protocol_and_Register_Map.md](EE871_E2_Protocol_and_Register_Map.md) | Curated E2 protocol and EE871 register reference. | Current implementation reference; verify exact vendor tables against PDFs when needed. |
-| [AUDIT_FINDINGS_2026-08-26.md](AUDIT_FINDINGS_2026-08-26.md) | Open audit findings with concrete proposals. | Working list; delete sections as they are resolved. |
+| [CODE_AUDIT_REPORT_2026-08-31.md](CODE_AUDIT_REPORT_2026-08-31.md) | Finding-by-finding validation and resolution of the 2026-08-26 code audit. | Completed audit report. |
 
 ## Source Material
 

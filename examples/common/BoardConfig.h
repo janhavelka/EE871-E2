@@ -13,7 +13,7 @@
 
 #include <stdint.h>
 
-#include "examples/common/E2Transport.h"
+#include "E2Transport.h"
 
 namespace board {
 

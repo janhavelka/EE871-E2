@@ -17,19 +17,6 @@ REQUIRED_COMMON = [
     "CliStyle.h",
 ]
 
-MANDATORY_COMMANDS = [
-    "help",
-    "scan",
-    "probe",
-    "recover",
-    "drv",
-    "dirty",
-    "resync",
-    "read",
-    "verbose",
-    "stress",
-]
-
 REQUIRED_FRAGMENTS = [
     "persistentConfigDirty",
     "persistentConfigDirtyError",
@@ -44,6 +31,14 @@ REQUIRED_FRAGMENTS = [
 
 REQUIRED_PATTERNS = {
     "bounded CLI line reader": r"cli_shell::readLine\s*\(",
+    "help command dispatch": r'trimmed\s*==\s*"help"',
+    "scan command dispatch": r'trimmed\s*==\s*"scan"',
+    "probe command dispatch": r'trimmed\s*==\s*"probe"',
+    "recover command dispatch": r'trimmed\s*==\s*"recover"',
+    "driver command dispatch": r'trimmed\s*==\s*"drv"',
+    "read command dispatch": r'trimmed\s*==\s*"read"',
+    "verbose command dispatch": r'trimmed\s*==\s*"verbose"',
+    "stress command dispatch": r'trimmed\s*==\s*"stress"',
     "dirty help entry": r'printHelpItem\(\s*"dirty"\s*,',
     "resync help entry": r'printHelpItem\(\s*"resync"\s*,',
     "dirty command dispatch": r'trimmed\s*==\s*"dirty"',
@@ -73,9 +68,18 @@ def ensure_missing(path: pathlib.Path, label: str) -> None:
         fail(f"forbidden {label} still present: {path.as_posix()}")
 
 
+def extract_section(text: str, start: str, end: str) -> str:
+    start_index = text.find(start)
+    end_index = text.find(end, start_index + len(start))
+    if start_index < 0 or end_index < 0:
+        fail(f"cannot locate source section from {start!r} to {end!r}")
+    return text[start_index:end_index]
+
+
 def main() -> int:
     common_dir = ROOT / "examples" / "common"
     bringup_main = ROOT / "examples" / "01_basic_bringup_cli" / "main.cpp"
+    cli_shell = common_dir / "CliShell.h"
 
     ensure_exists(common_dir, "common example directory")
     ensure_exists(bringup_main, "bringup CLI example")
@@ -90,10 +94,7 @@ def main() -> int:
         ensure_exists(common_dir / name, f"common helper {name}")
 
     text = bringup_main.read_text(encoding="utf-8", errors="replace")
-
-    for cmd in MANDATORY_COMMANDS:
-        if re.search(rf"\b{re.escape(cmd)}\b", text) is None:
-            fail(f"mandatory command '{cmd}' missing in {bringup_main.as_posix()}")
+    shell_text = cli_shell.read_text(encoding="utf-8", errors="replace")
 
     for fragment in REQUIRED_FRAGMENTS:
         if fragment not in text:
@@ -102,6 +103,25 @@ def main() -> int:
     for label, pattern in REQUIRED_PATTERNS.items():
         if re.search(pattern, text) is None:
             fail(f"missing {label} in {bringup_main.as_posix()}")
+
+    line_reader_pattern = (
+        r"if\s*\(\s*overflowed\s*\)\s*\{"
+        r"[\s\S]*?outLine\s*=\s*LINE_TOO_LONG_MARKER\s*;"
+        r"[\s\S]*?return\s+true\s*;"
+        r"[\s\S]*?\}"
+    )
+    if re.search(line_reader_pattern, shell_text) is None:
+        fail("Arduino line reader must return the overlength marker")
+
+    process_command = extract_section(text, "void processCommand", "void setup")
+    warning_pattern = (
+        r"if\s*\(\s*trimmed\s*==\s*cli_shell::LINE_TOO_LONG_MARKER\s*\)\s*\{"
+        r"[\s\S]*?Input line too long"
+        r"[\s\S]*?return\s*;"
+        r"[\s\S]*?\}"
+    )
+    if re.search(warning_pattern, process_command) is None:
+        fail("Arduino command processor must report overlength input explicitly")
 
     if re.search(r"\bcfg\b", text) is None and re.search(r"\bsettings\b", text) is None:
         fail("either 'cfg' or 'settings' command must be present")

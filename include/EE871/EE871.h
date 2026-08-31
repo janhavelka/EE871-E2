@@ -64,7 +64,9 @@ struct SettingsSnapshot {
 /// A failed E2 transfer is not retried internally. The driver preserves a
 /// control-byte NACK and updates health for that attempt; the application owns
 /// any later retry, delay/backoff, and sampling-cadence policy. A NACK alone
-/// does not identify the sensor's internal reason.
+/// does not identify the sensor's internal reason. Health counts tracked bus
+/// transfers, not high-level sampling cycles; a 16-bit read stops after a
+/// failed low-byte transfer and does not attempt its high byte.
 class EE871 {
 public:
   /// @brief Construct an uninitialized driver instance.
@@ -246,6 +248,9 @@ public:
   Status readControlByte(uint8_t mainCommandNibble, uint8_t& data);
 
   /// Read a 16-bit value using low/high control bytes.
+  ///
+  /// For measurement command pairs, E2 v4.1 specifies that the low-byte read
+  /// captures the associated high byte; this method preserves that order.
   /// @param mainCommandLow Low-byte main-command nibble.
   /// @param mainCommandHigh High-byte main-command nibble.
   /// @param[out] value Little-endian assembled value.
@@ -569,6 +574,7 @@ public:
   ///
   /// This is a raw value API. It does not read status, reject the CO2 error
   /// bit, validate warm-up/freshness, or enforce a product-specific ppm range.
+  /// Reading MV3 low first captures the associated high byte in the sensor.
   /// A control-byte NACK is returned without retry and without inferring the
   /// sensor's internal reason.
   /// @param[out] ppm CO2 concentration in ppm.
@@ -579,6 +585,7 @@ public:
   ///
   /// This is a raw value API. It does not read status, reject the CO2 error
   /// bit, validate warm-up/freshness, or enforce a product-specific ppm range.
+  /// Reading MV4 low first captures the associated high byte in the sensor.
   /// A control-byte NACK is returned without retry and without inferring the
   /// sensor's internal reason.
   /// @param[out] ppm CO2 concentration in ppm.
@@ -617,6 +624,7 @@ private:
   Status _writeCommandTracked(uint8_t controlByte, uint8_t addressByte, uint8_t dataByte,
                               bool* writeAccepted = nullptr);
   Status _customWriteDirect(uint8_t address, uint8_t value, bool* writeAccepted = nullptr);
+  Status _busResetRaw();
 
   // =========================================================================
   // Health Management

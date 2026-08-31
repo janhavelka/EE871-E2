@@ -9,6 +9,10 @@ namespace EE871 {
 namespace {
 
 static constexpr uint32_t kPollStepUs = 5;
+static constexpr uint32_t kDataSetupUs = 10;
+static constexpr uint32_t kMinClockFrequencyHz = 500;
+static constexpr uint32_t kMaxNominalBitTimeUs = 1000000U / kMinClockFrequencyHz;
+static constexpr uint32_t kBitsPerByte = 9;
 
 inline void setScl(const Config& cfg, bool level) {
   cfg.setScl(level, cfg.busUser);
@@ -34,27 +38,44 @@ inline void delayUs(const Config& cfg, uint32_t us, uint32_t* elapsedUs) {
   }
 }
 
+static Status delayBytePhase(const Config& cfg, uint32_t us, uint32_t* elapsedUs) {
+  if (elapsedUs != nullptr) {
+    const uint32_t remaining =
+        (*elapsedUs < cfg.byteTimeoutUs) ? (cfg.byteTimeoutUs - *elapsedUs) : 0U;
+    if (us > remaining) {
+      return Status::Error(Err::TIMEOUT, "Byte timeout", static_cast<int32_t>(*elapsedUs));
+    }
+  }
+  delayUs(cfg, us, elapsedUs);
+  return Status::Ok();
+}
+
 static Status waitSclHigh(const Config& cfg, uint32_t* elapsedUs) {
   uint32_t waitedUs = 0;
   while (!readScl(cfg)) {
     if (waitedUs >= cfg.bitTimeoutUs) {
       return Status::Error(Err::TIMEOUT, "Clock stretch timeout", static_cast<int32_t>(waitedUs));
     }
+    uint32_t stepUs = kPollStepUs;
+    const uint32_t bitRemainingUs = cfg.bitTimeoutUs - waitedUs;
+    if (stepUs > bitRemainingUs) {
+      stepUs = bitRemainingUs;
+    }
     if (elapsedUs != nullptr) {
       const uint32_t remaining =
           (*elapsedUs < cfg.byteTimeoutUs) ? (cfg.byteTimeoutUs - *elapsedUs) : 0U;
-      if (remaining < kPollStepUs) {
+      if (remaining == 0U) {
         return Status::Error(Err::TIMEOUT, "Byte timeout", static_cast<int32_t>(*elapsedUs));
       }
+      if (stepUs > remaining) {
+        stepUs = remaining;
+      }
     }
-    delayUs(cfg, kPollStepUs, elapsedUs);
-    waitedUs += kPollStepUs;
+    delayUs(cfg, stepUs, elapsedUs);
+    waitedUs += stepUs;
   }
   return Status::Ok();
 }
-
-// Data setup time before SCL rises (minimum per E2 spec)
-static constexpr uint32_t kDataSetupUs = 10;
 
 static Status e2Start(const Config& cfg) {
   setSda(cfg, true);
@@ -63,9 +84,16 @@ static Status e2Start(const Config& cfg) {
   if (!st.ok()) {
     return st;
   }
+  if (!readSda(cfg)) {
+    return Status::Error(Err::BUS_STUCK, "SDA stuck low before START");
+  }
   delayUs(cfg, cfg.startHoldUs, nullptr);
   setSda(cfg, false);
   delayUs(cfg, cfg.startHoldUs, nullptr);
+  if (readSda(cfg)) {
+    setSda(cfg, true);
+    return Status::Error(Err::BUS_STUCK, "SDA did not go low for START");
+  }
   setScl(cfg, false);
   delayUs(cfg, cfg.clockLowUs, nullptr);
   return Status::Ok();
@@ -89,34 +117,50 @@ static Status e2Stop(const Config& cfg) {
 static Status writeBit(const Config& cfg, bool bit, uint32_t* elapsedUs) {
   // SCL is already low from previous bit or START
   setSda(cfg, bit);
-  delayUs(cfg, kDataSetupUs, elapsedUs);  // Data setup time
-  setScl(cfg, true);
-  Status st = waitSclHigh(cfg, elapsedUs);
+  Status st = delayBytePhase(cfg, kDataSetupUs, elapsedUs);
   if (!st.ok()) {
     return st;
   }
-  delayUs(cfg, cfg.clockHighUs, elapsedUs);
+  setScl(cfg, true);
+  st = waitSclHigh(cfg, elapsedUs);
+  if (!st.ok()) {
+    return st;
+  }
+  st = delayBytePhase(cfg, cfg.clockHighUs, elapsedUs);
+  if (!st.ok()) {
+    setScl(cfg, false);
+    return st;
+  }
   setScl(cfg, false);
-  delayUs(cfg, cfg.clockLowUs, elapsedUs);  // Clock low time AFTER pulling low
-  return Status::Ok();
+  return delayBytePhase(cfg, cfg.clockLowUs, elapsedUs);
 }
 
 static Status readBit(const Config& cfg, bool& bit, uint32_t* elapsedUs) {
   // SCL is already low from previous bit
   setSda(cfg, true);  // Release SDA for slave to drive
-  delayUs(cfg, kDataSetupUs, elapsedUs);  // Setup time
+  Status st = delayBytePhase(cfg, kDataSetupUs, elapsedUs);
+  if (!st.ok()) {
+    return st;
+  }
   setScl(cfg, true);
-  Status st = waitSclHigh(cfg, elapsedUs);
+  st = waitSclHigh(cfg, elapsedUs);
   if (!st.ok()) {
     return st;
   }
   const uint32_t sampleDelay = cfg.clockHighUs / 2;
-  delayUs(cfg, sampleDelay, elapsedUs);
+  st = delayBytePhase(cfg, sampleDelay, elapsedUs);
+  if (!st.ok()) {
+    setScl(cfg, false);
+    return st;
+  }
   bit = readSda(cfg);
-  delayUs(cfg, cfg.clockHighUs - sampleDelay, elapsedUs);
+  st = delayBytePhase(cfg, cfg.clockHighUs - sampleDelay, elapsedUs);
+  if (!st.ok()) {
+    setScl(cfg, false);
+    return st;
+  }
   setScl(cfg, false);
-  delayUs(cfg, cfg.clockLowUs, elapsedUs);  // Clock low time AFTER pulling low
-  return Status::Ok();
+  return delayBytePhase(cfg, cfg.clockLowUs, elapsedUs);
 }
 
 static Status writeByte(const Config& cfg, uint8_t value, uint32_t* elapsedUs) {
@@ -147,35 +191,52 @@ static Status readByte(const Config& cfg, uint8_t& value, uint32_t* elapsedUs) {
 static Status readAck(const Config& cfg, bool& acked, uint32_t* elapsedUs) {
   // SCL is already low from last data bit
   setSda(cfg, true);  // Release SDA for slave to drive ACK
-  delayUs(cfg, kDataSetupUs, elapsedUs);
+  Status st = delayBytePhase(cfg, kDataSetupUs, elapsedUs);
+  if (!st.ok()) {
+    return st;
+  }
   setScl(cfg, true);
-  Status st = waitSclHigh(cfg, elapsedUs);
+  st = waitSclHigh(cfg, elapsedUs);
   if (!st.ok()) {
     return st;
   }
   const uint32_t sampleDelay = cfg.clockHighUs / 2;
-  delayUs(cfg, sampleDelay, elapsedUs);
+  st = delayBytePhase(cfg, sampleDelay, elapsedUs);
+  if (!st.ok()) {
+    setScl(cfg, false);
+    return st;
+  }
   acked = !readSda(cfg);  // ACK = SDA low
-  delayUs(cfg, cfg.clockHighUs - sampleDelay, elapsedUs);
+  st = delayBytePhase(cfg, cfg.clockHighUs - sampleDelay, elapsedUs);
+  if (!st.ok()) {
+    setScl(cfg, false);
+    return st;
+  }
   setScl(cfg, false);
-  delayUs(cfg, cfg.clockLowUs, elapsedUs);  // Low time for next phase
-  return Status::Ok();
+  return delayBytePhase(cfg, cfg.clockLowUs, elapsedUs);
 }
 
 static Status sendAck(const Config& cfg, bool ack, uint32_t* elapsedUs) {
   // SCL is already low from last data bit
   setSda(cfg, !ack);  // ACK = SDA low, NACK = SDA high
-  delayUs(cfg, kDataSetupUs, elapsedUs);
-  setScl(cfg, true);
-  Status st = waitSclHigh(cfg, elapsedUs);
+  Status st = delayBytePhase(cfg, kDataSetupUs, elapsedUs);
   if (!st.ok()) {
     return st;
   }
-  delayUs(cfg, cfg.clockHighUs, elapsedUs);
+  setScl(cfg, true);
+  st = waitSclHigh(cfg, elapsedUs);
+  if (!st.ok()) {
+    return st;
+  }
+  st = delayBytePhase(cfg, cfg.clockHighUs, elapsedUs);
+  if (!st.ok()) {
+    setScl(cfg, false);
+    return st;
+  }
   setScl(cfg, false);
-  delayUs(cfg, cfg.clockLowUs, elapsedUs);  // Low time for next phase
+  st = delayBytePhase(cfg, cfg.clockLowUs, elapsedUs);
   setSda(cfg, true);  // Release SDA
-  return Status::Ok();
+  return st;
 }
 
 static uint8_t calcPecRead(uint8_t controlByte, uint8_t dataByte) {
@@ -213,6 +274,12 @@ Status EE871::begin(const Config& config) {
   if (config.clockLowUs < 100 || config.clockHighUs < 100) {
     return Status::Error(Err::INVALID_CONFIG, "Clock timing below spec");
   }
+  const uint32_t nominalBitTimeUs =
+      kDataSetupUs + static_cast<uint32_t>(config.clockLowUs) +
+      static_cast<uint32_t>(config.clockHighUs);
+  if (nominalBitTimeUs > kMaxNominalBitTimeUs) {
+    return Status::Error(Err::INVALID_CONFIG, "Clock frequency below spec");
+  }
   if (config.startHoldUs < 4 || config.stopHoldUs < 4) {
     return Status::Error(Err::INVALID_CONFIG, "Start/stop hold below spec");
   }
@@ -221,6 +288,10 @@ Status EE871::begin(const Config& config) {
   }
   if (config.byteTimeoutUs < config.bitTimeoutUs) {
     return Status::Error(Err::INVALID_CONFIG, "byteTimeoutUs must be >= bitTimeoutUs");
+  }
+  const uint32_t nominalByteTimeUs = kBitsPerByte * nominalBitTimeUs;
+  if (nominalByteTimeUs >= config.byteTimeoutUs) {
+    return Status::Error(Err::INVALID_CONFIG, "byteTimeoutUs must exceed nominal byte time");
   }
   if (config.writeDelayMs > cmd::WRITE_DELAY_MAX_MS) {
     return Status::Error(Err::INVALID_CONFIG, "writeDelayMs exceeds safe limit");
@@ -237,34 +308,10 @@ Status EE871::begin(const Config& config) {
 
   // Check bus is idle before probing
   if (!readScl(_config) || !readSda(_config)) {
-    // Attempt bus reset - clock out pulses with SDA high
-    setSda(_config, true);
-    for (uint8_t i = 0; i < cmd::BUS_RESET_CLOCKS; ++i) {
-      setScl(_config, false);
-      delayUs(_config, _config.clockLowUs, nullptr);
-      setScl(_config, true);
-      // Wait for SCL to actually rise (handle clock stretching)
-      uint32_t waited = 0;
-      while (!readScl(_config) && waited < _config.bitTimeoutUs) {
-        delayUs(_config, kPollStepUs, nullptr);
-        waited += kPollStepUs;
-      }
-      delayUs(_config, _config.clockHighUs, nullptr);
-    }
-    // Generate STOP condition to leave bus in known state
-    setScl(_config, false);
-    delayUs(_config, _config.clockLowUs, nullptr);
-    setSda(_config, false);
-    delayUs(_config, kDataSetupUs, nullptr);
-    setScl(_config, true);
-    delayUs(_config, _config.stopHoldUs, nullptr);
-    setSda(_config, true);
-    delayUs(_config, _config.stopHoldUs, nullptr);
-    // Check again
-    if (!readScl(_config) || !readSda(_config)) {
-      Status err = Status::Error(Err::BUS_STUCK, "Bus stuck after reset");
+    Status st = _busResetRaw();
+    if (!st.ok()) {
       _resetStoppedState();
-      return err;
+      return st;
     }
   }
 
@@ -1016,33 +1063,30 @@ Status EE871::busReset() {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
   }
 
+  return _busResetRaw();
+}
+
+Status EE871::_busResetRaw() {
   // Clock out 9+ pulses with SDA high to reset slave state machine
   setSda(_config, true);
   for (uint8_t i = 0; i < cmd::BUS_RESET_CLOCKS; ++i) {
     setScl(_config, false);
     delayUs(_config, _config.clockLowUs, nullptr);
     setScl(_config, true);
-    // Wait for clock to rise (slave might stretch)
-    uint32_t waited = 0;
-    while (!readScl(_config) && waited < _config.bitTimeoutUs) {
-      delayUs(_config, kPollStepUs, nullptr);
-      waited += kPollStepUs;
-    }
-    if (waited >= _config.bitTimeoutUs) {
+    Status st = waitSclHigh(_config, nullptr);
+    if (!st.ok()) {
       return Status::Error(Err::BUS_STUCK, "SCL stuck during reset");
     }
     delayUs(_config, _config.clockHighUs, nullptr);
   }
 
-  // Generate STOP condition
+  // Establish the final low phase, then generate a stretch-aware STOP.
   setScl(_config, false);
   delayUs(_config, _config.clockLowUs, nullptr);
-  setSda(_config, false);
-  delayUs(_config, kDataSetupUs, nullptr);
-  setScl(_config, true);
-  delayUs(_config, _config.stopHoldUs, nullptr);
-  setSda(_config, true);
-  delayUs(_config, _config.stopHoldUs, nullptr);
+  Status stopStatus = e2Stop(_config);
+  if (!stopStatus.ok()) {
+    return Status::Error(Err::BUS_STUCK, "SCL stuck during reset STOP");
+  }
 
   // Verify bus is now idle
   if (!readScl(_config) || !readSda(_config)) {

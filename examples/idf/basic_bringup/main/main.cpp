@@ -34,6 +34,7 @@ static constexpr const char* LOG_COLOR_GRAY = "\033[90m";
 static constexpr int LOG_LEVEL = 2;
 static constexpr size_t HELP_COMMAND_WIDTH = 32U;
 static constexpr size_t MAX_LINE_LENGTH = 127U;
+static constexpr const char* LINE_TOO_LONG_MARKER = "__input_line_too_long__";
 static constexpr uint16_t CUSTOM_MEM_SIZE = 0x100;
 static constexpr size_t REG_DUMP_CHUNK_LEN = 16;
 static constexpr uint32_t STRESS_PROGRESS_UPDATES = 10U;
@@ -649,7 +650,7 @@ void printHelp() {
   printHelpItem("levels", "Read current bus levels");
   printHelpItem("pintest", "Test pin toggle (MCU bus control)");
   printHelpItem("clocktest", "Generate clock pulses and verify");
-  printHelpItem("sniff", "Toggle sniffer on/off");
+  printHelpItem("sniff", "Toggle sniffer (diagnostic; perturbs bus timing)");
   printHelpItem("timing", "Try different clock frequencies");
   printHelpItem("busreset", "Send 9 clocks to recover stuck bus");
   printHelpItem("tx <hex>", "Test transaction with control byte");
@@ -981,38 +982,81 @@ uint8_t readByteRaw(const EE871::Config& cfg, bool sendAck, bool verbose = false
 }
 
 void scanAddresses(const EE871::Config& cfg) {
+  static constexpr uint8_t SCAN_ATTEMPTS = 5;
+  static constexpr uint16_t SCAN_RETRY_GAP_MS = 200;
+
   std::printf("%s=== E2 Address Scanner ===%s\n", LOG_COLOR_CYAN, LOG_COLOR_RESET);
-  std::printf("Scanning addresses 0-7 with status read (0x7x)...\n\n");
-  int found = 0;
+  std::printf("Scanning addresses 0-7 with status read (0x7x), up to %u attempts...\n\n",
+              static_cast<unsigned>(SCAN_ATTEMPTS));
+
+  bool found[8] = {};
+  bool invalidResponse[8] = {};
+  uint8_t status[8] = {};
+
+  for (uint8_t attempt = 0; attempt < SCAN_ATTEMPTS; ++attempt) {
+    for (uint8_t addr = 0; addr < 8U; ++addr) {
+      if (found[addr]) {
+        continue;
+      }
+
+      const uint8_t ctrlByte =
+          EE871::cmd::makeControlRead(EE871::cmd::MAIN_STATUS, addr);
+      sendStart(cfg);
+      const bool ack = sendByteRaw(cfg, ctrlByte, false);
+      if (ack) {
+        const uint8_t candidateStatus = readByteRaw(cfg, true, false);
+        const uint8_t pec = readByteRaw(cfg, false, false);
+        sendStop(cfg);
+        const uint8_t expectedPec =
+            static_cast<uint8_t>((ctrlByte + candidateStatus) & 0xFFU);
+        if (pec == expectedPec) {
+          status[addr] = candidateStatus;
+          found[addr] = true;
+        } else {
+          invalidResponse[addr] = true;
+        }
+      } else {
+        sendStop(cfg);
+      }
+      delayMs(10);
+    }
+
+    if (attempt + 1U < SCAN_ATTEMPTS) {
+      delayMs(SCAN_RETRY_GAP_MS);
+    }
+  }
+
+  int foundCount = 0;
   for (uint8_t addr = 0; addr < 8U; ++addr) {
-    const uint8_t ctrlByte = EE871::cmd::makeControlRead(EE871::cmd::MAIN_STATUS, addr);
-    sendStart(cfg);
-    const bool ack = sendByteRaw(cfg, ctrlByte, false);
-    if (ack) {
-      const uint8_t data = readByteRaw(cfg, true, false);
-      const uint8_t pec = readByteRaw(cfg, false, false);
-      sendStop(cfg);
-      const uint8_t expectedPec = static_cast<uint8_t>((ctrlByte + data) & 0xFFU);
-      const bool pecOk = (pec == expectedPec);
-      std::printf("  Address %u: %sFOUND%s Status=0x%02X, PEC=%s%s%s\n",
+    if (found[addr]) {
+      std::printf("  Address %u: %sFOUND%s Status=0x%02X, PEC=%sOK%s\n",
                   static_cast<unsigned>(addr),
                   LOG_COLOR_GREEN,
                   LOG_COLOR_RESET,
-                  static_cast<unsigned>(data),
-                  okColor(pecOk),
-                  pecOk ? "OK" : "MISMATCH",
+                  static_cast<unsigned>(status[addr]),
+                  LOG_COLOR_GREEN,
                   LOG_COLOR_RESET);
-      found++;
+      ++foundCount;
+    } else if (invalidResponse[addr]) {
+      std::printf("  Address %u: %sInvalid response after %u attempts "
+                  "(PEC mismatch; not a device)%s\n",
+                  static_cast<unsigned>(addr),
+                  LOG_COLOR_RED,
+                  static_cast<unsigned>(SCAN_ATTEMPTS),
+                  LOG_COLOR_RESET);
     } else {
-      sendStop(cfg);
-      std::printf("  Address %u: %sNo response (NACK)%s\n",
+      std::printf("  Address %u: %sNo response after %u attempts (NACK)%s\n",
                   static_cast<unsigned>(addr),
                   neutralColor(),
+                  static_cast<unsigned>(SCAN_ATTEMPTS),
                   LOG_COLOR_RESET);
     }
-    delayMs(10);
   }
-  std::printf("\nFound %s%d%s device(s)\n", okColor(found > 0), found, LOG_COLOR_RESET);
+
+  std::printf("\nFound %s%d%s device(s)\n",
+              okColor(foundCount > 0),
+              foundCount,
+              LOG_COLOR_RESET);
 }
 
 struct TimingResult {
@@ -1148,9 +1192,9 @@ void testTransaction(const EE871::Config& cfg, uint8_t ctrlByte) {
   std::printf("Bus after: SCL=%s SDA=%s\n", lvlAfter.scl ? "H" : "L", lvlAfter.sda ? "H" : "L");
 }
 
-void testLibraryCommands(const EE871::Config& cfg) {
+void testLibraryCommands(EE871::EE871& driver) {
   std::printf("%s=== Library Command Test ===%s\n", LOG_COLOR_CYAN, LOG_COLOR_RESET);
-  std::printf("Testing exact commands used by begin()...\n\n");
+  std::printf("Testing bounded library control-byte reads...\n\n");
   struct CmdTest {
     uint8_t mainCmd;
     const char* name;
@@ -1168,38 +1212,36 @@ void testLibraryCommands(const EE871::Config& cfg) {
   };
   int passed = 0;
   const int numTests = static_cast<int>(sizeof(tests) / sizeof(tests[0]));
+  const uint8_t deviceAddress = driver.getConfig().deviceAddress;
   for (int i = 0; i < numTests; ++i) {
-    const uint8_t ctrlByte = EE871::cmd::makeControlRead(tests[i].mainCmd, cfg.deviceAddress);
+    const uint8_t ctrlByte =
+        EE871::cmd::makeControlRead(tests[i].mainCmd, deviceAddress);
+    uint8_t data = 0;
     std::printf("%-18s [0x%02X]: ", tests[i].name, static_cast<unsigned>(ctrlByte));
-    sendStart(cfg);
-    const bool ack = sendByteRaw(cfg, ctrlByte, false);
-    if (ack) {
-      const uint8_t data = readByteRaw(cfg, true, false);
-      const uint8_t pec = readByteRaw(cfg, false, false);
-      sendStop(cfg);
-      const uint8_t expectedPec = static_cast<uint8_t>((ctrlByte + data) & 0xFFU);
-      const bool pecOk = (pec == expectedPec);
-      std::printf("%sACK%s data=0x%02X PEC=%s%s%s\n",
+
+    const EE871::Status st = driver.readControlByte(tests[i].mainCmd, data);
+    if (st.ok()) {
+      std::printf("%sOK%s data=0x%02X\n",
                   LOG_COLOR_GREEN,
                   LOG_COLOR_RESET,
-                  static_cast<unsigned>(data),
-                  okColor(pecOk),
-                  pecOk ? "OK" : "BAD",
-                  LOG_COLOR_RESET);
-      if (pecOk) passed++;
+                  static_cast<unsigned>(data));
+      ++passed;
     } else {
-      sendStop(cfg);
-      std::printf("%sNACK%s\n", LOG_COLOR_RED, LOG_COLOR_RESET);
+      std::printf("%s%s%s (code=%u, detail=%ld)\n",
+                  LOG_COLOR_RED,
+                  st.msg,
+                  LOG_COLOR_RESET,
+                  static_cast<unsigned>(st.code),
+                  static_cast<long>(st.detail));
     }
-    delayMs(20);
   }
   std::printf("\nPassed: %s%d%s/%d\n", okColor(passed == numTests), passed, LOG_COLOR_RESET, numTests);
   if (passed == 0) {
     std::printf("\n%sAll commands failed!%s Check:\n", LOG_COLOR_RED, LOG_COLOR_RESET);
-    std::printf("  - Is device address 0? (default)\n");
-    std::printf("  - Datasheet command compatibility\n");
+    std::printf("  - driver initialization and health\n");
+    std::printf("  - device address and physical bus\n");
   } else if (passed < numTests) {
-    std::printf("\n%sSome commands failed%s - may be normal depending on device state\n",
+    std::printf("\n%sSome commands failed%s - inspect the precise status above\n",
                 LOG_COLOR_YELLOW,
                 LOG_COLOR_RESET);
   }
@@ -1377,7 +1419,8 @@ public:
     s.isFirstByte = true;
     s.haveLowByte = false;
     s.active = true;
-    std::printf("[SNIFF] ON - 'sniff 0' to stop\n");
+    std::printf("[SNIFF] ON - use 'sniff' to stop\n");
+    std::printf("[SNIFF] WARNING: synchronous decode output perturbs E2 timing\n");
   }
 
   void stop() {
@@ -1393,13 +1436,6 @@ public:
 
   bool isActive() const {
     return snifferState().active;
-  }
-
-  void tick(const EE871::Config& cfg) {
-    if (!isActive()) {
-      return;
-    }
-    onLineSample(ee871_idf::readScl(cfg.busUser), ee871_idf::readSda(cfg.busUser));
   }
 };
 
@@ -1816,6 +1852,12 @@ void processCommand(const char* input) {
   line[sizeof(line) - 1U] = '\0';
   char* trimmed = trimInPlace(line);
   if (trimmed[0] == '\0') {
+    return;
+  }
+
+  if (std::strcmp(trimmed, LINE_TOO_LONG_MARKER) == 0) {
+    logWarn("Input line too long (maximum %u characters)",
+            static_cast<unsigned>(MAX_LINE_LENGTH));
     return;
   }
 
@@ -2392,7 +2434,7 @@ void processCommand(const char* input) {
     }
     diag::testTransaction(deviceCfg, static_cast<uint8_t>(value));
   } else if (std::strcmp(trimmed, "libtest") == 0) {
-    diag::testLibraryCommands(deviceCfg);
+    diag::testLibraryCommands(device);
   } else if (std::strcmp(trimmed, "selftest") == 0) {
     runSelfTest();
   } else if (std::strcmp(trimmed, "stress_mix") == 0) {
@@ -2456,7 +2498,9 @@ bool pollLine(char* out, size_t outCap) {
         len = 0;
         buffer[0] = '\0';
         overflowed = false;
-        continue;
+        std::strncpy(out, LINE_TOO_LONG_MARKER, outCap - 1U);
+        out[outCap - 1U] = '\0';
+        return true;
       }
       if (len == 0U) {
         continue;
@@ -2544,7 +2588,6 @@ extern "C" void app_main(void) {
   bool promptPending = false;
   while (true) {
     device.tick(nowMs());
-    diag::sniffer().tick(deviceCfg);
     if (!promptPending && pollLine(line, sizeof(line))) {
       processCommand(line);
       promptPending = true;

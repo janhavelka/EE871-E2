@@ -9,12 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added native coverage for generated-clock and byte-budget boundaries,
+  stuck-line startup diagnostics, reset recovery and health neutrality, and
+  tracked-failure short-circuit behavior during an absent-sensor sample burst.
+- Added a completed finding-by-finding code-audit resolution report.
 - Added a native test asserting low/high byte order for every adjacent
   custom-memory register pair (firmware version, global interval, CO2 offset,
   CO2 gain), which the zero-valued fake defaults previously left unverified.
 
 ### Changed
 
+- Consolidated startup and public E2 recovery clocks in one private raw reset
+  helper, with a stretch-aware STOP and bounded SCL polling shared with normal
+  transfers.
+- `begin()` now validates the actual generated E2 period against the 500 Hz
+  minimum and rejects byte budgets that cannot exceed a nominal nine-bit byte.
+- ESP-IDF scanner and library-command diagnostics now match the Arduino
+  hardening: five scan attempts, PEC-gated discovery, separate invalid-response
+  reporting, and production driver reads for `libtest`.
+- Both example CLIs explicitly report overlength input and warn that synchronous
+  sniffer output perturbs E2 timing; the ineffective IDF poll sniffer was
+  removed and IDF component-name coupling is documented.
+- Simplified static contract tooling to direct forbidden/dispatch checks and
+  removed HIL summary keys that only belong to the soak runner.
 - Adjacent custom-memory register pairs (firmware version, global interval,
   CO2 offset, CO2 gain, and the interval write verify) are now read with one
   pointer set plus auto-increment reads, matching the AN1611-1 procedure and
@@ -22,6 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- START now verifies that SDA actually goes low, reporting `BUS_STUCK` for a
+  line held high instead of a later misleading control-byte `NACK`.
+- Clock-stretch polling now clips its final poll to the remaining deadline
+  instead of overshooting non-multiple-of-five timeouts.
+- Whole-byte deadlines now cover both clock stretching and nominal bit phases.
 - Fixed the ESP-IDF example GPIO transport: `GPIO_MODE_OUTPUT_OD` disables the
   pad input buffer so `gpio_get_level()` always read 0, breaking clock-stretch
   detection and bus-idle checks; now `GPIO_MODE_INPUT_OUTPUT_OD`.

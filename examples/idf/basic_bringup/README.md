@@ -15,6 +15,10 @@ feature/capability inspection, configuration/calibration helpers, register/raw
 access, diagnostics, bus reset, trace, self-test, stress, and mixed stress
 workflows.
 
+The `sniff` command prints decoded edges synchronously from the transport path.
+This perturbs E2 timing; sniffer-enabled traffic is diagnostic only and is not
+valid timing or protocol-stability evidence.
+
 - Default SCL: GPIO7
 - Default SDA: GPIO6
 - Default E2 address: `0`
@@ -23,6 +27,11 @@ workflows.
 
 Change the GPIO constants in `main/main.cpp` for your board. Build and monitor
 with ESP-IDF:
+
+The example discovers the root library through `EXTRA_COMPONENT_DIRS` and its
+`REQUIRES "EE871-E2"` entry uses the checkout directory as the ESP-IDF component
+name. Keep the repository directory named `EE871-E2`, or update that `REQUIRES`
+entry to match the checkout directory name.
 
 ```bash
 idf.py -C examples/idf/basic_bringup set-target esp32s3 build
