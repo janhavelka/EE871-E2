@@ -15,7 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added a completed finding-by-finding code-audit resolution report.
 - Added a native test asserting low/high byte order for every adjacent
   custom-memory register pair (firmware version, global interval, CO2 offset,
-  CO2 gain), which the zero-valued fake defaults previously left unverified.
+  CO2 gain, and both CO2 calibration points), which the zero-valued fake
+  defaults previously left unverified.
+- Added native coverage for full startup identity/capability rejection,
+  measurement values and high-byte failures, latched OFFLINE behavior, atomic
+  recovery, STOP cleanup, timing-limit boundaries, and SCL stuck high.
+- Added lexical source-scan tests so contract guards ignore comments and
+  literals without hiding real code after comment markers inside strings.
 
 ### Changed
 
@@ -23,15 +29,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   helper, with a stretch-aware STOP and bounded SCL polling shared with normal
   transfers.
 - `begin()` now validates the actual generated E2 period against the 500 Hz
-  minimum and rejects byte budgets that cannot exceed a nominal nine-bit byte.
+  minimum, enforces the E2 25 ms/bit and 35 ms/byte timeout maxima, rejects byte
+  budgets that cannot exceed a nominal nine-bit byte, and fails closed unless
+  group, subgroup, CO2 capability, and the complete feature cache validate.
 - ESP-IDF scanner and library-command diagnostics now match the Arduino
-  hardening: five scan attempts, PEC-gated discovery, separate invalid-response
-  reporting, and production driver reads for `libtest`.
+  hardening: both scanners use the production identity/status/PEC path for five
+  bounded attempts, and `libtest` uses production driver reads.
 - Both example CLIs explicitly report overlength input and warn that synchronous
   sniffer output perturbs E2 timing; the ineffective IDF poll sniffer was
   removed and IDF component-name coupling is documented.
-- Simplified static contract tooling to direct forbidden/dispatch checks and
-  removed HIL summary keys that only belong to the soak runner.
+- Static contract tooling now uses one small C/C++ lexical scanner, scopes
+  command checks to command processors, accepts harmless whitespace changes,
+  and removes HIL summary keys that only belong to the soak runner.
 - Adjacent custom-memory register pairs (firmware version, global interval,
   CO2 offset, CO2 gain, and the interval write verify) are now read with one
   pointer set plus auto-increment reads, matching the AN1611-1 procedure and
@@ -44,6 +53,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Clock-stretch polling now clips its final poll to the remaining deadline
   instead of overshooting non-multiple-of-five timeouts.
 - Whole-byte deadlines now cover both clock stretching and nominal bit phases.
+- Whole-byte deadline failures are detected before a bit starts or reserve the
+  complete remaining high/low phases, so timeout handling cannot truncate a
+  protocol minimum. START now allows configured high settling before sampling
+  SDA, and STOP verifies both SDA levels while releasing both master lines on
+  every cleanup failure.
+- OFFLINE is now fail-fast and latched for ordinary transfers. Recovery resets
+  and validates complete identity plus feature flags atomically, so partial
+  successful reads, a failed cache refresh, or an incompatible responding
+  device cannot restore READY or expose partially refreshed capabilities.
+- Responding devices with the wrong group/subgroup or missing CO2 capability
+  now return `NOT_SUPPORTED`; absence/transport failures retain their precise
+  NACK, timeout, PEC, or bus-stuck status.
+- Timing discovery no longer offers out-of-spec 50/75 us phases or mislabels a
+  2,010 us generated period as 500 Hz; both examples use valid candidates and
+  report frequency including the 10 us data-setup phase.
 - Fixed the ESP-IDF example GPIO transport: `GPIO_MODE_OUTPUT_OD` disables the
   pad input buffer so `gpio_get_level()` always read 0, breaking clock-stretch
   detection and bus-idle checks; now `GPIO_MODE_INPUT_OUTPUT_OD`.

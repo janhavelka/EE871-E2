@@ -52,8 +52,8 @@ jobs:
       - name: Enforce core timing guard
         run: python tools/check_core_timing_guard.py
 
-      - name: Run HIL runner parser tests
-        run: python -m unittest discover -s test -p "test_hil_runner_parser.py"
+      - name: Run Python tool tests
+        run: python -m unittest discover -s test -p "test_*.py"
 
       - name: Run native tests
         run: pio test -e native

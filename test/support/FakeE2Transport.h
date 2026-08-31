@@ -36,14 +36,19 @@ public:
     _scheduledStretchUs = 0;
     _sclReleaseAtElapsedUs = 0;
     _sclReleaseScheduled = false;
+    _sclStuckHigh = false;
     _sdaStuckLow = false;
     _sdaStuckHigh = false;
     _sdaReleaseAfterClockRises = 0;
+    _sdaReleaseAtElapsedUs = 0;
+    _sdaReleaseScheduled = false;
     _corruptReadPec = false;
     _corruptNextCustomReadPec = false;
     _corruptNextCustomReadAddress = 0;
     _failNextWriteEnabled = false;
     _failNextWriteAddress = 0;
+    _failNextReadEnabled = false;
+    _failNextReadMain = 0;
     _dropWriteEnabled = false;
     _dropWriteAddress = 0;
     _dropNextWriteEnabled = false;
@@ -51,6 +56,9 @@ public:
     _statusByte = 0;
     _mv3 = 600;
     _mv4 = 650;
+    _group = EE871::cmd::SENSOR_GROUP_ID;
+    _subgroup = EE871::cmd::SENSOR_SUBGROUP_ID;
+    _availableMeasurements = EE871::cmd::AVAILABLE_MEAS_MASK;
 
     for (size_t i = 0; i < EE871::cmd::CUSTOM_MEMORY_SIZE; ++i) {
       _memory[i] = 0;
@@ -99,6 +107,8 @@ public:
   }
 
   uint32_t elapsedUs() const { return _elapsedUs; }
+  bool masterSclReleased() const { return _masterSclReleased; }
+  bool masterSdaReleased() const { return _masterSdaReleased; }
 
   void setDevicePresent(bool present) { _devicePresent = present; }
   void setHoldSclLow(bool hold) {
@@ -113,9 +123,15 @@ public:
   }
   void setSdaStuckLow(bool stuck) { _sdaStuckLow = stuck; }
   void setSdaStuckHigh(bool stuck) { _sdaStuckHigh = stuck; }
+  void setSclStuckHigh(bool stuck) { _sclStuckHigh = stuck; }
   void releaseSdaAfterClockRises(uint8_t count) {
     _sdaStuckLow = count != 0U;
     _sdaReleaseAfterClockRises = count;
+  }
+  void releaseSdaAfterUs(uint32_t delay) {
+    _sdaStuckLow = true;
+    _sdaReleaseAtElapsedUs = _elapsedUs + delay;
+    _sdaReleaseScheduled = true;
   }
   void setCorruptReadPec(bool corrupt) { _corruptReadPec = corrupt; }
   void corruptNextCustomReadPec(uint8_t address) {
@@ -125,6 +141,17 @@ public:
 
   void setMemory(uint8_t address, uint8_t value) { _memory[address] = value; }
   uint8_t memory(uint8_t address) const { return _memory[address]; }
+  void setGroup(uint16_t group) { _group = group; }
+  void setSubgroup(uint8_t subgroup) { _subgroup = subgroup; }
+  void setAvailableMeasurements(uint8_t bits) { _availableMeasurements = bits; }
+  void setStatus(uint8_t status) { _statusByte = status; }
+  void setMv3(uint16_t value) { _mv3 = value; }
+  void setMv4(uint16_t value) { _mv4 = value; }
+
+  void nackNextReadMainCommand(uint8_t mainCommand) {
+    _failNextReadMain = mainCommand;
+    _failNextReadEnabled = true;
+  }
 
   void failNextWriteToAddress(uint8_t address) {
     _failNextWriteAddress = address;
@@ -210,6 +237,9 @@ private:
   }
 
   bool readScl() const {
+    if (_sclStuckHigh) {
+      return true;
+    }
     return _masterSclReleased && !_holdSclLow;
   }
 
@@ -235,6 +265,11 @@ private:
       if (_masterSclReleased) {
         onSclRising();
       }
+    }
+    if (_sdaStuckLow && _sdaReleaseScheduled &&
+        _elapsedUs >= _sdaReleaseAtElapsedUs) {
+      _sdaStuckLow = false;
+      _sdaReleaseScheduled = false;
     }
   }
 
@@ -380,6 +415,11 @@ private:
     if (!_devicePresent) {
       return false;
     }
+    if (_phase == Phase::ACK_CONTROL && controlIsRead() &&
+        _failNextReadEnabled && mainCommand() == _failNextReadMain) {
+      _failNextReadEnabled = false;
+      return false;
+    }
     if (_phase == Phase::ACK_ADDRESS &&
         mainCommand() == EE871::cmd::MAIN_CUSTOM_WRITE &&
         _failNextWriteEnabled &&
@@ -421,13 +461,13 @@ private:
     const uint8_t main = mainCommand();
     switch (main) {
       case EE871::cmd::MAIN_TYPE_LO:
-        return static_cast<uint8_t>(EE871::cmd::SENSOR_GROUP_ID & 0xFF);
+        return static_cast<uint8_t>(_group & 0xFF);
       case EE871::cmd::MAIN_TYPE_HI:
-        return static_cast<uint8_t>(EE871::cmd::SENSOR_GROUP_ID >> 8);
+        return static_cast<uint8_t>(_group >> 8);
       case EE871::cmd::MAIN_TYPE_SUB:
-        return EE871::cmd::SENSOR_SUBGROUP_ID;
+        return _subgroup;
       case EE871::cmd::MAIN_AVAIL_MEAS:
-        return EE871::cmd::AVAILABLE_MEAS_MASK;
+        return _availableMeasurements;
       case EE871::cmd::MAIN_STATUS:
         return _statusByte;
       case EE871::cmd::MAIN_MV3_LO:
@@ -514,14 +554,19 @@ private:
   uint32_t _scheduledStretchUs = 0;
   uint32_t _sclReleaseAtElapsedUs = 0;
   bool _sclReleaseScheduled = false;
+  bool _sclStuckHigh = false;
   bool _sdaStuckLow = false;
   bool _sdaStuckHigh = false;
   uint8_t _sdaReleaseAfterClockRises = 0;
+  uint32_t _sdaReleaseAtElapsedUs = 0;
+  bool _sdaReleaseScheduled = false;
   bool _corruptReadPec = false;
   bool _corruptNextCustomReadPec = false;
   uint8_t _corruptNextCustomReadAddress = 0;
   bool _failNextWriteEnabled = false;
   uint8_t _failNextWriteAddress = 0;
+  bool _failNextReadEnabled = false;
+  uint8_t _failNextReadMain = 0;
   bool _dropWriteEnabled = false;
   uint8_t _dropWriteAddress = 0;
   bool _dropNextWriteEnabled = false;
@@ -529,6 +574,9 @@ private:
   uint8_t _statusByte = 0;
   uint16_t _mv3 = 0;
   uint16_t _mv4 = 0;
+  uint16_t _group = 0;
+  uint8_t _subgroup = 0;
+  uint8_t _availableMeasurements = 0;
   uint8_t _memory[EE871::cmd::CUSTOM_MEMORY_SIZE] = {};
 };
 

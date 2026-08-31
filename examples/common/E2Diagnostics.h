@@ -383,12 +383,12 @@ inline void scanAddresses(const EE871::Config& cfg) {
   static constexpr uint16_t SCAN_RETRY_GAP_MS = 200;
 
   Serial.printf("%s=== E2 Address Scanner ===%s\n", LOG_COLOR_CYAN, LOG_COLOR_RESET);
-  Serial.printf("Scanning addresses 0-7 with status read (0x7x), up to %u attempts...\n\n",
+  Serial.printf("Scanning addresses 0-7 with library identity + status reads, up to %u attempts...\n\n",
                 static_cast<unsigned>(SCAN_ATTEMPTS));
 
   bool found[8] = {};
-  bool invalidResponse[8] = {};
   uint8_t status[8] = {};
+  EE871::Status lastError[8] = {};
 
   for (uint8_t attempt = 0; attempt < SCAN_ATTEMPTS; ++attempt) {
     for (uint8_t addr = 0; addr < 8; ++addr) {
@@ -396,29 +396,21 @@ inline void scanAddresses(const EE871::Config& cfg) {
         continue;
       }
 
-      const uint8_t ctrlByte =
-          EE871::cmd::makeControlRead(EE871::cmd::MAIN_STATUS, addr);
-
-      sendStart(cfg);
-      const bool ack = sendByteRaw(cfg, ctrlByte, false);
-
-      if (ack) {
-        const uint8_t candidateStatus = readByteRaw(cfg, true, false);  // ACK
-        const uint8_t pec = readByteRaw(cfg, false, false);  // NACK
-        sendStop(cfg);
-
-        const uint8_t expectedPec =
-            static_cast<uint8_t>(ctrlByte + candidateStatus);
-        if (pec == expectedPec) {
-          status[addr] = candidateStatus;
-          found[addr] = true;
-        } else {
-          // An ACK sample alone is not device discovery. A complete E2
-          // response must also carry a valid PEC.
-          invalidResponse[addr] = true;
-        }
-      } else {
-        sendStop(cfg);
+      EE871::Config candidateCfg = cfg;
+      candidateCfg.deviceAddress = addr;
+      EE871::EE871 candidate;
+      EE871::Status st = candidate.begin(candidateCfg);
+      uint8_t candidateStatus = 0;
+      if (st.ok()) {
+        st = candidate.readStatus(candidateStatus);
+      }
+      candidate.end();
+      if (lastError[addr].ok() || st.code != EE871::Err::NACK) {
+        lastError[addr] = st;
+      }
+      if (st.ok()) {
+        status[addr] = candidateStatus;
+        found[addr] = true;
       }
 
       delay(10);
@@ -432,27 +424,27 @@ inline void scanAddresses(const EE871::Config& cfg) {
   int foundCount = 0;
   for (uint8_t addr = 0; addr < 8; ++addr) {
     if (found[addr]) {
-      Serial.printf("  Address %d: %sFOUND%s Status=0x%02X, PEC=%s%s%s\n",
+      Serial.printf("  Address %d: %sFOUND compatible EE871%s Status=0x%02X\n",
                     addr,
                     LOG_COLOR_GREEN,
                     LOG_COLOR_RESET,
-                    status[addr],
-                    LOG_COLOR_GREEN,
-                    "OK",
-                    LOG_COLOR_RESET);
+                    status[addr]);
       ++foundCount;
-    } else if (invalidResponse[addr]) {
-      Serial.printf("  Address %d: %sInvalid response after %u attempts "
-                    "(PEC mismatch; not a device)%s\n",
-                    addr,
-                    LOG_COLOR_RED,
-                    static_cast<unsigned>(SCAN_ATTEMPTS),
-                    LOG_COLOR_RESET);
-    } else {
-      Serial.printf("  Address %d: %sNo response after %u attempts (NACK)%s\n",
+    } else if (lastError[addr].code == EE871::Err::NACK) {
+      Serial.printf("  Address %d: %sNo complete compatible response after %u "
+                    "attempts (last: NACK)%s\n",
                     addr,
                     neutralColor(),
                     static_cast<unsigned>(SCAN_ATTEMPTS),
+                    LOG_COLOR_RESET);
+    } else {
+      Serial.printf("  Address %d: %sNo compatible response after %u attempts: "
+                    "%s (detail=%ld)%s\n",
+                    addr,
+                    LOG_COLOR_RED,
+                    static_cast<unsigned>(SCAN_ATTEMPTS),
+                    lastError[addr].msg,
+                    static_cast<long>(lastError[addr].detail),
                     LOG_COLOR_RESET);
     }
   }
@@ -468,69 +460,61 @@ inline void scanAddresses(const EE871::Config& cfg) {
 // ============================================================================
 
 struct TimingResult {
-  uint16_t clockUs;
-  bool gotAck;
   uint8_t data;
-  bool pecOk;
+  EE871::Status status;
 };
 
 /// Try a single timing and return result
 inline TimingResult tryTiming(const EE871::Config& cfg, uint16_t clockUs) {
-  TimingResult result = {clockUs, false, 0, false};
+  TimingResult result = {0, EE871::Status::Ok()};
   
   // Create modified config with different timing
   EE871::Config testCfg = cfg;
   testCfg.clockLowUs = clockUs;
   testCfg.clockHighUs = clockUs;
   
-  // Status read at address 0
-  uint8_t ctrlByte = EE871::cmd::makeControlRead(EE871::cmd::MAIN_STATUS, 0);
-  
-  sendStart(testCfg);
-  result.gotAck = sendByteRaw(testCfg, ctrlByte, false);
-  
-  if (result.gotAck) {
-    result.data = readByteRaw(testCfg, true, false);
-    uint8_t pec = readByteRaw(testCfg, false, false);
-    uint8_t expectedPec = (ctrlByte + result.data) & 0xFF;
-    result.pecOk = (pec == expectedPec);
+  EE871::EE871 candidate;
+  result.status = candidate.begin(testCfg);
+  if (result.status.ok()) {
+    result.status = candidate.readStatus(result.data);
   }
-  
-  sendStop(testCfg);
+  candidate.end();
   return result;
 }
 
 /// Discover working timing/frequency
 inline void discoverTiming(const EE871::Config& cfg) {
   Serial.printf("%s=== Timing Discovery ===%s\n", LOG_COLOR_CYAN, LOG_COLOR_RESET);
-  Serial.println("Testing different clock periods...\n");
-  Serial.println("E2 spec: 100-1000us (500-5000 Hz)\n");
+  Serial.println("Testing valid symmetric high/low timings with the production driver...\n");
+  Serial.println("E2 limits: each phase >=100us; transmitted clock 500-5000 Hz\n");
   
-  // Test various timings from slow to fast
-  uint16_t timings[] = {1000, 500, 250, 200, 150, 100, 75, 50};
+  // The core also emits a 10 us data-setup phase, so 995+995 us is the
+  // slowest symmetric setting that remains at 500 Hz.
+  uint16_t timings[] = {995, 500, 250, 200, 150, 100};
   int numTimings = sizeof(timings) / sizeof(timings[0]);
   
   int foundCount = 0;
   
   for (int i = 0; i < numTimings; i++) {
     uint16_t clockUs = timings[i];
-    float freqHz = 1000000.0f / (2 * clockUs);
+    float freqHz = 1000000.0f / (10.0f + 2.0f * clockUs);
     
     auto result = tryTiming(cfg, clockUs);
     
     Serial.printf("  %4u us (%5.0f Hz): ", clockUs, freqHz);
     
-    if (result.gotAck) {
-      Serial.printf("%sACK%s, data=0x%02X, PEC=%s%s%s\n",
+    if (result.status.ok()) {
+      Serial.printf("%sOK%s, data=0x%02X (identity + PEC validated)\n",
                     LOG_COLOR_GREEN,
                     LOG_COLOR_RESET,
-                    result.data,
-                    okColor(result.pecOk),
-                    result.pecOk ? "OK" : "BAD",
-                    LOG_COLOR_RESET);
+                    result.data);
       foundCount++;
     } else {
-      Serial.printf("%sNACK%s\n", LOG_COLOR_RED, LOG_COLOR_RESET);
+      Serial.printf("%s%s%s (detail=%ld)\n",
+                    LOG_COLOR_RED,
+                    result.status.msg,
+                    LOG_COLOR_RESET,
+                    static_cast<long>(result.status.detail));
     }
     
     delay(50);  // Gap between tests
@@ -735,7 +719,7 @@ inline void runFullDiagnostics(const EE871::Config& cfg) {
                 static_cast<transport::E2Pins*>(cfg.busUser)->scl);
   Serial.printf("Timing: LOW=%u us, HIGH=%u us (%.0f Hz)\n\n",
                 cfg.clockLowUs, cfg.clockHighUs,
-                1000000.0f / (cfg.clockLowUs + cfg.clockHighUs));
+                1000000.0f / (10.0f + cfg.clockLowUs + cfg.clockHighUs));
   
   Serial.printf("%s[Step 1] Bus Levels%s\n", LOG_COLOR_GREEN, LOG_COLOR_RESET);
   printBusLevels(cfg);

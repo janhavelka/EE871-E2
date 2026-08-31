@@ -5,6 +5,8 @@ import pathlib
 import re
 import sys
 
+from source_scan import strip_cpp_comments, strip_cpp_non_code
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 ARDUINO_MAIN = ROOT / "examples" / "01_basic_bringup_cli" / "main.cpp"
 IDF_MAIN = ROOT / "examples" / "idf" / "basic_bringup" / "main" / "main.cpp"
@@ -62,6 +64,13 @@ IDF_REQUIRED_PATTERNS = {
     "library test dispatch": r"testLibraryCommands\s*\(\s*device\s*\)",
 }
 
+PROCESS_COMMAND_PATTERNS = {
+    "dirty command dispatch",
+    "resync command dispatch",
+    "resync before after output",
+    "library test dispatch",
+}
+
 STALE_IDF_WORDING = [
     "minimal idf example",
     "minimal esp-idf example",
@@ -94,9 +103,10 @@ def extract_section(text: str, start: str, end: str) -> str:
 
 
 def main() -> int:
-    arduino = read(ARDUINO_MAIN)
-    idf = read(IDF_MAIN)
-    transport = read(IDF_TRANSPORT)
+    arduino = strip_cpp_comments(read(ARDUINO_MAIN))
+    idf = strip_cpp_comments(read(IDF_MAIN))
+    transport = strip_cpp_comments(read(IDF_TRANSPORT))
+    process_command = extract_section(idf, "void processCommand", "void configureConsoleInput")
 
     arduino_sections, arduino_items = extract_help(arduino)
     idf_sections, idf_items = extract_help(idf)
@@ -114,42 +124,57 @@ def main() -> int:
             fail(f"IDF CLI missing required fragment: {fragment!r}")
 
     for label, pattern in IDF_REQUIRED_PATTERNS.items():
-        if re.search(pattern, idf) is None:
+        scope = process_command if label in PROCESS_COMMAND_PATTERNS else idf
+        if re.search(pattern, scope) is None:
             fail(f"IDF CLI missing {label}")
 
     scanner = extract_section(idf, "void scanAddresses", "struct TimingResult")
-    if re.search(r"SCAN_ATTEMPTS\s*=\s*5\s*;", scanner) is None:
+    scanner_code = strip_cpp_non_code(scanner)
+    if re.search(r"SCAN_ATTEMPTS\s*=\s*5\s*;", scanner_code) is None:
         fail("IDF scanner must use five bounded attempts")
     if re.search(
         r"for\s*\(\s*uint8_t\s+attempt\s*=\s*0\s*;"
         r"\s*attempt\s*<\s*SCAN_ATTEMPTS\s*;\s*\+\+attempt\s*\)",
-        scanner,
+        scanner_code,
     ) is None:
         fail("IDF scanner must retry through SCAN_ATTEMPTS")
-    if scanner.count("found[addr] = true") != 1:
-        fail("IDF scanner must have exactly one successful discovery assignment")
-    pec_gate_pattern = (
-        r"if\s*\(\s*pec\s*==\s*expectedPec\s*\)\s*\{"
-        r"[\s\S]*?found\s*\[\s*addr\s*\]\s*=\s*true\s*;"
-        r"[\s\S]*?\}\s*else\s*\{"
-        r"[\s\S]*?invalidResponse\s*\[\s*addr\s*\]\s*=\s*true\s*;"
-        r"[\s\S]*?\}"
+    success_gate = (
+        r"if\s*\(\s*st\s*\.\s*ok\s*\(\s*\)\s*\)\s*\{\s*"
+        r"status\s*\[\s*addr\s*\]\s*=\s*candidateStatus\s*;\s*"
+        r"found\s*\[\s*addr\s*\]\s*=\s*true\s*;\s*\}"
     )
-    if re.search(pec_gate_pattern, scanner) is None:
-        fail("IDF scanner must gate discovery on PEC and flag invalid responses")
-    if "found++" in scanner:
+    if len(re.findall(success_gate, scanner_code)) != 1:
+        fail("IDF scanner must gate its only discovery assignment on final success")
+    retained_error = (
+        r"if\s*\(\s*lastError\s*\[\s*addr\s*\]\s*\.\s*ok\s*\(\s*\)\s*"
+        r"\|\|\s*st\s*\.\s*code\s*!=\s*EE871::Err::NACK\s*\)\s*\{\s*"
+        r"lastError\s*\[\s*addr\s*\]\s*=\s*st\s*;\s*\}"
+    )
+    if re.search(retained_error, scanner_code) is None:
+        fail("IDF scanner must retain non-NACK evidence across later attempts")
+    if re.search(r"candidate\s*\.\s*begin\s*\(", scanner_code) is None:
+        fail("IDF scanner must use production begin() identity validation")
+    if re.search(r"candidate\s*\.\s*readStatus\s*\(", scanner_code) is None:
+        fail("IDF scanner must use the production status/PEC path")
+    for raw_call in ("sendStart", "sendByteRaw", "readByteRaw"):
+        if re.search(rf"\b{raw_call}\s*\(", scanner_code):
+            fail(f"IDF scanner still uses raw diagnostic call {raw_call!r}")
+    if re.search(r"\bfound\s*\+\+", scanner_code):
         fail("IDF scanner still counts ACK-only responses")
 
     libtest = extract_section(idf, "void testLibraryCommands", "void runFullDiagnostics")
-    if "void testLibraryCommands(EE871::EE871& driver)" not in libtest:
+    libtest_code = strip_cpp_non_code(libtest)
+    if re.search(
+        r"void\s+testLibraryCommands\s*\(\s*EE871::EE871\s*&\s*driver\s*\)",
+        libtest_code,
+    ) is None:
         fail("IDF library test must accept the initialized driver")
-    if "driver.readControlByte(" not in libtest:
+    if re.search(r"driver\s*\.\s*readControlByte\s*\(", libtest_code) is None:
         fail("IDF library test must use the production control-byte path")
-    for raw_call in ("sendStart(", "sendByteRaw(", "readByteRaw("):
-        if raw_call in libtest:
+    for raw_call in ("sendStart", "sendByteRaw", "readByteRaw"):
+        if re.search(rf"\b{raw_call}\s*\(", libtest_code):
             fail(f"IDF library test still uses raw diagnostic call {raw_call!r}")
 
-    process_command = extract_section(idf, "void processCommand", "void configureConsoleInput")
     warning_pattern = (
         r"if\s*\(\s*std::strcmp\s*\(\s*trimmed\s*,\s*LINE_TOO_LONG_MARKER\s*\)"
         r"\s*==\s*0\s*\)\s*\{"

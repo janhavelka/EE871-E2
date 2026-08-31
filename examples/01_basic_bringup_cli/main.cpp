@@ -555,7 +555,7 @@ void printHelp() {
   cli::printHelpItem("timing", "Try different clock frequencies");
   cli::printHelpItem("busreset", "Send 9 clocks to recover stuck bus");
   cli::printHelpItem("tx <hex>", "Test transaction with control byte");
-  cli::printHelpItem("libtest", "Test all library commands (begin uses)");
+  cli::printHelpItem("libtest", "Test library control-byte read path");
   cli::printHelpItem("caps", "Print feature capability booleans");
   cli::printHelpItem("trace stats", "Show bus trace buffer stats");
   cli::printHelpItem("trace clear", "Clear buffered trace events");
@@ -701,7 +701,7 @@ void runStressMix(int count) {
         uint16_t group = 0;
         st = device.readGroup(group);
         if (st.ok() && group != EE871::cmd::SENSOR_GROUP_ID) {
-          st = EE871::Status::Error(EE871::Err::DEVICE_NOT_FOUND, "unexpected group", group);
+          st = EE871::Status::Error(EE871::Err::NOT_SUPPORTED, "unexpected group", group);
         }
         break;
       }
@@ -709,7 +709,7 @@ void runStressMix(int count) {
         uint8_t subgroup = 0;
         st = device.readSubgroup(subgroup);
         if (st.ok() && subgroup != EE871::cmd::SENSOR_SUBGROUP_ID) {
-          st = EE871::Status::Error(EE871::Err::DEVICE_NOT_FOUND, "unexpected subgroup", subgroup);
+          st = EE871::Status::Error(EE871::Err::NOT_SUPPORTED, "unexpected subgroup", subgroup);
         }
         break;
       }

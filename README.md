@@ -221,7 +221,8 @@ void loop() {
 }
 ```
 
-This quick start proves transport setup and identity only. `readCo2Fast()` and
+This quick start proves transport setup, the EE871 group/subgroup, CO2
+capability, and a complete feature-cache read. `readCo2Fast()` and
 `readCo2Average()` are raw MV3/MV4 reads: they do not check status, warm-up,
 freshness, or the product-specific valid ppm range. A sampling application
 should wait for its warm-up policy, read the selected measured value first,
@@ -252,6 +253,13 @@ for compatibility and are not returned by the current synchronous driver;
 `begin()` and `end()` paths clear stale runtime/cached feature state so later
 diagnostics do not report old sensor capabilities.
 
+OFFLINE is latched. Ordinary bus reads and writes return the last precise
+tracked failure immediately, without touching the E2 lines or changing health
+counters. `probe()` may still inspect the bus without changing health.
+`recover()` is the only path back to READY: it performs a bounded reset and
+validates group, subgroup, and CO2 capability, atomically refreshes feature
+flags, then records the complete recovery as one health event.
+
 Cache-only diagnostics are available through `SettingsSnapshot`,
 `getSettings(SettingsSnapshot&)`, `getSettings()`, `isInitialized()`,
 `getConfig()`, `driverState()`, `healthState()`, and `offlineThreshold()`.
@@ -263,8 +271,10 @@ time, and `tick(nowMs)` only records the latest application timestamp for
 diagnostics. `begin()` validates the generated bit period
 (`10 + clockLowUs + clockHighUs`) against the 500 Hz minimum and requires
 `byteTimeoutUs` to exceed the nominal nine-bit byte time. Clock stretching is
-bounded by `bitTimeoutUs` and the per-byte budget; flash writes are bounded by
-`writeDelayMs` or `intervalWriteDelayMs` with max 5000 ms validation.
+bounded by `bitTimeoutUs` and the per-byte budget without shortening a required
+clock-high or clock-low phase. E2 maxima are enforced at 25,000 us per bit and
+35,000 us per byte. Flash writes are bounded by `writeDelayMs` or
+`intervalWriteDelayMs` with max 5000 ms validation.
 
 The library never owns GPIO pins or an I2C/Wire instance. Applications provide `setScl`, `setSda`, `readScl`, `readSda`, and `delayUs` callbacks.
 

@@ -64,14 +64,14 @@ struct Config {
   uint16_t startHoldUs = 100;     ///< START hold time, must be >= 4 us.
   uint16_t stopHoldUs = 100;      ///< STOP hold time, must be >= 4 us.
 
-  uint32_t bitTimeoutUs = 25000;  ///< Clock-stretch timeout per bit, must be > 0.
-  uint32_t byteTimeoutUs = 35000; ///< Byte deadline; must exceed nominal time and be >= bitTimeoutUs.
+  uint32_t bitTimeoutUs = 25000;  ///< Per-bit stretch timeout: 1..25000 us.
+  uint32_t byteTimeoutUs = 35000; ///< Byte deadline: <=35000 us, > nominal time, >= bit timeout.
 
   uint32_t writeDelayMs = 150;    ///< Flash write delay after a 0x10 custom write, max 5000 ms.
   uint32_t intervalWriteDelayMs = 300; ///< Flash delay for 0xC6/0xC7 pair, max 5000 ms.
 
   // === Health Tracking ===
-  uint8_t offlineThreshold = 5;   ///< Tracked E2 transfer failures before OFFLINE; zero normalizes to 1.
+  uint8_t offlineThreshold = 5;   ///< Consecutive tracked failures before OFFLINE; zero normalizes to 1.
 };
 
 } // namespace EE871

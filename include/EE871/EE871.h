@@ -87,11 +87,10 @@ public:
 
   /// Initialize the driver with configuration.
   ///
-  /// begin() validates timing and callbacks, normalizes configuration, and
-  /// verifies the EE871 group identifier. It then attempts to cache feature
-  /// flags. A feature-cache read failure is non-fatal and leaves all optional
-  /// capabilities disabled; use the explicit identity/feature read APIs when
-  /// the application requires subgroup, CO2 capability, or feature proof.
+  /// begin() validates timing and callbacks, normalizes configuration, verifies
+  /// the EE871 group/subgroup and CO2 capability, and caches feature flags.
+  /// Identity, capability, or feature-cache transfer failures fail
+  /// initialization closed with their precise status.
   /// The driver does not configure GPIO, pins, pull-ups, tasks, locks, or
   /// framework handles.
   /// @param config Configuration including E2 transport callbacks.
@@ -119,18 +118,18 @@ public:
 
   /// Check if device is present on the bus.
   ///
-  /// probe() reads and validates the group identifier through raw diagnostic
-  /// transfers. It does not validate subgroup/CO2 capability and does not
-  /// update health counters or driver state.
-  /// @return Status::Ok() if the expected group responds, error otherwise.
+  /// probe() validates the group, subgroup, and CO2 capability through raw
+  /// diagnostic transfers. It does not update health counters or driver state.
+  /// @return Status::Ok() if a compatible EE871 responds, error otherwise.
   Status probe();
 
   /// Attempt to recover from DEGRADED/OFFLINE state.
   ///
-  /// Recovery performs a bounded bus reset, then a tracked group-identifier
-  /// read. It still attempts the tracked read when the bus reset reports an
-  /// error; the returned status is the group-read result.
-  /// @return Status::Ok() if device now responsive, error otherwise.
+  /// Recovery performs a bounded raw bus reset, complete raw identity check,
+  /// and atomic feature-cache refresh, then commits that attempt to health
+  /// once. A failed recovery leaves an OFFLINE driver OFFLINE with its previous
+  /// cache; only a fully compatible response restores READY.
+  /// @return Status::Ok() if a compatible device is responsive, error otherwise.
   Status recover();
 
   /// Re-read persistent configuration and clear dirty diagnostics when coherent.
@@ -361,8 +360,7 @@ public:
   // =========================================================================
   //
   // A false result means "not present in the current cache." Before successful
-  // begin(), or when the best-effort feature-cache read failed, false does not
-  // prove the physical device lacks that feature.
+  // begin(), false does not prove the physical device lacks that feature.
 
   /// Check if serial number is readable.
   /// @return true when cached feature flags advertise serial number support.
@@ -625,6 +623,12 @@ private:
                               bool* writeAccepted = nullptr);
   Status _customWriteDirect(uint8_t address, uint8_t value, bool* writeAccepted = nullptr);
   Status _busResetRaw();
+  Status _validateIdentityRaw();
+  Status _readFeatureFlagsRaw(uint8_t& operatingFunctions,
+                              uint8_t& operatingModeSupport,
+                              uint8_t& specialFeatures);
+  Status _recoverTracked();
+  Status _offlineStatus() const;
 
   // =========================================================================
   // Health Management

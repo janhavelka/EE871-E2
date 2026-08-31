@@ -654,7 +654,7 @@ void printHelp() {
   printHelpItem("timing", "Try different clock frequencies");
   printHelpItem("busreset", "Send 9 clocks to recover stuck bus");
   printHelpItem("tx <hex>", "Test transaction with control byte");
-  printHelpItem("libtest", "Test all library commands (begin uses)");
+  printHelpItem("libtest", "Test library control-byte read path");
   printHelpItem("caps", "Print feature capability booleans");
   printHelpItem("trace stats", "Show bus trace buffer stats");
   printHelpItem("trace clear", "Clear buffered trace events");
@@ -986,12 +986,12 @@ void scanAddresses(const EE871::Config& cfg) {
   static constexpr uint16_t SCAN_RETRY_GAP_MS = 200;
 
   std::printf("%s=== E2 Address Scanner ===%s\n", LOG_COLOR_CYAN, LOG_COLOR_RESET);
-  std::printf("Scanning addresses 0-7 with status read (0x7x), up to %u attempts...\n\n",
+  std::printf("Scanning addresses 0-7 with library identity + status reads, up to %u attempts...\n\n",
               static_cast<unsigned>(SCAN_ATTEMPTS));
 
   bool found[8] = {};
-  bool invalidResponse[8] = {};
   uint8_t status[8] = {};
+  EE871::Status lastError[8] = {};
 
   for (uint8_t attempt = 0; attempt < SCAN_ATTEMPTS; ++attempt) {
     for (uint8_t addr = 0; addr < 8U; ++addr) {
@@ -999,24 +999,21 @@ void scanAddresses(const EE871::Config& cfg) {
         continue;
       }
 
-      const uint8_t ctrlByte =
-          EE871::cmd::makeControlRead(EE871::cmd::MAIN_STATUS, addr);
-      sendStart(cfg);
-      const bool ack = sendByteRaw(cfg, ctrlByte, false);
-      if (ack) {
-        const uint8_t candidateStatus = readByteRaw(cfg, true, false);
-        const uint8_t pec = readByteRaw(cfg, false, false);
-        sendStop(cfg);
-        const uint8_t expectedPec =
-            static_cast<uint8_t>((ctrlByte + candidateStatus) & 0xFFU);
-        if (pec == expectedPec) {
-          status[addr] = candidateStatus;
-          found[addr] = true;
-        } else {
-          invalidResponse[addr] = true;
-        }
-      } else {
-        sendStop(cfg);
+      EE871::Config candidateCfg = cfg;
+      candidateCfg.deviceAddress = addr;
+      EE871::EE871 candidate;
+      EE871::Status st = candidate.begin(candidateCfg);
+      uint8_t candidateStatus = 0;
+      if (st.ok()) {
+        st = candidate.readStatus(candidateStatus);
+      }
+      candidate.end();
+      if (lastError[addr].ok() || st.code != EE871::Err::NACK) {
+        lastError[addr] = st;
+      }
+      if (st.ok()) {
+        status[addr] = candidateStatus;
+        found[addr] = true;
       }
       delayMs(10);
     }
@@ -1029,26 +1026,27 @@ void scanAddresses(const EE871::Config& cfg) {
   int foundCount = 0;
   for (uint8_t addr = 0; addr < 8U; ++addr) {
     if (found[addr]) {
-      std::printf("  Address %u: %sFOUND%s Status=0x%02X, PEC=%sOK%s\n",
+      std::printf("  Address %u: %sFOUND compatible EE871%s Status=0x%02X\n",
                   static_cast<unsigned>(addr),
                   LOG_COLOR_GREEN,
                   LOG_COLOR_RESET,
-                  static_cast<unsigned>(status[addr]),
-                  LOG_COLOR_GREEN,
-                  LOG_COLOR_RESET);
+                  static_cast<unsigned>(status[addr]));
       ++foundCount;
-    } else if (invalidResponse[addr]) {
-      std::printf("  Address %u: %sInvalid response after %u attempts "
-                  "(PEC mismatch; not a device)%s\n",
-                  static_cast<unsigned>(addr),
-                  LOG_COLOR_RED,
-                  static_cast<unsigned>(SCAN_ATTEMPTS),
-                  LOG_COLOR_RESET);
-    } else {
-      std::printf("  Address %u: %sNo response after %u attempts (NACK)%s\n",
+    } else if (lastError[addr].code == EE871::Err::NACK) {
+      std::printf("  Address %u: %sNo complete compatible response after %u "
+                  "attempts (last: NACK)%s\n",
                   static_cast<unsigned>(addr),
                   neutralColor(),
                   static_cast<unsigned>(SCAN_ATTEMPTS),
+                  LOG_COLOR_RESET);
+    } else {
+      std::printf("  Address %u: %sNo compatible response after %u attempts: "
+                  "%s (detail=%ld)%s\n",
+                  static_cast<unsigned>(addr),
+                  LOG_COLOR_RED,
+                  static_cast<unsigned>(SCAN_ATTEMPTS),
+                  lastError[addr].msg,
+                  static_cast<long>(lastError[addr].detail),
                   LOG_COLOR_RESET);
     }
   }
@@ -1060,53 +1058,51 @@ void scanAddresses(const EE871::Config& cfg) {
 }
 
 struct TimingResult {
-  uint16_t clockUs;
-  bool gotAck;
   uint8_t data;
-  bool pecOk;
+  EE871::Status status;
 };
 
 TimingResult tryTiming(const EE871::Config& cfg, uint16_t clockUs) {
-  TimingResult result = {clockUs, false, 0, false};
+  TimingResult result = {0, EE871::Status::Ok()};
   EE871::Config testCfg = cfg;
   testCfg.clockLowUs = clockUs;
   testCfg.clockHighUs = clockUs;
-  const uint8_t ctrlByte = EE871::cmd::makeControlRead(EE871::cmd::MAIN_STATUS, 0);
-  sendStart(testCfg);
-  result.gotAck = sendByteRaw(testCfg, ctrlByte, false);
-  if (result.gotAck) {
-    result.data = readByteRaw(testCfg, true, false);
-    const uint8_t pec = readByteRaw(testCfg, false, false);
-    const uint8_t expectedPec = static_cast<uint8_t>((ctrlByte + result.data) & 0xFFU);
-    result.pecOk = (pec == expectedPec);
+  EE871::EE871 candidate;
+  result.status = candidate.begin(testCfg);
+  if (result.status.ok()) {
+    result.status = candidate.readStatus(result.data);
   }
-  sendStop(testCfg);
+  candidate.end();
   return result;
 }
 
 void discoverTiming(const EE871::Config& cfg) {
   std::printf("%s=== Timing Discovery ===%s\n", LOG_COLOR_CYAN, LOG_COLOR_RESET);
-  std::printf("Testing different clock periods...\n");
-  std::printf("E2 spec: 100-1000us (500-5000 Hz)\n\n");
-  const uint16_t timings[] = {1000, 500, 250, 200, 150, 100, 75, 50};
+  std::printf("Testing valid symmetric high/low timings with the production driver...\n");
+  std::printf("E2 limits: each phase >=100us; transmitted clock 500-5000 Hz\n\n");
+  // The core also emits a 10 us data-setup phase, so 995+995 us is the
+  // slowest symmetric setting that remains at 500 Hz.
+  const uint16_t timings[] = {995, 500, 250, 200, 150, 100};
   int foundCount = 0;
   for (uint16_t clockUs : timings) {
-    const float freqHz = 1000000.0f / (2.0f * static_cast<float>(clockUs));
+    const float freqHz =
+        1000000.0f / (10.0f + 2.0f * static_cast<float>(clockUs));
     const auto result = tryTiming(cfg, clockUs);
     std::printf("  %4u us (%5.0f Hz): ",
                 static_cast<unsigned>(clockUs),
                 static_cast<double>(freqHz));
-    if (result.gotAck) {
-      std::printf("%sACK%s, data=0x%02X, PEC=%s%s%s\n",
+    if (result.status.ok()) {
+      std::printf("%sOK%s, data=0x%02X (identity + PEC validated)\n",
                   LOG_COLOR_GREEN,
                   LOG_COLOR_RESET,
-                  static_cast<unsigned>(result.data),
-                  okColor(result.pecOk),
-                  result.pecOk ? "OK" : "BAD",
-                  LOG_COLOR_RESET);
+                  static_cast<unsigned>(result.data));
       foundCount++;
     } else {
-      std::printf("%sNACK%s\n", LOG_COLOR_RED, LOG_COLOR_RESET);
+      std::printf("%s%s%s (detail=%ld)\n",
+                  LOG_COLOR_RED,
+                  result.status.msg,
+                  LOG_COLOR_RESET,
+                  static_cast<long>(result.status.detail));
     }
     delayMs(50);
   }
@@ -1257,7 +1253,8 @@ void runFullDiagnostics(const EE871::Config& cfg) {
   std::printf("Timing: LOW=%u us, HIGH=%u us (%.0f Hz)\n\n",
               static_cast<unsigned>(cfg.clockLowUs),
               static_cast<unsigned>(cfg.clockHighUs),
-              static_cast<double>(1000000.0f / (cfg.clockLowUs + cfg.clockHighUs)));
+              static_cast<double>(
+                  1000000.0f / (10.0f + cfg.clockLowUs + cfg.clockHighUs)));
   std::printf("%s[Step 1] Bus Levels%s\n", LOG_COLOR_GREEN, LOG_COLOR_RESET);
   printBusLevels(cfg);
   std::printf("\n");
@@ -1564,7 +1561,7 @@ void runStressMix(int count) {
         uint16_t group = 0;
         st = device.readGroup(group);
         if (st.ok() && group != EE871::cmd::SENSOR_GROUP_ID) {
-          st = EE871::Status::Error(EE871::Err::DEVICE_NOT_FOUND, "unexpected group", group);
+          st = EE871::Status::Error(EE871::Err::NOT_SUPPORTED, "unexpected group", group);
         }
         break;
       }
@@ -1572,7 +1569,7 @@ void runStressMix(int count) {
         uint8_t subgroup = 0;
         st = device.readSubgroup(subgroup);
         if (st.ok() && subgroup != EE871::cmd::SENSOR_SUBGROUP_ID) {
-          st = EE871::Status::Error(EE871::Err::DEVICE_NOT_FOUND, "unexpected subgroup", subgroup);
+          st = EE871::Status::Error(EE871::Err::NOT_SUPPORTED, "unexpected subgroup", subgroup);
         }
         break;
       }
