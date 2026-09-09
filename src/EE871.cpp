@@ -62,15 +62,15 @@ static Status requireByteBudget(const Config& cfg, uint32_t requiredUs,
   return Status::Ok();
 }
 
-static Status waitSclHigh(const Config& cfg, uint32_t* elapsedUs,
+static Status waitSclHigh(const Config& cfg, uint32_t timeoutUs, uint32_t* elapsedUs,
                           uint32_t reservedAfterWaitUs = 0) {
   uint32_t waitedUs = 0;
   while (!readScl(cfg)) {
-    if (waitedUs >= cfg.bitTimeoutUs) {
+    if (waitedUs >= timeoutUs) {
       return Status::Error(Err::TIMEOUT, "Clock stretch timeout", static_cast<int32_t>(waitedUs));
     }
     uint32_t stepUs = kPollStepUs;
-    const uint32_t bitRemainingUs = cfg.bitTimeoutUs - waitedUs;
+    const uint32_t bitRemainingUs = timeoutUs - waitedUs;
     if (stepUs > bitRemainingUs) {
       stepUs = bitRemainingUs;
     }
@@ -93,7 +93,7 @@ static Status waitSclHigh(const Config& cfg, uint32_t* elapsedUs,
 
 static Status e2Start(const Config& cfg) {
   releaseBusLines(cfg);
-  Status st = waitSclHigh(cfg, nullptr);
+  Status st = waitSclHigh(cfg, cfg.bitTimeoutUs, nullptr);
   if (!st.ok()) {
     releaseBusLines(cfg);
     return st;
@@ -133,7 +133,7 @@ static Status e2Stop(const Config& cfg) {
     return Status::Error(Err::BUS_STUCK, "SDA did not go low for STOP");
   }
   setScl(cfg, true);
-  Status st = waitSclHigh(cfg, nullptr);
+  Status st = waitSclHigh(cfg, cfg.flashStretchTimeoutUs, nullptr);
   if (!st.ok()) {
     releaseBusLines(cfg);
     return st;
@@ -150,7 +150,7 @@ static Status e2Stop(const Config& cfg) {
 
 static Status finishWithStop(const Config& cfg, const Status& transferStatus) {
   const Status stopStatus = e2Stop(cfg);
-  return stopStatus.ok() ? transferStatus : stopStatus;
+  return transferStatus.ok() ? stopStatus : transferStatus;
 }
 
 static Status finishClockLow(const Config& cfg, uint32_t* elapsedUs) {
@@ -172,7 +172,7 @@ static Status writeBit(const Config& cfg, bool bit, uint32_t* elapsedUs) {
   setSda(cfg, bit);
   delayUs(cfg, kDataSetupUs, elapsedUs);
   setScl(cfg, true);
-  st = waitSclHigh(cfg, elapsedUs,
+  st = waitSclHigh(cfg, cfg.bitTimeoutUs, elapsedUs,
                    static_cast<uint32_t>(cfg.clockHighUs) + cfg.clockLowUs);
   if (!st.ok()) {
     return st;
@@ -190,7 +190,7 @@ static Status readBit(const Config& cfg, bool& bit, uint32_t* elapsedUs) {
   setSda(cfg, true);  // Release SDA for slave to drive
   delayUs(cfg, kDataSetupUs, elapsedUs);
   setScl(cfg, true);
-  st = waitSclHigh(cfg, elapsedUs,
+  st = waitSclHigh(cfg, cfg.bitTimeoutUs, elapsedUs,
                    static_cast<uint32_t>(cfg.clockHighUs) + cfg.clockLowUs);
   if (!st.ok()) {
     return st;
@@ -236,7 +236,7 @@ static Status readAck(const Config& cfg, bool& acked, uint32_t* elapsedUs) {
   setSda(cfg, true);  // Release SDA for slave to drive ACK
   delayUs(cfg, kDataSetupUs, elapsedUs);
   setScl(cfg, true);
-  st = waitSclHigh(cfg, elapsedUs,
+  st = waitSclHigh(cfg, cfg.bitTimeoutUs, elapsedUs,
                    static_cast<uint32_t>(cfg.clockHighUs) + cfg.clockLowUs);
   if (!st.ok()) {
     return st;
@@ -257,7 +257,7 @@ static Status sendAck(const Config& cfg, bool ack, uint32_t* elapsedUs) {
   setSda(cfg, !ack);  // ACK = SDA low, NACK = SDA high
   delayUs(cfg, kDataSetupUs, elapsedUs);
   setScl(cfg, true);
-  st = waitSclHigh(cfg, elapsedUs,
+  st = waitSclHigh(cfg, cfg.bitTimeoutUs, elapsedUs,
                    static_cast<uint32_t>(cfg.clockHighUs) + cfg.clockLowUs);
   if (!st.ok()) {
     return st;
@@ -329,6 +329,12 @@ Status EE871::begin(const Config& config) {
   }
   if (config.intervalWriteDelayMs > cmd::INTERVAL_WRITE_DELAY_MAX_MS) {
     return Status::Error(Err::INVALID_CONFIG, "intervalWriteDelayMs exceeds safe limit");
+  }
+  // AN1611-1 permits up to 300 ms of clock extension during interval commits.
+  if (config.flashStretchTimeoutUs < 300000U ||
+      config.flashStretchTimeoutUs > cmd::WRITE_DELAY_MAX_MS * 1000U ||
+      config.flashStretchTimeoutUs > cmd::INTERVAL_WRITE_DELAY_MAX_MS * 1000U) {
+    return Status::Error(Err::INVALID_CONFIG, "Flash stretch timeout outside safe limits");
   }
 
   Config normalized = config;
@@ -1050,7 +1056,7 @@ Status EE871::_busResetRaw() {
       return Status::Error(Err::BUS_STUCK, "SCL did not go low during reset");
     }
     setScl(_config, true);
-    Status st = waitSclHigh(_config, nullptr);
+    Status st = waitSclHigh(_config, _config.flashStretchTimeoutUs, nullptr);
     if (!st.ok()) {
       releaseBusLines(_config);
       return Status::Error(Err::BUS_STUCK, "SCL stuck during reset");
@@ -1179,14 +1185,21 @@ Status EE871::_recoverTracked() {
     _operatingFunctions = operatingFunctions;
     _operatingModeSupport = operatingModeSupport;
     _specialFeatures = specialFeatures;
+  } else {
+    _operatingFunctions = 0;
+    _operatingModeSupport = 0;
+    _specialFeatures = 0;
+    // A failed compatibility check must require another explicit recovery.
+    if (_consecutiveFailures < _config.offlineThreshold) {
+      _consecutiveFailures = _config.offlineThreshold;
+    }
   }
   return _updateHealth(st);
 }
 
 Status EE871::_offlineStatus() const {
-  return _lastError.ok()
-             ? Status::Error(Err::E2_ERROR, "Driver offline; call recover()")
-             : _lastError;
+  return Status::Error(_lastError.ok() ? Err::E2_ERROR : _lastError.code,
+                       "Driver offline; call recover()", _lastError.detail);
 }
 
 Status EE871::_readControlByteRaw(uint8_t controlByte, uint8_t& data) {
@@ -1231,16 +1244,9 @@ Status EE871::_readControlByteRaw(uint8_t controlByte, uint8_t& data) {
     return finishWithStop(_config, st);
   }
 
-  st = finishWithStop(_config, Status::Ok());
-  if (!st.ok()) {
-    return st;
-  }
-
   const uint8_t expected = calcPecRead(controlByte, data);
-  if (pec != expected) {
-    return Status::Error(Err::PEC_MISMATCH, "PEC mismatch", pec);
-  }
-  return Status::Ok();
+  return finishWithStop(_config, pec == expected
+      ? Status::Ok() : Status::Error(Err::PEC_MISMATCH, "PEC mismatch", pec));
 }
 
 Status EE871::_readControlByteTracked(uint8_t controlByte, uint8_t& data) {

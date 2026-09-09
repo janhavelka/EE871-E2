@@ -1008,7 +1008,9 @@ void scanAddresses(const EE871::Config& cfg) {
         st = candidate.readStatus(candidateStatus);
       }
       candidate.end();
-      if (lastError[addr].ok() || st.code != EE871::Err::NACK) {
+      if (lastError[addr].ok() ||
+          (st.code != EE871::Err::NACK &&
+           lastError[addr].code != EE871::Err::NOT_SUPPORTED)) {
         lastError[addr] = st;
       }
       if (st.ok()) {
@@ -1086,7 +1088,7 @@ void discoverTiming(const EE871::Config& cfg) {
   int foundCount = 0;
   for (uint16_t clockUs : timings) {
     const float freqHz =
-        1000000.0f / (10.0f + 2.0f * static_cast<float>(clockUs));
+        1000000.0f / (10.0f + 2.0f * clockUs);
     const auto result = tryTiming(cfg, clockUs);
     std::printf("  %4u us (%5.0f Hz): ",
                 static_cast<unsigned>(clockUs),
@@ -1191,6 +1193,7 @@ void testTransaction(const EE871::Config& cfg, uint8_t ctrlByte) {
 void testLibraryCommands(EE871::EE871& driver) {
   std::printf("%s=== Library Command Test ===%s\n", LOG_COLOR_CYAN, LOG_COLOR_RESET);
   std::printf("Testing bounded library control-byte reads...\n\n");
+  std::printf("Reads are tracked; OFFLINE returns the latched status without bus traffic.\n");
   struct CmdTest {
     uint8_t mainCmd;
     const char* name;

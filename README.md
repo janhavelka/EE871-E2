@@ -17,13 +17,15 @@ examples, and HIL validation evidence.
 
 ## Release And Validation Status
 
-The current source/package version is `1.0.1`. The driver is
-production-oriented and validation-backed for the recorded ESP32-S3/EE871
-bench setup. See `CHANGELOG.md` for release notes.
+The current source/package version is `1.1.0`. See `CHANGELOG.md` for behavior
+changes and migration guidance. Recorded ESP32-S3/EE871 hardware results below
+predate the latched-OFFLINE, fail-closed startup, and rewritten-scanner changes;
+hardware/HIL re-validation of this version remains outstanding.
 
 Recorded evidence:
 
-- Native tests: 35 passing; consolidated HIL-runner/parser tests: 40 passing.
+- Native tests: 58 passing; Python tooling/contract/parser tests: 58 passing
+  (including compiled native checks of both scanner error-retention blocks).
 - The current example/HIL platform is exact-pinned to pioarduino
   `platform-espressif32` `55.03.311`, Arduino-ESP32 `3.3.11`, and ESP-IDF
   `5.5.5`. The earlier TunnelMonitor-node parity work on pioarduino
@@ -131,6 +133,8 @@ control byte. It is not an ESP-IDF or Arduino I2C device address.
 
 ### PlatformIO (recommended)
 
+The installation example pins the published `v1.0.1` tag. The `1.1.0` source
+changes in this tree still need a release tag before updating that pin.
 Add to `platformio.ini`:
 
 ```ini
@@ -255,10 +259,17 @@ diagnostics do not report old sensor capabilities.
 
 OFFLINE is latched. Ordinary bus reads and writes return the last precise
 tracked failure immediately, without touching the E2 lines or changing health
-counters. `probe()` may still inspect the bus without changing health.
+counters. Such replies retain the error code and detail but use the message
+`Driver offline; call recover()` to distinguish them from fresh bus failures.
+`lastError()` and the health snapshot retain the original message and timestamp.
+Parameter and capability guards still run first and may return their own errors.
+`probe()` and `busReset()` may still inspect/reset the bus without changing health
+or clearing the latch; `resyncPersistentConfig()` is blocked until recovery.
 `recover()` is the only path back to READY: it performs a bounded reset and
 validates group, subgroup, and CO2 capability, atomically refreshes feature
 flags, then records the complete recovery as one health event.
+A failed recovery clears all cached capabilities and latches OFFLINE even if
+the driver was READY or DEGRADED. A later ordinary read cannot bypass recovery.
 
 Cache-only diagnostics are available through `SettingsSnapshot`,
 `getSettings(SettingsSnapshot&)`, `getSettings()`, `isInitialized()`,
@@ -270,11 +281,27 @@ The driver is managed synchronous: E2 transactions block for bounded protocol
 time, and `tick(nowMs)` only records the latest application timestamp for
 diagnostics. `begin()` validates the generated bit period
 (`10 + clockLowUs + clockHighUs`) against the 500 Hz minimum and requires
-`byteTimeoutUs` to exceed the nominal nine-bit byte time. Clock stretching is
-bounded by `bitTimeoutUs` and the per-byte budget without shortening a required
-clock-high or clock-low phase. E2 maxima are enforced at 25,000 us per bit and
-35,000 us per byte. Flash writes are bounded by `writeDelayMs` or
-`intervalWriteDelayMs` with max 5000 ms validation.
+`byteTimeoutUs` to exceed the nominal nine-bit byte time. During transfers,
+clock stretching is bounded by `bitTimeoutUs` and the per-byte budget. A timeout
+occurs before a bit starts or while waiting on a slave-held clock; a completed
+byte stays within `byteTimeoutUs`. E2 transfer maxima are enforced at 25,000 us
+per bit and 35,000 us per byte.
+
+`Config::flashStretchTimeoutUs` separately bounds each SCL-release wait in STOP
+and bus reset. It defaults to 350,000 us and accepts 300,000..5,000,000 us,
+bounded by the write-delay safety limits. This handles the documented EE871
+deviation from generic E2's 25/35 ms rule: AN1611-1 section 5 permits CLK-low
+extension during flash writes for up to 150 ms per byte or 300 ms for the
+0xC6/0xC7 interval pair. The default adds 50 ms margin. START and byte transfers
+retain the generic budgets. Post-write waits remain `writeDelayMs` (default
+150 ms) or `intervalWriteDelayMs` (default 300 ms), each limited to 5000 ms,
+followed by readback verification. The new field is appended to `Config` so
+existing positional initializers retain their field order; rebuild consumers.
+
+A reset has nine clock releases plus STOP, so its maximum stretch allowance is
+`10 * flashStretchTimeoutUs` plus nominal phases. Transaction bounds include
+START, three read or four write byte budgets, and one STOP budget. These are
+budgets for requested callback delays; callbacks must themselves remain bounded.
 
 The library never owns GPIO pins or an I2C/Wire instance. Applications provide `setScl`, `setSda`, `readScl`, `readSda`, and `delayUs` callbacks.
 
@@ -371,7 +398,7 @@ The S3 flash/PSRAM settings in this repository describe the tested 4 MB flash /
 
 `compat_tunnelmonitor_s3` is a build-only compatibility environment pinned to
 TunnelMonitor-node commit `0f240ab` and its older `54.03.20` stack. The current
-`1.0.1` source builds under both pins without compatibility shims.
+`1.1.0` source builds under both pins without compatibility shims.
 TunnelMonitor-node's production console uses ESP-IDF USB Serial/JTAG APIs
 directly, so the Arduino HWCDC bug does not apply to that console path.
 

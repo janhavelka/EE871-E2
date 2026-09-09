@@ -405,7 +405,9 @@ inline void scanAddresses(const EE871::Config& cfg) {
         st = candidate.readStatus(candidateStatus);
       }
       candidate.end();
-      if (lastError[addr].ok() || st.code != EE871::Err::NACK) {
+      if (lastError[addr].ok() ||
+          (st.code != EE871::Err::NACK &&
+           lastError[addr].code != EE871::Err::NOT_SUPPORTED)) {
         lastError[addr] = st;
       }
       if (st.ok()) {
@@ -485,7 +487,7 @@ inline TimingResult tryTiming(const EE871::Config& cfg, uint16_t clockUs) {
 /// Discover working timing/frequency
 inline void discoverTiming(const EE871::Config& cfg) {
   Serial.printf("%s=== Timing Discovery ===%s\n", LOG_COLOR_CYAN, LOG_COLOR_RESET);
-  Serial.println("Testing valid symmetric high/low timings with the production driver...\n");
+  Serial.print("Testing valid symmetric high/low timings with the production driver...\n");
   Serial.println("E2 limits: each phase >=100us; transmitted clock 500-5000 Hz\n");
   
   // The core also emits a 10 us data-setup phase, so 995+995 us is the
@@ -645,6 +647,7 @@ inline void testTransaction(const EE871::Config& cfg, uint8_t ctrlByte) {
 inline void testLibraryCommands(EE871::EE871& driver) {
   Serial.printf("%s=== Library Command Test ===%s\n", LOG_COLOR_CYAN, LOG_COLOR_RESET);
   Serial.println("Testing bounded library control-byte reads...\n");
+  Serial.println("Reads are tracked; OFFLINE returns the latched status without bus traffic.");
 
   struct CmdTest {
     uint8_t mainCmd;

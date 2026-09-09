@@ -1,6 +1,11 @@
 # HIL Evidence Summary
 
-Last updated: 2026-07-31
+Last updated: 2026-09-09
+
+2026-09-09 evidence qualification: all recorded hardware results below predate
+the latched-OFFLINE, fail-closed-begin(), and rewritten-scanner changes. They
+remain historical evidence until the updated firmware is re-run on hardware;
+this software audit performed no hardware/HIL or soak re-validation.
 
 This is the retained hardware evidence ledger. Generated command tables, JSON,
 and raw serial captures were removed after review because they repeated the
@@ -25,8 +30,9 @@ needed.
 ## Findings And Fixes
 
 - The address scanner accepted a sampled ACK as discovery even when the frame
-  PEC was invalid. It now requires ACK plus valid PEC. Final scan: address 0
-  only.
+  PEC was invalid. The recorded fix required ACK plus valid PEC; the current
+  scanner requires full production begin() identity/capability/feature validation
+  followed by a status/PEC read. Historical final scan: address 0 only.
 - The example `libtest` command duplicated raw E2 signaling and intermittently
   produced invalid PEC data. It now uses the production driver's bounded,
   clock-stretch-aware, PEC-validating `readControlByte()` path. Final result:

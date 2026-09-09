@@ -17,7 +17,7 @@ enum class DriverState : uint8_t {
   UNINIT,    ///< begin() not called or end() called
   READY,     ///< Operational, consecutiveFailures == 0
   DEGRADED,  ///< 1 <= consecutiveFailures < offlineThreshold
-  OFFLINE    ///< consecutiveFailures >= offlineThreshold
+  OFFLINE    ///< Latched; ordinary operations fail fast without bus traffic. Only recover() restores READY.
 };
 
 /// @brief Snapshot of current configuration, cached feature flags, and driver health.
@@ -127,8 +127,8 @@ public:
   ///
   /// Recovery performs a bounded raw bus reset, complete raw identity check,
   /// and atomic feature-cache refresh, then commits that attempt to health
-  /// once. A failed recovery leaves an OFFLINE driver OFFLINE with its previous
-  /// cache; only a fully compatible response restores READY.
+  /// once. A failed recovery clears all cached capabilities and latches OFFLINE
+  /// even from READY/DEGRADED; only a fully compatible response restores READY.
   /// @return Status::Ok() if a compatible device is responsive, error otherwise.
   Status recover();
 
@@ -145,6 +145,7 @@ public:
   /// This API touches the E2 bus, is blocking within configured timing/write
   /// delay bounds, is not ISR-safe, and uses tracked operations that can update
   /// health on transfer failure.
+  /// While OFFLINE, returns the latched failure immediately; call recover() first.
   /// @return Status::Ok() when persistent fields can be read and validated.
   Status resyncPersistentConfig();
 
@@ -598,6 +599,7 @@ public:
   ///
   /// Use after timeout/stuck bus conditions. This touches E2 lines, is blocking
   /// within configured timing bounds, and is not ISR-safe.
+  /// Health-neutral; does not clear a latched OFFLINE state.
   /// @return Ok if bus lines are free after reset.
   Status busReset();
 

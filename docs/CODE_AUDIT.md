@@ -2,13 +2,14 @@
 
 ## Scope and source state
 
-This is the updated report from a fresh audit of the completed audit work.
-The originally requested `docs/CODE_AUDIT.md` is not present in the current
-tree. The complete original finding set was recovered and reread from
-`044ae2d^:docs/AUDIT_FINDINGS_2026-08-26.md`; the previous completion report
-and the full `044ae2d^..044ae2d` implementation diff were also reviewed.
+This maintained `docs/CODE_AUDIT.md` contains the 2026-08-31 resolution report
+and the 2026-09-09 independent re-audit corrections. The original finding set
+is retained in Git history at `044ae2d^:docs/AUDIT_FINDINGS_2026-08-26.md`.
+The September review started from clean, synchronized `main` at `209a35d`,
+checked all 19 submitted findings against code and vendor-derived references,
+and applied the supported corrections listed below.
 
-The fresh pass started from a clean, synchronized `main` at commit `044ae2d`.
+The August pass started from a clean, synchronized `main` at commit `044ae2d`.
 Three parallel independent reviews covered core timing/reset behavior,
 health/identity/read behavior, and examples/tooling. Their findings were then
 checked against the actual source, tests, vendor-derived repository references,
@@ -27,8 +28,8 @@ The common START/STOP/reset path now:
 
 - verifies commanded SCL-low and SDA-low/high levels;
 - releases both master lines on every START/STOP failure;
-- preserves cleanup failures when they are more precise than the interrupted
-  transfer;
+- preserves the first transfer failure, including a received PEC mismatch,
+  when cleanup also fails; STOP errors are returned when the transfer succeeded;
 - handles reset STOP errors without collapsing SDA failures into an SCL label;
 - allows the configured high-settle interval before sampling SDA for START.
 
@@ -49,9 +50,17 @@ the actual nominal period:
 The fresh pass confirmed two remaining gaps and fixed both. `begin()` now also
 enforces the specified 25,000 us per-bit and 35,000 us per-byte timeout maxima.
 The byte deadline now reserves a complete high and low phase before allowing
-clock-stretch polling to consume the remaining budget. A timeout therefore
-occurs before a new bit starts or after preserving its protocol-minimum phases;
-it can no longer truncate a low/high phase after changing a line.
+clock-stretch polling to consume the remaining budget. A timeout occurs either
+before a bit starts or while waiting on a slave-held clock. A completed byte
+never exceeds `byteTimeoutUs` in requested callback delay time; callbacks must
+themselves remain bounded. A timeout while awaiting SCL can occur after SDA
+has changed and SCL has been released.
+
+The September review separated the EE871-specific flash extension from those
+generic transfer limits. `Config::flashStretchTimeoutUs` defaults to 350 ms
+and bounds each SCL-release wait during STOP/reset, allowing AN1611-1's
+150 ms single-byte and 300 ms interval-pair commits. Validation accepts
+300..5000 ms; START and byte transfers retain the 25/35 ms limits.
 
 The diagnostic timing commands were also corrected. Their slowest symmetric
 candidate is 995/995 us because the transmitted period includes the 10 us data
@@ -75,8 +84,11 @@ READY.
 Recovery is now atomic from the health model's perspective. It performs a raw
 bounded reset, complete raw identity check, and feature-cache refresh, then
 records one success or one failure. Partial successful transfers cannot
-temporarily restore READY, a failed recovery that began OFFLINE remains
-OFFLINE, and a replacement device cannot inherit stale capability flags.
+temporarily restore READY. Every failed recovery, including one begun READY
+or DEGRADED, clears capability flags and latches OFFLINE. A replacement device
+cannot inherit stale capability flags. Latched replies preserve code/detail
+but say `Driver offline; call recover()`; stored health diagnostics retain
+the original failure and timestamp.
 
 ### 4. Torn 16-bit reads in E2-priority mode — invalid
 
@@ -112,7 +124,9 @@ reported only as no complete compatible response, because it may occur after
 successful identity traffic; an incompatible device or corrupt response is
 reported with its precise status and is not mislabeled as “not a device.” A
 non-NACK result is retained across later attempts so a final NACK cannot erase
-that evidence.
+that evidence. Once `NOT_SUPPORTED` establishes incompatible identity, later
+transport faults cannot demote it. Both `libtest` banners explain tracked
+reads and the lack of bus traffic while OFFLINE.
 
 The IDF and Arduino timing discovery paths likewise use temporary production
 drivers, removing another place where diagnostic results could disagree with
@@ -138,8 +152,11 @@ A small shared C/C++ lexical scanner now removes comments and literals in the
 correct order while preserving layout. Contract checks use comment-free source,
 scope dispatch requirements to the actual command processor, use
 whitespace-tolerant call/count expressions, and verify that both scanners use
-the production path. Four Python unit tests cover URLs/comment markers,
-commented calls/includes, literals, and raw strings. CI now discovers all
+the production path. Python unit tests cover URLs/comment markers,
+commented calls/includes, literals, raw strings, digit separators, malformed
+quotes, and continued line comments. Mutation tests prove both CLI checkers
+reject missing production reads, ACK-only counting, demoted identity evidence,
+and incorrect timing candidates/frequency formulas. CI discovers all
 `test_*.py` tool tests rather than only the HIL parser file.
 
 `LOGD`, `LOGT`, and `LOGE` remain unchanged: removing selected zero-cost example
@@ -165,9 +182,10 @@ captured by the original eight headings:
 
 ## Simplicity and scope review
 
-The fixes stay inside the original core/examples/tests/tooling scope. No new
-public API, heap allocation, background task, retry policy, platform dependency,
-or generic bus framework was added. Identity validation and feature loading are
+The fixes cover core/examples/tests/tooling and their maintained documentation.
+The sole new public configuration field is the appended flash-stretch deadline;
+no public method, heap allocation, background task, retry policy, platform
+dependency, or generic bus framework was added. Identity validation and feature loading are
 small private raw helpers, recovery is one tracked wrapper, and the OFFLINE
 guard is centralized at the two tracked transport wrappers. Diagnostic scanners reuse the library
 instead of growing a second stretch-aware protocol engine.
@@ -176,7 +194,35 @@ The original report's rejected proposals remain rejected: no unsupported
 offline-threshold increase, no redundant measured-value consistency read, no
 breaking enum removal, and no arbitrary logging cleanup.
 
-## Final verification
+## Independent re-audit dispositions (2026-09-09)
+
+All 19 findings were checked against `209a35d` and accepted, with the timing
+qualification in item 4. Corrections are included in the prepared 1.1.0 source;
+no release tag or remote CI result for these working-tree changes is claimed.
+
+| Item | Finding and correction | Verification |
+| --- | --- | --- |
+| 1 | Preserve the first transfer failure when cleanup STOP also fails; check received PEC before cleanup. | Native read/write NACK and PEC-plus-STOP-timeout regressions. |
+| 2 | Failed recovery clears every capability flag and latches OFFLINE from any initialized state. | Native READY/DEGRADED/OFFLINE cases, thresholds 1/5/255, incompatible identity, absence, reset failure, and partial feature-cache failure; blocked ordinary reads/writes and explicit recovery. |
+| 3 | Quote scanning stops at unescaped line breaks, respects digit separators and prefixed character literals, and handles continued line comments. | Python lexical regressions including LF/CRLF. |
+| 4 | AN1611-1 supports longer flash extension; keep generic transfer budgets and append a separate STOP/reset budget, default 350 ms and valid 300..5000 ms. | Native single/pair/pointer writes, verification, 150/300 ms stretches, exact deadline and overrun, bounded reset, invalid configuration, and unchanged bit/byte limits. |
+| 5 | Both libtest banners explain tracked reads and OFFLINE suppression. | Both CLI contract checks and banner-removal mutation tests. |
+| 6 | Latched replies retain code/detail and mark the message; stored diagnostics remain original. | Native read/write/resync replay, counters/timestamps, and health-neutral reset checks. |
+| 7 | Both scanners retain NOT_SUPPORTED across later transport faults. | Actual decision blocks compiled and executed natively for both examples; contract mutation rejects demotion. |
+| 8 | Arduino checker now enforces production libtest dispatch/reads and rejects ACK-only counts. | Mutation tests for both checkers, including prefix/postfix increments and raw calls. |
+| 9 | Both checkers enforce six timing candidates and frequency including 10 us setup. | Candidate/formula mutations rejected, including a commented correct list. |
+| 10 | Generate 1.1.0 metadata and move Unreleased notes into that version with migration guidance. | Version synchronization check; historical 1.0.1 notes retained. |
+| 11 | Documentation index links to CODE_AUDIT.md. | Target exists. |
+| 12 | README reflects final software-test counts. | Native and Python run summaries. |
+| 13 | Scope now describes this maintained file and its historical sources. | Documentation review. |
+| 14 | Timing wording describes pre-bit or slave-held-clock failure and the completed-byte budget. | Compared with writeBit/readBit/readAck/sendAck and deadline tests. |
+| 15 | Document the OFFLINE latch, health-neutral reset, blocked resync, and reserved DEVICE_NOT_FOUND. | Header review and warning-free Doxygen. |
+| 16 | AGENTS.md includes raw reset/identity/feature helpers, tracked recovery, and the two centralized OFFLINE guards. | Compared with call sites and health updates. |
+| 17 | Hardware matrix qualifies old timing candidates and describes full production scanner validation. | Historical data retained; no new hardware claim. |
+| 18 | HIL ledger explicitly dates and qualifies all retained evidence as historical. | No hardware/HIL re-run performed. |
+| 19 | Arduino timing intro uses print() for the same newline count as IDF. | Compared with both source banners. |
+
+## August verification (historical)
 
 - `scripts/pio.cmd test -e native`: 51/51 passed.
 - `python -m unittest discover -s test -p "test_*.py"`: 44/44 passed.
@@ -191,3 +237,42 @@ Native ESP-IDF builds were not run locally because `idf.py` is unavailable.
 Physical EE871 hardware, electrical fault injection, and soak tests were not
 run in this software-only fresh audit. No new hardware or ESP-IDF build claim
 is made; prior maintained evidence remains historical evidence only.
+
+## Re-audit verification (2026-09-09)
+
+Baseline: 51 native tests and 44 Python tests passed before edits, as did all
+three contract checks and version synchronization. Final results:
+
+| Command | Result |
+| --- | --- |
+| `.\scripts\pio.cmd test -e native` | 58/58 passed. |
+| `python -m unittest discover -s test -p "test_*.py"` | 58/58 passed, including compiled native execution of both scanner error-retention blocks. |
+| `python tools/check_core_timing_guard.py` | Passed. |
+| `python tools/check_cli_contract.py` | Passed. |
+| `python tools/check_idf_example_contract.py` | Passed. |
+| `python scripts/generate_version.py check` | Passed for Version.h, idf_component.yml, and Doxyfile. |
+| `doxygen Doxyfile` | Passed with no warnings/output. |
+| `.\scripts\pio.cmd run -e ex_bringup_s3 -e ex_bringup_s2 -e compat_tunnelmonitor_s3` | Initial S2/S3 builds failed before compilation because the compiler package was incompletely extracted; compatibility build passed. |
+| `.\scripts\pio.cmd run -e ex_bringup_s3 -e ex_bringup_s2` | Both passed using the cached compiler PATH described below. |
+| `git -c core.safecrlf=false diff --check` | Passed. |
+
+The initial build used the inherited `PLATFORMIO_CORE_DIR=C:\pio`. A retry
+with the current user's `.platformio` core directory also encountered package
+installer failures (`tools.json` missing and a compiler archive with two
+top-level entries). The successful retry retained `C:\pio` and prepended
+`C:\pio\tools\toolchain-xtensa-esp-elf.tmp\xtensa-esp-elf\bin` to PATH for
+that build process. Its compiler reported GCC 14.2.0, esp-14.2.0_20260121,
+matching the pinned toolchain. No PlatformIO Core was installed and no
+repository platform pin or system PATH was changed.
+
+`gh run list --branch main --limit 5` and `gh run view 34324339386` confirmed
+the latest [upstream CI run](https://github.com/janhavelka/EE871-E2/actions/runs/34324339386)
+passed all six jobs at `209a35d`: S2/S3 Arduino builds, native tests, library
+validation, and S2/S3 native IDF builds. No CI workflow repair was needed.
+That run predates these local changes; they have not been committed, pushed,
+tagged, or run through remote CI.
+
+Native ESP-IDF builds were not re-run locally (`idf.py` unavailable).
+No sensor hardware, HIL, electrical fault injection, or soak re-validation was
+performed. Those validations remain outstanding. Historical 1.0.1-and-earlier
+changelog entries were compared with HEAD and remain unchanged.

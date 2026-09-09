@@ -34,6 +34,12 @@ def _strip_cpp(text: str, *, strip_literals: bool) -> str:
     while index < length:
         if text.startswith("//", index):
             end = text.find("\n", index + 2)
+            # Translation-phase line splicing extends // through the next line.
+            while end >= 0:
+                before_newline = end - 1 if end > 0 and text[end - 1] == "\r" else end
+                if before_newline == 0 or text[before_newline - 1] != "\\":
+                    break
+                end = text.find("\n", end + 1)
             end = length if end < 0 else end
             output.append(_blank(text[index:end]))
             index = end
@@ -54,11 +60,25 @@ def _strip_cpp(text: str, *, strip_literals: bool) -> str:
             continue
 
         quote = text[index]
-        if quote in {'"', "'"}:
-            end = index + 1
+        previous = output[-1][-1] if output else ""
+        char_context = not previous or previous not in (
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_)]"
+        )
+        quote_index = index
+        if char_context:
+            for prefix in ("u8", "u", "U", "L"):
+                if text.startswith(prefix + "'", index):
+                    quote_index += len(prefix)
+                    quote = "'"
+                    break
+        char_literal = quote == "'" and char_context
+        if quote == '"' or char_literal:
+            end = quote_index + 1
             while end < length:
+                if text[end] in "\r\n":
+                    break
                 if text[end] == "\\":
-                    end = min(length, end + 2)
+                    end = min(length, end + (3 if text.startswith("\r\n", end + 1) else 2))
                     continue
                 if text[end] == quote:
                     end += 1

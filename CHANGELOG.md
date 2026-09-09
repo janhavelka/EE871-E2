@@ -5,10 +5,34 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.0] - 2026-09-09
+
+### Behavior changes / migration
+
+- OFFLINE is latched within a driver session: normal transfers fail immediately
+  without bus traffic. Use explicit `recover()` to restore READY. A failed
+  recovery also latches OFFLINE from READY/DEGRADED and clears cached capabilities.
+  Latched replies retain code/detail but say `Driver offline; call recover()`;
+  stored health diagnostics retain the original failure.
+- `begin()` fails closed on incompatible group/subgroup, missing CO2 capability,
+  or feature-cache transfer/PEC errors. Handle its precise error before sampling.
+- Timing configuration is bounded: generated bit period <=2000 us, phases >=100 us,
+  bit timeout <=25000 us, byte timeout <=35000 us and greater than nominal byte
+  time. Configure the appended `flashStretchTimeoutUs` for STOP/reset flash
+  extensions (default 350000 us, valid 300000..5000000 us), keeping the generic
+  transfer limits. Existing positional Config initializers retain field order;
+  rebuild dependent applications. Post-write delays remain separately bounded.
+- Both scanners require full production initialization plus a status/PEC read.
+  `libtest` uses tracked reads and explains OFFLINE suppression in its banner.
+- Recorded hardware/HIL evidence predates these changes; hardware re-validation
+  and a new long soak remain outstanding.
 
 ### Added
 
+- Separate EE871 flash-stretch timeout for STOP and reset, with native tests for
+  150/300 ms commits, deadline boundaries, readback, and unchanged byte/bit budgets.
+- Native regressions for transfer error precedence, failed-recovery capability
+  invalidation, and marked OFFLINE replies; Python lexer and CLI mutation tests.
 - Added native coverage for generated-clock and byte-budget boundaries,
   stuck-line startup diagnostics, reset recovery and health neutrality, and
   tracked-failure short-circuit behavior during an absent-sensor sample burst.
@@ -48,16 +72,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Cleanup STOP no longer overwrites an earlier NACK, PEC, or transfer failure.
+- Failed recovery cannot retain capabilities from a previous device or allow
+  ordinary transfers to restore READY after incompatible identity is detected.
+- C/C++ source scanning now handles digit separators, unterminated quotes, and
+  backslash-continued line comments without hiding real code or accepting comments.
+- Both scanners retain NOT_SUPPORTED over later transport faults. Both contract
+  checkers enforce production libtest reads, reject ACK-only counting, and verify
+  the six timing candidates and generated-frequency formula.
+- Synchronized the timing banner newline, repaired audit links and API contracts,
+  corrected software-test counts, and qualified old HIL/timing evidence.
 - START now verifies that SDA actually goes low, reporting `BUS_STUCK` for a
   line held high instead of a later misleading control-byte `NACK`.
 - Clock-stretch polling now clips its final poll to the remaining deadline
   instead of overshooting non-multiple-of-five timeouts.
 - Whole-byte deadlines now cover both clock stretching and nominal bit phases.
 - Whole-byte deadline failures are detected before a bit starts or reserve the
-  complete remaining high/low phases, so timeout handling cannot truncate a
-  protocol minimum. START now allows configured high settling before sampling
-  SDA, and STOP verifies both SDA levels while releasing both master lines on
-  every cleanup failure.
+  remaining high/low phases while waiting for a slave-held clock. A completed
+  byte stays within its configured deadline. START now allows configured high
+  settling before sampling SDA, and STOP verifies both SDA levels while releasing
+  both master lines on every cleanup failure.
 - OFFLINE is now fail-fast and latched for ordinary transfers. Recovery resets
   and validates complete identity plus feature flags atomically, so partial
   successful reads, a failed cache refresh, or an incompatible responding
@@ -308,7 +342,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial release with template structure
 - ESP32-S2 and ESP32-S3 support
 
-[Unreleased]: https://github.com/janhavelka/EE871-E2/compare/v1.0.1...HEAD
+[1.1.0]: https://github.com/janhavelka/EE871-E2/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/janhavelka/EE871-E2/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/janhavelka/EE871-E2/compare/v0.3.0...v1.0.0
 [0.3.0]: https://github.com/janhavelka/EE871-E2/compare/v0.2.1...v0.3.0

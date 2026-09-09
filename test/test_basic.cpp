@@ -76,6 +76,7 @@ void test_config_defaults() {
   TEST_ASSERT_EQUAL_UINT16(100, cfg.clockHighUs);
   TEST_ASSERT_EQUAL_UINT32(25000u, cfg.bitTimeoutUs);
   TEST_ASSERT_EQUAL_UINT32(35000u, cfg.byteTimeoutUs);
+  TEST_ASSERT_EQUAL_UINT32(350000u, cfg.flashStretchTimeoutUs);
   TEST_ASSERT_EQUAL_UINT32(150u, cfg.writeDelayMs);
   TEST_ASSERT_EQUAL_UINT32(300u, cfg.intervalWriteDelayMs);
   TEST_ASSERT_EQUAL_UINT8(5, cfg.offlineThreshold);
@@ -229,6 +230,7 @@ void test_begin_bus_reset_reports_stuck_lines_precisely() {
   EE871::EE871 sclDev;
   Config sclCfg = sclFake.makeConfig();
   sclCfg.bitTimeoutUs = 27;
+  sclCfg.flashStretchTimeoutUs = 300003;
   Status st = sclDev.begin(sclCfg);
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::BUS_STUCK),
                           static_cast<uint8_t>(st.code));
@@ -236,7 +238,7 @@ void test_begin_bus_reset_reports_stuck_lines_precisely() {
   TEST_ASSERT_FALSE(sclDev.isInitialized());
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::UNINIT),
                           static_cast<uint8_t>(sclDev.state()));
-  TEST_ASSERT_EQUAL_UINT32(127U, sclFake.elapsedUs());
+  TEST_ASSERT_EQUAL_UINT32(sclCfg.clockLowUs + sclCfg.flashStretchTimeoutUs, sclFake.elapsedUs());
 
   FakeE2Transport sdaLowFake;
   sdaLowFake.setSdaStuckLow(true);
@@ -625,7 +627,7 @@ void test_stop_timeout_releases_both_master_lines() {
   EE871::EE871 dev;
   TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
 
-  fake.stretchClockReleaseAfter(29, 26);
+  fake.stretchClockReleaseAfter(29, dev.getConfig().flashStretchTimeoutUs + 1U);
   uint8_t status = 0;
   Status st = dev.readStatus(status);
 
@@ -684,7 +686,7 @@ void test_bus_safety_checks_cover_sda_and_do_not_track_reset() {
   TEST_ASSERT_EQUAL_UINT32(failuresBefore, dev.totalFailures());
 
   fake.setSclStuckHigh(false);
-  fake.stretchClockReleaseAfter(10, 26);
+  fake.stretchClockReleaseAfter(10, dev.getConfig().flashStretchTimeoutUs + 1U);
   st = dev.busReset();
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::BUS_STUCK),
                           static_cast<uint8_t>(st.code));
@@ -984,9 +986,9 @@ void test_recovery_refreshes_feature_cache_atomically() {
   TEST_ASSERT_EQUAL_UINT32(successesBefore, dev.totalSuccess());
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::OFFLINE),
                           static_cast<uint8_t>(dev.state()));
-  TEST_ASSERT_TRUE(dev.hasGlobalInterval());
-  TEST_ASSERT_TRUE(dev.hasLowPowerMode());
-  TEST_ASSERT_TRUE(dev.hasAutoAdjust());
+  TEST_ASSERT_FALSE(dev.hasGlobalInterval());
+  TEST_ASSERT_FALSE(dev.hasLowPowerMode());
+  TEST_ASSERT_FALSE(dev.hasAutoAdjust());
 
   st = dev.recover();
   TEST_ASSERT_TRUE(st.ok());
@@ -1191,8 +1193,223 @@ void test_dirty_state_survives_offline() {
   assertDirtyWithOriginalError(dev, dirtyCause);
 }
 
+void test_transfer_failure_survives_cleanup_stop_timeout() {
+  for (uint8_t scenario = 0; scenario < 3; ++scenario) {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    const bool badPec = scenario == 2;
+    fake.setDevicePresent(badPec);
+    fake.setCorruptReadPec(badPec);
+    // START release + 9 control bits (or 27 read bits) + STOP release.
+    fake.stretchClockReleaseAfter(badPec ? 29 : 11,
+                                 dev.getConfig().flashStretchTimeoutUs + 1U);
+    uint8_t value = 0;
+    const Status st = scenario == 1
+        ? dev.customWrite(cmd::CUSTOM_FILTER_CO2, 10) : dev.readStatus(value);
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(badPec ? Err::PEC_MISMATCH : Err::NACK),
+                            static_cast<uint8_t>(st.code));
+    TEST_ASSERT_EQUAL_STRING(badPec ? "PEC mismatch" : "Control byte NACK", st.msg);
+    TEST_ASSERT_TRUE(fake.masterSclReleased());
+    TEST_ASSERT_TRUE(fake.masterSdaReleased());
+    TEST_ASSERT_EQUAL_UINT32(1, dev.totalFailures());
+    TEST_ASSERT_FALSE(dev.persistentConfigDirty());
+  }
+}
+
+void test_failed_recover_clears_capabilities_and_latches_from_ready_or_degraded() {
+  const uint8_t thresholds[] = {1, 5, 255};
+  for (uint8_t threshold : thresholds) {
+    for (uint8_t failure = 0; failure < 4; ++failure) {
+      FakeE2Transport fake;
+      EE871::EE871 dev;
+      TEST_ASSERT_TRUE(beginFakeDevice(dev, fake, threshold).ok());
+      if (threshold != 1) {
+        fake.setDevicePresent(false);
+        uint8_t value = 0;
+        TEST_ASSERT_FALSE(dev.readStatus(value).ok());
+        fake.setDevicePresent(true);
+        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::DEGRADED),
+                                static_cast<uint8_t>(dev.state()));
+      }
+      if (failure == 0) fake.setSubgroup(0x08);
+      if (failure == 1) fake.setDevicePresent(false);
+      if (failure == 2) fake.setHoldSclLow(true);
+      if (failure == 3) fake.corruptNextCustomReadPec(cmd::CUSTOM_OPERATING_MODE_SUPPORT);
+      const uint32_t failuresBefore = dev.totalFailures();
+      const uint32_t successesBefore = dev.totalSuccess();
+      const Status st = dev.recover();
+      const Err expected[] = {Err::NOT_SUPPORTED, Err::NACK, Err::BUS_STUCK, Err::PEC_MISMATCH};
+      TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(expected[failure]), static_cast<uint8_t>(st.code));
+      TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::OFFLINE),
+                              static_cast<uint8_t>(dev.state()));
+      TEST_ASSERT_EQUAL_UINT32(failuresBefore + 1U, dev.totalFailures());
+      TEST_ASSERT_EQUAL_UINT32(successesBefore, dev.totalSuccess());
+      TEST_ASSERT_TRUE(dev.consecutiveFailures() >= threshold);
+      TEST_ASSERT_FALSE(dev.hasSerialNumber());
+      TEST_ASSERT_FALSE(dev.hasPartName());
+      TEST_ASSERT_FALSE(dev.hasAddressConfig());
+      TEST_ASSERT_FALSE(dev.hasGlobalInterval());
+      TEST_ASSERT_FALSE(dev.hasSpecificInterval());
+      TEST_ASSERT_FALSE(dev.hasFilterConfig());
+      TEST_ASSERT_FALSE(dev.hasErrorCode());
+      TEST_ASSERT_FALSE(dev.hasLowPowerMode());
+      TEST_ASSERT_FALSE(dev.hasE2Priority());
+      TEST_ASSERT_FALSE(dev.hasAutoAdjust());
+      const SettingsSnapshot snap = dev.getSettings();
+      TEST_ASSERT_EQUAL_UINT8(0, snap.operatingFunctions);
+      TEST_ASSERT_EQUAL_UINT8(0, snap.operatingModeSupport);
+      TEST_ASSERT_EQUAL_UINT8(0, snap.specialFeatures);
+
+      fake.setSubgroup(cmd::SENSOR_SUBGROUP_ID);
+      fake.setDevicePresent(true);
+      fake.setHoldSclLow(false);
+      fake.resetElapsed();
+      TEST_ASSERT_FALSE(dev.startAutoAdjust().ok());
+      uint8_t value = 0;
+      TEST_ASSERT_FALSE(dev.readStatus(value).ok());
+      TEST_ASSERT_FALSE(dev.resyncPersistentConfig().ok());
+      TEST_ASSERT_EQUAL_UINT32(0, fake.elapsedUs());
+      TEST_ASSERT_EQUAL_UINT32(failuresBefore + 1U, dev.totalFailures());
+      TEST_ASSERT_EQUAL_UINT32(successesBefore, dev.totalSuccess());
+      TEST_ASSERT_TRUE(dev.recover().ok());
+      TEST_ASSERT_TRUE(dev.hasAutoAdjust());
+      TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::READY),
+                              static_cast<uint8_t>(dev.state()));
+    }
+  }
+}
+
+void test_offline_replay_marks_message_and_preserves_original_diagnostics() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake, 1).ok());
+  dev.tick(123);
+  fake.setCorruptReadPec(true);
+  uint8_t value = 0;
+  const Status failure = dev.readStatus(value);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::PEC_MISMATCH), static_cast<uint8_t>(failure.code));
+  TEST_ASSERT_NOT_EQUAL(0, failure.detail);
+  fake.setCorruptReadPec(false);
+  fake.resetElapsed();
+  dev.tick(456);
+  const Status replays[] = {dev.readStatus(value), dev.customWrite(cmd::CUSTOM_FILTER_CO2, 10),
+                            dev.resyncPersistentConfig()};
+  for (const Status& replay : replays) {
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(failure.code), static_cast<uint8_t>(replay.code));
+    TEST_ASSERT_EQUAL_INT32(failure.detail, replay.detail);
+    TEST_ASSERT_EQUAL_STRING("Driver offline; call recover()", replay.msg);
+  }
+  const SettingsSnapshot snap = dev.getSettings();
+  assertSameStatus(failure, snap.lastError);
+  TEST_ASSERT_EQUAL_UINT32(123, snap.lastErrorMs);
+  TEST_ASSERT_EQUAL_UINT32(1, snap.totalFailures);
+  TEST_ASSERT_EQUAL_UINT32(0, fake.elapsedUs());
+  TEST_ASSERT_TRUE(dev.busReset().ok());
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::OFFLINE), static_cast<uint8_t>(dev.state()));
+}
+
+void test_flash_stretch_config_boundaries() {
+  const uint32_t invalid[] = {0, 299999, 5000001, UINT32_MAX};
+  for (uint32_t timeout : invalid) {
+    FakeE2Transport fake;
+    Config cfg = fake.makeConfig();
+    cfg.flashStretchTimeoutUs = timeout;
+    EE871::EE871 dev;
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_CONFIG),
+                            static_cast<uint8_t>(dev.begin(cfg).code));
+    TEST_ASSERT_EQUAL_UINT32(0, fake.elapsedUs());
+  }
+  const uint32_t valid[] = {300000, 350000, 5000000};
+  for (uint32_t timeout : valid) {
+    FakeE2Transport fake;
+    Config cfg = fake.makeConfig();
+    cfg.flashStretchTimeoutUs = timeout;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+  }
+}
+
+void test_flash_write_stop_stretches_commit_and_verify() {
+  const uint32_t stretches[] = {150000, 300000, 350000, 350001};
+  for (uint32_t stretch : stretches) {
+    for (uint8_t operation = 0; operation < 3; ++operation) {
+      FakeE2Transport fake;
+      EE871::EE871 dev;
+      TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+      // Each write uses START + 36 bits + STOP. Interval commits on write two.
+      fake.stretchClockReleaseAfter(operation == 1 ? 76 : 38, stretch);
+      Status st;
+      if (operation == 0) st = dev.customWrite(cmd::CUSTOM_FILTER_CO2, 10);
+      if (operation == 1) st = dev.writeMeasurementInterval(300);
+      if (operation == 2) st = dev.setCustomPointer(cmd::CUSTOM_FILTER_CO2);
+      if (stretch <= dev.getConfig().flashStretchTimeoutUs) {
+        TEST_ASSERT_TRUE(st.ok());
+        TEST_ASSERT_FALSE(dev.persistentConfigDirty());
+        TEST_ASSERT_EQUAL_UINT32(0, dev.totalFailures());
+        if (operation == 0) TEST_ASSERT_EQUAL_UINT8(10, fake.memory(cmd::CUSTOM_FILTER_CO2));
+        if (operation == 1) {
+          uint16_t interval = 0;
+          TEST_ASSERT_TRUE(dev.readMeasurementInterval(interval).ok());
+          TEST_ASSERT_EQUAL_UINT16(300, interval);
+        }
+      } else {
+        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::TIMEOUT), static_cast<uint8_t>(st.code));
+        TEST_ASSERT_EQUAL_INT32(dev.getConfig().flashStretchTimeoutUs, st.detail);
+        if (operation == 1) TEST_ASSERT_TRUE(dev.persistentConfigDirty());
+        TEST_ASSERT_TRUE(fake.masterSclReleased());
+        TEST_ASSERT_TRUE(fake.masterSdaReleased());
+      }
+    }
+  }
+}
+
+void test_bus_reset_flash_stretch_is_bounded_and_health_neutral() {
+  const uint8_t releases[] = {1, 9, 10};
+  const uint32_t stretches[] = {300000, 350000, 350001};
+  for (uint8_t release : releases) {
+    for (uint32_t stretch : stretches) {
+      FakeE2Transport fake;
+      EE871::EE871 dev;
+      TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+      fake.resetElapsed();
+      fake.stretchClockReleaseAfter(release, stretch);
+      const Status st = dev.busReset();
+      TEST_ASSERT_EQUAL(stretch <= 350000U, st.ok());
+      if (!st.ok()) TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::BUS_STUCK), static_cast<uint8_t>(st.code));
+      TEST_ASSERT_TRUE(fake.elapsedUs() <= 352000U);
+      TEST_ASSERT_EQUAL_UINT32(0, dev.totalFailures());
+      TEST_ASSERT_EQUAL_UINT32(0, dev.totalSuccess());
+      TEST_ASSERT_TRUE(fake.masterSclReleased());
+      TEST_ASSERT_TRUE(fake.masterSdaReleased());
+    }
+  }
+}
+
+void test_flash_budget_does_not_relax_bit_transfer_deadline() {
+  FakeE2Transport fake;
+  Config cfg = fake.makeConfig();
+  cfg.bitTimeoutUs = 25000;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+  fake.stretchClockReleaseAfter(2, 25001);
+  uint8_t value = 0;
+  const Status st = dev.readStatus(value);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::TIMEOUT), static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_INT32(25000, st.detail);
+  TEST_ASSERT_EQUAL_STRING("Clock stretch timeout", st.msg);
+  TEST_ASSERT_EQUAL_UINT32(1, dev.totalFailures());
+}
+
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(test_transfer_failure_survives_cleanup_stop_timeout);
+  RUN_TEST(test_failed_recover_clears_capabilities_and_latches_from_ready_or_degraded);
+  RUN_TEST(test_offline_replay_marks_message_and_preserves_original_diagnostics);
+  RUN_TEST(test_flash_stretch_config_boundaries);
+  RUN_TEST(test_flash_write_stop_stretches_commit_and_verify);
+  RUN_TEST(test_bus_reset_flash_stretch_is_bounded_and_health_neutral);
+  RUN_TEST(test_flash_budget_does_not_relax_bit_transfer_deadline);
   RUN_TEST(test_status_ok);
   RUN_TEST(test_status_error);
   RUN_TEST(test_status_in_progress);

@@ -234,8 +234,10 @@ python tools/ee871_hil_runner.py --port COMx --include-power-cycle
 - Evidence is condensed in `hil_results/README.md`.
 - Two preceding review runs proved
   that the example scanner accepted ACK-only malformed frames and that
-  `libtest` duplicated an incomplete raw bus path. The scanner now requires
-  valid PEC, and `libtest` now uses the production driver.
+  `libtest` duplicated an incomplete raw bus path. The current scanner requires
+  full production `begin()` identity/capability/feature validation followed by a
+  status/PEC read, and `libtest` uses tracked production driver reads.
+  These later scanner/health changes still require hardware re-validation.
 
 ## Prior Platform Evidence (`55.03.39`)
 
@@ -327,7 +329,9 @@ TunnelMonitor-node parity stack.
   passed, address 0 was found, and all eight timing points from 500 Hz through
   10 kHz responded with valid PEC. Only 500-5000 Hz is the specified range;
   the out-of-spec responses are characterization, not a supported operating
-  claim.
+  claim. These results used the pre-remediation candidate set, including
+  1000/1000 us labeled as 500 Hz and 75/50 us phases. The CLI now offers six
+  in-spec candidates, slowest 995/995 us including 10 us data setup.
 - Trace/sniffer/mixed-stress: PASS, 11/11. Trace pending/dropped counts were
   zero, a status transaction decoded, and `stress_mix 500` passed 500/500 with
   937 tracked successes and zero failures.
@@ -479,7 +483,7 @@ Run these only on a bench sensor after recording original values.
 | R-04 | SCL stuck low / clock stretch timeout | S3 | Pull SCL low, `buscheck`, `probe`, `read`, `busreset`, `libreset` | Timeout or `BUS_STUCK` within configured deadline; no hang. | PASS | COM20 470-ohm fault: SCL low/SDA high; raw probe TIMEOUT in 31 ms detail 25000 without health change; tracked read TIMEOUT in 32 ms; library reset BUS_STUCK in 31 ms; release/recover restored READY. |
 | R-05 | Sensor absent/open line/no ACK | S3 | Unplug sensor, `probe`, tracked reads | NACK/no-response error is bounded and health rules match raw probe versus tracked reads. | PASS | COM20 sensor unplug: raw probe NACK in 15 ms without health change; tracked reads returned NACK and updated health through DEGRADED to OFFLINE. |
 | R-06 | Recovery clocks on idle bus (smoke) | S3 | `busreset`, `buscheck` | Nine recovery clocks are issued and the idle state is reported accurately. | PASS | COM20 no-fault recovery issued nine clocks and ended SCL/SDA high; R-03/R-04 separately prove clocks cannot falsely clear physically held-low lines and explicit recovery succeeds after release. |
-| R-07 | Timing sweep | S3 | `timing` | Supported timing range is identified without hangs; failures are bounded. | PASS | COM20 full diagnostics: six in-spec points from 500-5000 Hz and two characterization-only points at 6667/10000 Hz ACKed with valid PEC. |
+| R-07 | Timing sweep | S3 | `timing` | Supported timing range is identified without hangs; failures are bounded. | PASS | COM20 full diagnostics: six in-spec points from 500-5000 Hz and two characterization-only points at 6667/10000 Hz ACKed with valid PEC. Recorded with the pre-remediation candidate set (1000/1000 us labeled 500 Hz; 75/50 us phases). The CLI now offers six in-spec candidates, slowest 995/995 us; re-validation is outstanding. |
 | R-08 | Bus trace sanity | S3 | `verbose 1`, `status`, `trace stats`, `verbose 0` | Trace captures bounded line activity and does not destabilize reads. | PASS | COM20 trace captured a successful status transfer, pending=0, dropped=0; sniffer decoded the transaction; following mixed stress passed 500/500. |
 
 ## Sign-Off Template

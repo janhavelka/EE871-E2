@@ -40,6 +40,7 @@ REQUIRED_PATTERNS = {
     "driver command dispatch": r'trimmed\s*==\s*"drv"',
     "read command dispatch": r'trimmed\s*==\s*"read"',
     "verbose command dispatch": r'trimmed\s*==\s*"verbose"',
+    "library test dispatch": r"e2diag::testLibraryCommands\s*\(\s*device\s*\)",
     "stress command dispatch": r'trimmed\s*==\s*"stress"',
     "dirty help entry": r'printHelpItem\(\s*"dirty"\s*,',
     "resync help entry": r'printHelpItem\(\s*"resync"\s*,',
@@ -63,6 +64,7 @@ PROCESS_COMMAND_PATTERNS = {
     "read command dispatch",
     "verbose command dispatch",
     "stress command dispatch",
+    "library test dispatch",
     "dirty command dispatch",
     "resync command dispatch",
     "resync before after output",
@@ -170,11 +172,47 @@ def main() -> int:
         fail("Arduino scanner must gate its only discovery assignment on final success")
     retained_error = (
         r"if\s*\(\s*lastError\s*\[\s*addr\s*\]\s*\.\s*ok\s*\(\s*\)\s*"
-        r"\|\|\s*st\s*\.\s*code\s*!=\s*EE871::Err::NACK\s*\)\s*\{\s*"
+        r"\|\|\s*\(\s*st\s*\.\s*code\s*!=\s*EE871::Err::NACK\s*&&\s*"
+        r"lastError\s*\[\s*addr\s*\]\s*\.\s*code\s*!=\s*EE871::Err::NOT_SUPPORTED"
+        r"\s*\)\s*\)\s*\{\s*"
         r"lastError\s*\[\s*addr\s*\]\s*=\s*st\s*;\s*\}"
     )
     if re.search(retained_error, scanner_code) is None:
-        fail("Arduino scanner must retain non-NACK evidence across later attempts")
+        fail("Arduino scanner must retain non-NACK evidence and never demote NOT_SUPPORTED")
+
+    if re.search(r"(?:\bfound\s*\+\+|\+\+\s*found\b)", scanner_code):
+        fail("Arduino scanner still counts ACK-only responses")
+
+    libtest = extract_section(diagnostics_text, "inline void testLibraryCommands", "inline void runFullDiagnostics")
+    libtest_code = strip_cpp_non_code(libtest)
+    if re.search(
+        r"void\s+testLibraryCommands\s*\(\s*EE871::EE871\s*&\s*driver\s*\)",
+        libtest_code,
+    ) is None:
+        fail("Arduino library test must accept the initialized driver")
+    if re.search(r"driver\s*\.\s*readControlByte\s*\(", libtest_code) is None:
+        fail("Arduino library test must use the production control-byte path")
+    for raw_call in ("sendStart", "sendByteRaw", "readByteRaw"):
+        if re.search(rf"\b{raw_call}\s*\(", libtest_code):
+            fail(f"Arduino library test still uses raw diagnostic call {raw_call!r}")
+
+    banner = "Reads are tracked; OFFLINE returns the latched status without bus traffic."
+    if banner not in libtest:
+        fail("Arduino library test must explain tracked reads and OFFLINE suppression")
+
+    timing = strip_cpp_non_code(extract_section(
+        diagnostics_text, "inline void discoverTiming", "inline void sendRecoveryClocks"
+    ))
+    if re.search(
+        r"\btimings\s*\[\s*\]\s*=\s*\{\s*995\s*,\s*500\s*,\s*250\s*,"
+        r"\s*200\s*,\s*150\s*,\s*100\s*\}\s*;", timing,
+    ) is None:
+        fail("Arduino timing discovery must use the six in-spec candidates")
+    if re.search(
+        r"\bfreqHz\s*=\s*1000000\.0f\s*/\s*\(\s*10\.0f\s*\+"
+        r"\s*2\.0f\s*\*\s*clockUs\s*\)\s*;", timing,
+    ) is None:
+        fail("Arduino timing frequency must include the 10 us data setup")
 
     if re.search(r"\bcfg\b", text) is None and re.search(r"\bsettings\b", text) is None:
         fail("either 'cfg' or 'settings' command must be present")

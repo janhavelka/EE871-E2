@@ -283,14 +283,16 @@ enum class DriverState : uint8_t {
   UNINIT,    // begin() not called or end() called
   READY,     // Operational, consecutiveFailures == 0
   DEGRADED,  // 1 <= consecutiveFailures < offlineThreshold
-  OFFLINE    // consecutiveFailures >= offlineThreshold
+  OFFLINE    // Latched; ordinary operations fail fast until recover() succeeds
 };
 ```
 
 State transitions:
 - `begin()` success -> READY
 - Any E2 transfer failure in READY -> DEGRADED
-- Success in DEGRADED/OFFLINE -> READY
+- Tracked success in DEGRADED -> READY
+- Only successful recover() restores an OFFLINE session to READY
+- Failed recover() from READY/DEGRADED/OFFLINE clears capabilities and latches OFFLINE
 - Failures reach `offlineThreshold` -> OFFLINE
 - `end()` -> UNINIT
 
@@ -304,7 +306,7 @@ Public API (readStatus, readCo2Fast, readCo2Average, customRead, customWrite)
 Protocol helpers (readControlByte, customRead/write)
     v
 TRACKED wrappers (_readControlByteTracked, _writeCommandTracked)
-    v  <- _updateHealth() called here ONLY
+    v  <- OFFLINE guard and ordinary transfer health tracking live here
 RAW wrappers (_readControlByteRaw, _writeCommandRaw)
     v
 Transport callbacks (Config::setScl/setSda/readScl/readSda/delayUs)
@@ -313,12 +315,23 @@ Transport callbacks (Config::setScl/setSda/readScl/readSda/delayUs)
 **Rules:**
 - Public API methods NEVER call `_updateHealth()` directly.
 - Protocol helpers use TRACKED wrappers -> health updated automatically.
+- The ordinary-operation OFFLINE guard lives only at the two tracked transfer
+  wrappers, `_readControlByteTracked` and `_writeCommandTracked`. Both use
+  `_offlineStatus()` to retain the last code/detail and mark a latched reply.
+- `_busResetRaw()` provides health-neutral bounded reset clocks and STOP.
+- `_validateIdentityRaw()` checks group, subgroup, and CO2 capability;
+  `_readFeatureFlagsRaw()` loads capability flags into temporary values.
 - `probe()` uses RAW wrappers -> no health tracking (diagnostic only).
-- `recover()` tracks probe failures (driver is initialized, so failures count).
+- `recover()` delegates to `_recoverTracked()`, which uses those raw helpers
+  and calls `_updateHealth()` once for the entire attempt. Failure invalidates
+  capabilities and latches OFFLINE; only full success installs the new cache.
+- STOP and raw reset use `flashStretchTimeoutUs` for the documented EE871 flash
+  extension. START/byte transfer waits retain the generic E2 bit/byte limits.
 
 ### Health Tracking Rules
 
-- `_updateHealth()` called ONLY inside tracked transport wrappers.
+- `_updateHealth()` called ONLY inside the two tracked transfer wrappers and
+  `_recoverTracked()`.
 - State transitions guarded by `_initialized` (no DEGRADED/OFFLINE before `begin()` succeeds).
 - NOT called for config/param validation errors (INVALID_CONFIG, INVALID_PARAM).
 - NOT called for precondition errors (NOT_INITIALIZED).

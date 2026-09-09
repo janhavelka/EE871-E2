@@ -147,11 +147,13 @@ def main() -> int:
         fail("IDF scanner must gate its only discovery assignment on final success")
     retained_error = (
         r"if\s*\(\s*lastError\s*\[\s*addr\s*\]\s*\.\s*ok\s*\(\s*\)\s*"
-        r"\|\|\s*st\s*\.\s*code\s*!=\s*EE871::Err::NACK\s*\)\s*\{\s*"
+        r"\|\|\s*\(\s*st\s*\.\s*code\s*!=\s*EE871::Err::NACK\s*&&\s*"
+        r"lastError\s*\[\s*addr\s*\]\s*\.\s*code\s*!=\s*EE871::Err::NOT_SUPPORTED"
+        r"\s*\)\s*\)\s*\{\s*"
         r"lastError\s*\[\s*addr\s*\]\s*=\s*st\s*;\s*\}"
     )
     if re.search(retained_error, scanner_code) is None:
-        fail("IDF scanner must retain non-NACK evidence across later attempts")
+        fail("IDF scanner must retain non-NACK evidence and never demote NOT_SUPPORTED")
     if re.search(r"candidate\s*\.\s*begin\s*\(", scanner_code) is None:
         fail("IDF scanner must use production begin() identity validation")
     if re.search(r"candidate\s*\.\s*readStatus\s*\(", scanner_code) is None:
@@ -159,7 +161,7 @@ def main() -> int:
     for raw_call in ("sendStart", "sendByteRaw", "readByteRaw"):
         if re.search(rf"\b{raw_call}\s*\(", scanner_code):
             fail(f"IDF scanner still uses raw diagnostic call {raw_call!r}")
-    if re.search(r"\bfound\s*\+\+", scanner_code):
+    if re.search(r"(?:\bfound\s*\+\+|\+\+\s*found\b)", scanner_code):
         fail("IDF scanner still counts ACK-only responses")
 
     libtest = extract_section(idf, "void testLibraryCommands", "void runFullDiagnostics")
@@ -174,6 +176,24 @@ def main() -> int:
     for raw_call in ("sendStart", "sendByteRaw", "readByteRaw"):
         if re.search(rf"\b{raw_call}\s*\(", libtest_code):
             fail(f"IDF library test still uses raw diagnostic call {raw_call!r}")
+
+    banner = "Reads are tracked; OFFLINE returns the latched status without bus traffic."
+    if banner not in libtest:
+        fail("IDF library test must explain tracked reads and OFFLINE suppression")
+
+    timing = strip_cpp_non_code(extract_section(
+        idf, "void discoverTiming", "void sendRecoveryClocks"
+    ))
+    if re.search(
+        r"\btimings\s*\[\s*\]\s*=\s*\{\s*995\s*,\s*500\s*,\s*250\s*,"
+        r"\s*200\s*,\s*150\s*,\s*100\s*\}\s*;", timing,
+    ) is None:
+        fail("IDF timing discovery must use the six in-spec candidates")
+    if re.search(
+        r"\bfreqHz\s*=\s*1000000\.0f\s*/\s*\(\s*10\.0f\s*\+"
+        r"\s*2\.0f\s*\*\s*clockUs\s*\)\s*;", timing,
+    ) is None:
+        fail("IDF timing frequency must include the 10 us data setup")
 
     warning_pattern = (
         r"if\s*\(\s*std::strcmp\s*\(\s*trimmed\s*,\s*LINE_TOO_LONG_MARKER\s*\)"

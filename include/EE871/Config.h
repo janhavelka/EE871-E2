@@ -72,6 +72,14 @@ struct Config {
 
   // === Health Tracking ===
   uint8_t offlineThreshold = 5;   ///< Consecutive tracked failures before OFFLINE; zero normalizes to 1.
+
+  /// Per-SCL-release stretch deadline for STOP and bus reset: 300000..5000000 us.
+  /// AN1611-1 documents an EE871 deviation from generic E2's 25/35 ms transfer
+  /// limits: flash commits can extend CLK low for 150 ms, or 300 ms for the
+  /// interval pair. This separate budget includes 50 ms margin by default;
+  /// it does not relax bitTimeoutUs/byteTimeoutUs or replace write delays.
+  /// Appended to preserve existing positional aggregate initialization.
+  uint32_t flashStretchTimeoutUs = 350000;
 };
 
 } // namespace EE871
