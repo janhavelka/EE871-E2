@@ -154,7 +154,7 @@ static constexpr uint8_t BUS_ADDRESS_MAX = 7;           ///< Maximum persistent 
 
 static constexpr uint8_t BUS_RESET_CLOCKS = 9; ///< Minimum clocks with SDA high to reset slave state machine.
 
-static constexpr uint32_t WRITE_DELAY_MAX_MS = 5000; ///< Maximum accepted 0x10/0x50 write delay configuration.
+static constexpr uint32_t WRITE_DELAY_MAX_MS = 5000; ///< Maximum accepted direct custom-memory (0x10) write delay.
 static constexpr uint32_t INTERVAL_WRITE_DELAY_MAX_MS = 5000; ///< Maximum accepted interval write delay configuration.
 
 // ============================================================================

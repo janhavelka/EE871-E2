@@ -58,9 +58,14 @@ has changed and SCL has been released.
 
 The September review separated the EE871-specific flash extension from those
 generic transfer limits. `Config::flashStretchTimeoutUs` defaults to 350 ms
-and bounds each SCL-release wait during STOP/reset, allowing AN1611-1's
-150 ms single-byte and 300 ms interval-pair commits. Validation accepts
-300..5000 ms; START and byte transfers retain the 25/35 ms limits.
+and allows AN1611-1's 150 ms single-byte and 300 ms interval-pair commits.
+The 2026-09-10 correction restricts it to direct custom-memory write STOPs
+and explicit reset. Ordinary reads and volatile pointer writes use
+`bitTimeoutUs` for STOP. AN1611-1 section 5/page 5 assigns flash timing to
+0x10; sections 7.1-7.2/page 8 identify 0x50 as the read pointer.
+Validation still accepts 300..5000 ms for the flash allowance; START and byte
+transfers retain the 25/35 ms limits. See the primary
+[application note](https://www.epluse.com/fileadmin/data/product/application_note/E2-Interface-CO2.pdf).
 
 The diagnostic timing commands were also corrected. Their slowest symmetric
 candidate is 995/995 us because the transmitted period includes the 10 us data

@@ -171,7 +171,8 @@ Rules:
   - Group = 0x0367 (read low via 0x11, high via 0x41).
   - Subgroup = 0x09 (read via 0x21).
   - Available measurements = 0x08 (read via 0x31, bit3 = CO2).
-- Status byte (0x71) bit3 indicates CO2 error; reading status triggers a new measurement.
+- Status byte (0x71) bit3 indicates CO2 error; reading status can trigger a new
+  measurement only when the interval is >15 s and the previous value is >10 s old.
 - Measurement values:
   - MV3 (fast response) low/high via 0xC1 / 0xD1.
   - MV4 (averaged) low/high via 0xE1 / 0xF1.
@@ -201,16 +202,21 @@ Rules:
 - Warm-up: 5-10 s after power-up before relying on readings.
 - Measurement time: ~0.7 s.
 - Global interval: 15-3600 s (typical default 15 s).
-- Status read can trigger a measurement if last measurement is older than 10 s.
+- Status read can trigger a measurement only when the global interval is >15 s
+  and the last measurement is older than 10 s (AN1611-1 sections 4 and 10).
   - New data available ~5-10 s after trigger; trigger resets interval counter.
 
 ---
 
 ## Write Timing and Flash Behavior (Mandatory)
 
-- 0x10 or 0x50 writes can take up to 150 ms; slave may hold CLK low during this time.
+- Direct custom-memory writes (0x10 at device address 0) can cause up to 150 ms
+  of flash-related CLK-low extension. A 0x50 pointer update is volatile, not a
+  flash write; it retains the ordinary STOP timeout.
 - 0xC6/0xC7 interval write commits after both bytes; delay up to 300 ms.
-- After any write, wait with a deadline and read back to verify.
+- After persistent writes, wait with a deadline and read back to verify.
+- Primary authority: [AN1611-1](https://www.epluse.com/fileadmin/data/product/application_note/E2-Interface-CO2.pdf),
+  section 5/page 5 (0x10 flash timing), sections 7.1-7.2/page 8 (0x50 read pointer).
 - Persistent custom-memory writes, interval writes, address writes, and
   maintenance calibration writes must be explicit. Do not hide persistence
   behind read or normal sampling APIs.
@@ -230,8 +236,8 @@ Rules:
 - Status reads are side-effecting: reading status can start or trigger a new
   measurement and reset timing under documented conditions.
 - For checked CO2 sample helpers, read the required measured value first and
-  read status second so the status evaluates the last measured value and starts
-  the next measurement sequence.
+  read status second so the status evaluates the last measured value and may
+  start the next measurement under the timing conditions above.
 - Do not read status only to make a raw value API look safer. If a helper reads
   status, the helper name and documentation must make that explicit.
 - Warm-up state, triggered-measurement delay, stale-data policy, unsupported
@@ -325,8 +331,11 @@ Transport callbacks (Config::setScl/setSda/readScl/readSda/delayUs)
 - `recover()` delegates to `_recoverTracked()`, which uses those raw helpers
   and calls `_updateHealth()` once for the entire attempt. Failure invalidates
   capabilities and latches OFFLINE; only full success installs the new cache.
-- STOP and raw reset use `flashStretchTimeoutUs` for the documented EE871 flash
-  extension. START/byte transfer waits retain the generic E2 bit/byte limits.
+- Ordinary read and volatile pointer-write STOPs use `bitTimeoutUs`.
+  Only direct custom-memory write STOPs use `flashStretchTimeoutUs` for the
+  documented EE871 flash extension, at every supported device address.
+  Explicit raw reset retains that longer allowance for a possibly pending
+  flash commit. START/byte transfer waits retain generic E2 bit/byte limits.
 
 ### Health Tracking Rules
 

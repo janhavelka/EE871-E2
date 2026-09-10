@@ -24,7 +24,7 @@ hardware/HIL re-validation of this version remains outstanding.
 
 Recorded evidence:
 
-- Native tests: 58 passing; Python tooling/contract/parser tests: 58 passing
+- Native tests: 60 passing; Python tooling/contract/parser tests: 58 passing
   (including compiled native checks of both scanner error-retention blocks).
 - The current example/HIL platform is exact-pinned to pioarduino
   `platform-espressif32` `55.03.311`, Arduino-ESP32 `3.3.11`, and ESP-IDF
@@ -231,8 +231,9 @@ capability, and a complete feature-cache read. `readCo2Fast()` and
 freshness, or the product-specific valid ppm range. A sampling application
 should wait for its warm-up policy, read the selected measured value first,
 read `readStatus()` second, reject status bit 3 via `hasCo2Error()`, and apply
-its own range/staleness policy. Reading status can itself trigger the next
-measurement and reset the sensor interval counter.
+its own range/staleness policy. Reading status can trigger the next measurement
+and reset the interval counter only when the global interval exceeds 15 s and
+the previous value is older than 10 s (AN1611-1 sections 4 and 10).
 
 ## Health Monitoring
 
@@ -287,20 +288,28 @@ occurs before a bit starts or while waiting on a slave-held clock; a completed
 byte stays within `byteTimeoutUs`. E2 transfer maxima are enforced at 25,000 us
 per bit and 35,000 us per byte.
 
-`Config::flashStretchTimeoutUs` separately bounds each SCL-release wait in STOP
-and bus reset. It defaults to 350,000 us and accepts 300,000..5,000,000 us,
-bounded by the write-delay safety limits. This handles the documented EE871
-deviation from generic E2's 25/35 ms rule: AN1611-1 section 5 permits CLK-low
-extension during flash writes for up to 150 ms per byte or 300 ms for the
-0xC6/0xC7 interval pair. The default adds 50 ms margin. START and byte transfers
-retain the generic budgets. Post-write waits remain `writeDelayMs` (default
+Ordinary read and volatile custom-pointer write STOPs use `bitTimeoutUs`
+(default 25,000 us). `Config::flashStretchTimeoutUs` separately bounds STOPs
+for direct custom-memory writes, and each SCL release during explicit bus
+reset, which may encounter a pending flash commit. It defaults to 350,000 us
+and accepts 300,000..5,000,000 us, bounded by the write-delay safety limits.
+[AN1611-1](https://www.epluse.com/fileadmin/data/product/application_note/E2-Interface-CO2.pdf)
+section 5/page 5 assigns the 150 ms single-byte or 300 ms interval-pair flash
+extension to direct writes (0x10 at device address 0). Sections 7.1-7.2/page 8
+identify 0x50 as a read-pointer update, which does not justify a flash wait.
+The default flash allowance adds 50 ms margin. START and byte transfers retain
+the generic budgets. Post-write waits remain `writeDelayMs` (default
 150 ms) or `intervalWriteDelayMs` (default 300 ms), each limited to 5000 ms,
 followed by readback verification. The new field is appended to `Config` so
 existing positional initializers retain their field order; rebuild consumers.
 
 A reset has nine clock releases plus STOP, so its maximum stretch allowance is
 `10 * flashStretchTimeoutUs` plus nominal phases. Transaction bounds include
-START, three read or four write byte budgets, and one STOP budget. These are
+START, three read or four write byte budgets, and the command's STOP budget.
+With default timing, an ordinary read's requested-delay bound is 155,610 us;
+a volatile pointer write's is 190,610 us. Fast/averaged value plus status uses
+three reads (466,830 us), or 813,050 us when followed by an error-code pointer
+write and read. These are
 budgets for requested callback delays; callbacks must themselves remain bounded.
 
 The library never owns GPIO pins or an I2C/Wire instance. Applications provide `setScl`, `setSda`, `readScl`, `readSda`, and `delayUs` callbacks.

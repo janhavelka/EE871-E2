@@ -625,7 +625,8 @@ API compatibility requirement.
 - Timeouts for clock stretching:
   - <= 25 ms per bit, <= 35 ms per byte
 - Always verify PEC for every read/write transaction
-- After any write (0x10/0x50), read back to verify
+- After persistent custom-memory writes (0x10), read back to verify; 0x50 only
+  updates the volatile read pointer and does not need a flash delay.
 - After 0x10 writes, allow up to 150 ms (up to 300 ms for the 0xC6/0xC7 pair)
 
 ---

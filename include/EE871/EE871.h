@@ -259,7 +259,8 @@ public:
 
   /// Set internal custom pointer using command 0x50.
   ///
-  /// This is a pointer update, not a flash write; no write delay is applied.
+  /// This is a volatile pointer update, not a flash write; no write delay is
+  /// applied and its STOP uses the ordinary bitTimeoutUs budget.
   /// @param address Custom-memory address; the high byte is sent but ignored by
   /// the EE871 (its custom memory is 256 bytes).
   /// @return Status::Ok() after the pointer write is acknowledged.
@@ -548,10 +549,10 @@ public:
 
   /// Read status byte.
   ///
-  /// This operation is side-effecting: when the prior measurement is old, an
-  /// EE871 status read can trigger a new measurement and reset its interval
-  /// counter. For checked sampling, read MV3/MV4 first and status second so
-  /// status describes the last measured value while starting the next cycle.
+  /// This operation can trigger a measurement and reset its interval counter
+  /// when the global interval is >15 s and the prior value is >10 s old
+  /// (AN1611-1 sections 4 and 10). For checked sampling, read MV3/MV4 first
+  /// and status second so status describes the last measured value.
   /// @param[out] status Status byte.
   /// @return Status::Ok() when the status byte and PEC verify. A slave NACK is
   /// returned without retry.

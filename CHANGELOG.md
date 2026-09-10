@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Ordinary read and volatile custom-pointer write STOPs now use
+  `bitTimeoutUs`, instead of inheriting the 350 ms flash allowance. Direct
+  custom-memory writes retain the flash budget at all device addresses;
+  explicit reset remains tolerant of a pending flash commit. Original transfer
+  errors and released-line cleanup are preserved.
+- Corrected flash/pointer timing guidance and the interval >15 s condition
+  for status-triggered measurement against AN1611-1. No API or version change.
+
 ## [1.1.0] - 2026-09-09
 
 ### Behavior changes / migration
