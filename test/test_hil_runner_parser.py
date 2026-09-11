@@ -112,6 +112,8 @@ class HilRunnerParserTest(unittest.TestCase):
             return runner.capture_integrity_errors("drv", "\n".join(rows) + "\n> \n")
         # The CLI omits Error msg when the stored message pointer is null.
         self.assertEqual([], errors(lines))
+        self.assertEqual([], errors([line.replace("Error code: NACK", "Error code: E2_ERROR")
+                                     for line in lines]))
         for prefix in ("Error code:", "Error detail:"):
             with self.subTest(missing=prefix):
                 self.assertTrue(errors([line for line in lines if not line.startswith(prefix)]))
@@ -336,6 +338,16 @@ Selftest result: pass=9 fail=1 skip=0
         self.assertEqual(health["total_success"], 42)
         self.assertFalse(dirty["persistent_config_dirty"])
         self.assertFalse(dirty["resync_needed"])
+
+    def test_error_names_may_contain_digits(self) -> None:
+        text = "Status: E2_ERROR (code=3, detail=17)\nMessage: Write readback mismatch\n> \n"
+        parsed = runner.parse_response("co2fast", text)
+        self.assertEqual({"name": "E2_ERROR", "code": 3, "detail": 17}, parsed.get("status"))
+        spec = runner.CommandSpec("co2fast", "expected fault", expected_any=("Status:",),
+                                  validators=("expected_failure",))
+        self.assertEqual(runner.RESULT_PASS, runner.classify_response(spec, text, False, parsed)[0])
+        dirty = runner.parse_dirty("persistentConfigDirtyError: E2_ERROR (code=3, detail=17)\n")
+        self.assertEqual("E2_ERROR", dirty.get("persistent_config_dirty_error", {}).get("name"))
 
     def test_parse_health_uses_latest_driver_block(self) -> None:
         text = """

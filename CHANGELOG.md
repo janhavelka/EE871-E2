@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of calling the serial driver's potentially unbounded drain.
 - The Arduino CLI prompt no longer flushes the USB output queue. Arduino's
   transient disconnected indication can make that flush discard pending text.
+- HIL status and health parsers recognize error names containing digits,
+  including the driver's `E2_ERROR`, without discarding their code/detail.
 
 ## [1.1.0] - 2026-09-11
 

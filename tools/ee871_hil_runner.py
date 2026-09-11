@@ -133,7 +133,7 @@ def parse_status(text: str) -> dict[str, Any]:
     clean = strip_ansi(text)
     statuses: list[dict[str, Any]] = []
     for match in re.finditer(
-        r"\bStatus:\s*([A-Z_]+)\s*\(code=(\d+),\s*detail=(-?\d+)\)",
+        r"\bStatus:\s*([A-Z][A-Z0-9_]*)\s*\(code=(\d+),\s*detail=(-?\d+)\)",
         clean,
         re.IGNORECASE,
     ):
@@ -267,7 +267,7 @@ def parse_dirty(text: str) -> dict[str, Any]:
     if matches:
         parsed["persistent_config_dirty"] = parse_boolish(matches[-1].group(1))
     matches = list(re.finditer(
-        r"\bpersistentConfigDirtyError:\s*([A-Z_]+)\s*\(code=(\d+),\s*detail=(-?\d+)\)",
+        r"\bpersistentConfigDirtyError:\s*([A-Z][A-Z0-9_]*)\s*\(code=(\d+),\s*detail=(-?\d+)\)",
         clean,
         re.IGNORECASE,
     ))
@@ -482,7 +482,7 @@ def capture_integrity_errors(command: str, text: str) -> list[str]:
     fields: dict[str, str] = {}
     dirty_fields = {
         "persistentConfigDirty:": r"(?:yes|no|true|false|0|1)",
-        "persistentConfigDirtyError:": r"[A-Z_]+ \(code=\d+, detail=-?\d+\)",
+        "persistentConfigDirtyError:": r"[A-Z][A-Z0-9_]* \(code=\d+, detail=-?\d+\)",
         "persistentConfigDirtyError message:": r".+",
         "resyncNeeded:": r"(?:yes|no|true|false|0|1)",
     }
@@ -499,7 +499,7 @@ def capture_integrity_errors(command: str, text: str) -> list[str]:
         }
         historical_failures = parse_health(clean).get("total_failures", 0)
         if historical_failures or re.search(r"Last error:[ \t]+\d", clean):
-            fields.update({"Error code:": r"[A-Z_]+", "Error detail:": r"-?\d+"})
+            fields.update({"Error code:": r"[A-Z][A-Z0-9_]*", "Error detail:": r"-?\d+"})
         # The example emits message text only when the Status contains it.
         if re.search(r"^[ \t]*Error msg:", clean, re.MULTILINE):
             fields["Error msg:"] = r".+"
