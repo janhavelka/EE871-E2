@@ -15,8 +15,8 @@ enum class Err : uint8_t {
   OK = 0,                    ///< Operation successful
   NOT_INITIALIZED,           ///< begin() not called
   INVALID_CONFIG,            ///< Invalid configuration parameter
-  E2_ERROR,                  ///< E2 bus communication failure
-  TIMEOUT,                   ///< Operation timed out
+  E2_ERROR,                  ///< Write readback mismatch or fallback E2 failure; inspect msg/detail
+  TIMEOUT,                   ///< Byte deadline or clock-stretch timeout; inspect msg/detail
   INVALID_PARAM,             ///< Invalid parameter value
   DEVICE_NOT_FOUND,          ///< Reserved for compatibility; not returned by the current driver
   PEC_MISMATCH,              ///< PEC validation failed
@@ -26,7 +26,7 @@ enum class Err : uint8_t {
   BUS_STUCK,                 ///< Bus line cannot reach a commanded/idle level
   ALREADY_INITIALIZED,       ///< begin() called without end()
   OUT_OF_RANGE,              ///< Value out of valid range
-  NOT_SUPPORTED              ///< Feature not supported by this device/firmware
+  NOT_SUPPORTED              ///< Unsupported identity/feature, missing capability, or malformed support flags
 };
 
 /// @brief Status structure returned by all fallible operations.
@@ -36,7 +36,7 @@ enum class Err : uint8_t {
 /// callers must not free it.
 struct Status {
   Err code = Err::OK;        ///< Framework-neutral status code.
-  int32_t detail = 0;        ///< Operation-specific detail, such as address, actual readback byte, or E2 error code.
+  int32_t detail = 0;        ///< Operation-specific detail, such as a readback value, elapsed microseconds, or support address/flags packed as `(address << 8) | flags`.
   const char* msg = "";      ///< Static string describing the status.
 
   /// @brief Construct an OK/empty status.

@@ -238,9 +238,17 @@ Key bytes:
 - **0x00** Firmware main version
 - **0x01** Firmware sub version
 - **0x02** E2 spec version used by device
+- **0x03** Offset/gain adjustment support by physical quantity; bit3 is CO2
+- **0x04** Adjustment-point support by physical quantity; bit3 is CO2
 - **0x07** Operating functions supported bits (see Sec. 7.4.1)
 - **0x08** Operating mode supported bits (see Sec. 7.4.2)
 - **0x09** Special features supported bits (see Sec. 7.4.3)
+
+The driver validates `0x07..0x09` together before installing its capability
+cache during `begin()` or `recover()`. Reserved bits (`0x08`, `0xFC`, and
+`0xFE` respectively) cause `NOT_SUPPORTED`; transport failures retain their
+original status. A failed recovery clears the cache and latches OFFLINE.
+Calibration support at `0x03`/`0x04` is checked on demand, as described below.
 
 ### 7.2 Firmware / spec identification
 - `0x00` Firmware-Version main
@@ -260,6 +268,17 @@ These exist per physical quantity; for EE871 CO2, relevant block is:
 - `0x5E` CO2 point_U L (unsigned int, ppm) last "upper" adjustment point
 - `0x5F` CO2 point_U H
 
+The generic E2 specification conditions offset/gain access on bit3 of `0x03`,
+and adjustment-point access on bit3 of `0x04`. Bits4..7 of both support bytes
+are reserved. The driver's typed offset/gain reads and writes check `0x03`
+before touching `0x58..0x5B`; `readCo2CalPoints()` checks `0x04` before reading
+`0x5C..0x5F`. Missing CO2 support or reserved bits return `NOT_SUPPORTED`.
+The support read adds one volatile pointer write and one read frame per call;
+it is subject to the ordinary custom-read timeouts and has no retries.
+Raw `customRead()`/`customWrite()` do not enforce these typed capability gates;
+the caller must establish that the selected register exists and permits the
+requested access.
+
 ### 7.4 Operating/configuration registers
 
 #### 7.4.1 Feature support flags: address 0x07 (bitfield)
@@ -267,6 +286,7 @@ Meaning (bit set = supported):
 - bit0: E+E serial number readable
 - bit1: Part name (16 bytes) readable/writable
 - bit2: E2 bus address configurable (0...7)
+- bit3: reserved
 - bit4: Global measurement interval configurable
 - bit5: Specific measurement interval configurable
 - bit6: Measurement value filter configurable
@@ -279,6 +299,7 @@ Meaning (bit set = supported):
 
 #### 7.4.3 Special features support: address 0x09 (bitfield)
 - bit0: Manual "auto adjustment" supported
+- bits1..7: reserved
 
 #### 7.4.4 Device identity strings
 - `0xA0...0xAF` (R): **E+E serial number** (16 bytes)
@@ -287,6 +308,12 @@ Meaning (bit set = supported):
 #### 7.4.5 Bus address and error handling
 - `0xC0` (R/W): **Bus-address** (0...7). Default 0.
 - `0xC1` (R/W): **Error code** (meaning depends on product addendum; for CO2 see Sec. 9)
+
+`writeBusAddress()` verifies the stored value using the configured session
+address. It does not retarget the session, and the retained vendor sources do
+not establish when the new address becomes active. A lost response after the
+write can therefore leave persistent state dirty; establish the responding
+address before restarting communication and resynchronizing.
 
 #### 7.4.6 Measurement interval
 Global measurement interval (unsigned 16-bit, unit = **0.1 s**):
@@ -305,6 +332,11 @@ Specific interval factors (signed 8-bit convention described as):
   - bit0 Measuremode: 0 = freerunning/trigger mode, 1 = low power mode (measure after status read)
   - bit1 E2 priority: 0 = measurement priority (NACK during measurement), 1 = communication priority
 
+The typed read and write helpers require each active bit's corresponding
+`0x08` capability. Unsupported active bits return `NOT_SUPPORTED`; reserved
+runtime bits return `OUT_OF_RANGE`. A failed typed read leaves its output
+unchanged.
+
 The generic E2 specification permits a control-byte NACK during a
 measurement-priority window, but AN0105 names EE871 among the devices that can
 process enquiries while measuring. In addition, runtime mode `0xD8` is not
@@ -316,10 +348,18 @@ in Section 13.4; it still owns sample cadence and recovery.
 
 #### 7.4.9 Special features register
 - `0xD9` Auto adjustment control/status:
-  - read=1 -> auto adjustment running
-  - set=1 -> start auto adjustment
-  - set=0 -> cannot stop/interrupt
+  - bit0 read=1 -> auto adjustment running; read=0 -> normal operation
+  - bit0 set=1 -> start auto adjustment
+  - bit0 set=0 -> cannot stop/interrupt
+  - bits1..7 are reserved
   - During auto adjustment, measurement values are held at last value.
+
+`readAutoAdjustStatus()` requires the advertised `0x09` support bit and
+rejects reserved status bits with `OUT_OF_RANGE`, leaving its output unchanged
+on failure. `startAutoAdjust()` checks that status first and returns `BUSY`
+without writing if adjustment is already running. A failed trigger write
+may still have started adjustment; use the persistent diagnostics below
+instead of blindly repeating the command.
 
 #### 7.4.10 Address pointer visibility
 - `0xFE` Address pointer low byte
@@ -383,6 +423,26 @@ flash STOP budget. Persistent maintenance APIs wait with bounded delays and
 verify the stored value by readback. A partial write or uncertain commit must
 remain visible through persistent dirty/resync diagnostics until a successful
 documented verification path clears it.
+
+In this driver, uncertainty includes single-byte and raw custom writes when
+PEC transmission, the final ACK, STOP, or readback fails after the write may
+have applied. A definitely sampled final PEC NACK does not newly dirty a
+previously clean single-byte write. The first error and all uncertain register
+targets survive later successful operations, `recover()`, and `end()`/`begin()`.
+
+`resyncPersistentConfig()` reads and validates the global interval, reads
+advertised offset/gain and part-name fields, and reads every uncertain target.
+Pending calibration or part-name targets whose support is absent keep dirty
+state latched. Pending address, mode, and auto-adjustment registers receive
+their value/status checks; an uncertain adjustment must report idle, otherwise
+resync returns `BUSY`. Only a complete successful resync clears the record.
+This is a bounded maintenance operation whose traffic grows with pending
+targets; see the [README timing guidance](../README.md#persistent-configuration-writes).
+
+Resync establishes readable, coherent current configuration. It does not
+restore previous values or prove that a requested change or calibration ran
+successfully. The application must compare with its recorded baseline before
+accepting the result.
 
 ---
 
@@ -478,7 +538,7 @@ transport, validation, capability, and protocol failures:
   `busReset()`, and `checkBusIdle()`.
 - Persistent maintenance: typed helpers such as
   `writeMeasurementInterval()`, with dirty/resync diagnostics for uncertain
-  multi-byte state.
+  single-byte, multi-byte, and raw custom-memory writes.
 
 This section maps the protocol to the current library; it is not a generic C
 API compatibility requirement.

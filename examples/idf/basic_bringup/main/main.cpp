@@ -622,7 +622,7 @@ void printHelp() {
 
   printHelpSection("Configuration");
   printHelpItem("addr", "Read current bus address");
-  printHelpItem("addr <0-7>", "Write persistent bus address (power cycle)");
+  printHelpItem("addr <0-7>", "Write persistent bus address (session unchanged)");
   printHelpItem("interval", "Read measurement interval");
   printHelpItem("interval <dec>", "Write persistent interval (150..36000 ds)");
   printHelpItem("factor", "Read CO2 interval factor");
@@ -639,7 +639,7 @@ void printHelp() {
   printHelpItem("gain <val>", "Write persistent CO2 gain");
   printHelpItem("calpoints", "Read last calibration points");
   printHelpItem("autoadj", "Read auto-adjust status");
-  printHelpItem("autoadj start", "Start config-changing auto-adjustment (~5 min)");
+  printHelpItem("autoadj start", "Start maintenance adjustment (cannot be stopped)");
 
   printHelpSection("Bus Safety");
   printHelpItem("buscheck", "Check if bus is idle");
@@ -2235,7 +2235,7 @@ void processCommand(const char* input) {
       logWarn("addr must be a number 0..255");
       return;
     }
-    logInfo("Writing bus address %ld (power cycle required)...", val);
+    logInfo("Writing stored bus address %ld; session address unchanged...", val);
     auto st = device.writeBusAddress(static_cast<uint8_t>(val));
     printStatus(st);
   } else if (std::strcmp(trimmed, "interval") == 0) {
@@ -2366,7 +2366,7 @@ void processCommand(const char* input) {
       std::printf("  Auto adjustment: %s\n", running ? "RUNNING" : "idle");
     }
   } else if (std::strcmp(trimmed, "autoadj start") == 0) {
-    logInfo("Starting auto adjustment (takes ~5 minutes)...");
+    logInfo("Requesting auto adjustment; use autoadj to check status...");
     auto st = device.startAutoAdjust();
     printStatus(st);
   } else if (std::strcmp(trimmed, "buscheck") == 0) {

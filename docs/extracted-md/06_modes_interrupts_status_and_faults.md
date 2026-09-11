@@ -26,6 +26,24 @@ Source: AN1611-1, pp. 5, 10.
 
 AN1611-1 describes sleep, sensor-element stabilization, measurement, infrared-lamp charge/current peak, and communication states. The key driver consequence is to avoid polling loops that keep the module in communication mode or prevent sleep.
 
+## Operating Mode and Auto Adjustment
+
+The generic E2 map uses `0x08` bits0/1 to advertise the operating modes
+controlled by `0xD8` bits0/1. Auto adjustment is advertised by `0x09` bit0;
+`0xD9` bit0 reads 1 while it runs and 0 in normal operation. Writing 1 starts
+adjustment, and writing 0 cannot interrupt it. Bits1..7 of `0xD9` are reserved;
+measurement values are held at their previous values during adjustment.
+
+Source: E2 interface specification v4.1, pp. 16-17.
+
+The current driver checks each active operating-mode bit against its support
+bit on reads and writes. `readAutoAdjustStatus()` requires advertised support
+and accepts only 0/1. Reserved returned bits produce `OUT_OF_RANGE` and leave
+the caller's output unchanged. `startAutoAdjust()` reads validated status
+first and returns `BUSY` without writing when adjustment is already running.
+An uncertain trigger write requires the persistent-state handling described
+in the [operational notes](07_initialization_reset_and_operational_notes.md).
+
 ## Errors
 
 When status bit3 is 1, read custom-memory address 0xC1 for the EE871/CO2 error code.

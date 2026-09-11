@@ -194,7 +194,11 @@ Rules:
 
 ### Important custom memory addresses
 - 0x00/0x01 firmware version, 0x02 E2 spec version.
+- 0x03 offset/gain support and 0x04 adjustment-point support: bit3 permits CO2
+  access; the high nibble is reserved. Typed calibration APIs check these on
+  demand before accessing the calibration registers.
 - 0x07-0x09 feature flags (operating functions, modes, special features).
+  Validate reserved bits before installing the cache: masks 0x08, 0xFC, 0xFE.
 - 0xA0-0xAF serial number (read-only), 0xB0-0xBF part name (read/write).
 - 0xC0 bus address, 0xC1 error code.
 - 0xC6/0xC7 global measurement interval (0.1 s units), 0xCB specific CO2 interval factor.
@@ -228,8 +232,17 @@ Rules:
   behind read or normal sampling APIs.
 - Multi-step or persistent writes must either keep cached state and hardware
   synchronized or expose an explicit dirty/resync-needed diagnostic.
-- Dirty or partial persistent state may be cleared only after a successful full
-  readback, resync, recover, or documented verification path.
+- Failed single-byte and raw writes also become uncertain once PEC transmission
+  starts unless a final PEC NACK is definitely observed. Preserve the original transfer
+  error and every affected register; later writes must not erase earlier targets.
+- Only successful `resyncPersistentConfig()` clears persistent dirty state.
+  `recover()` restores communication but retains uncertainty, as do end/begin.
+  Resync requires readable/coherent current fields and current support for
+  pending conditional registers; it does not prove the requested values applied.
+- Auto-adjust status requires advertised support and valid reserved bits.
+  `startAutoAdjust()` checks status first and returns `BUSY` if already running.
+  Resync of an uncertain start checks for idle before calibration readback and
+  does not certify that the calibration request ran or succeeded.
 - Do not add new persistent-write APIs without documenting whether they are
   maintenance operations and how partial write failure is diagnosed.
 
@@ -364,7 +377,8 @@ Transport callbacks (Config::setScl/setSda/readScl/readSda/delayUs)
 - `_lastErrorMs` - timestamp of last failed E2 operation
 - `_lastError` - most recent error Status
 - `_consecutiveFailures` - failures since last success (resets on success)
-- `_totalFailures` / `_totalSuccess` - lifetime counters (wrap at max)
+- `_totalFailures` / `_totalSuccess` - session counters (reset on end/begin,
+  retained by recovery, wrap at max)
 
 ---
 

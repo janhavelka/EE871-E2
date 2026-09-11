@@ -523,7 +523,7 @@ void printHelp() {
 
   cli::printHelpSection("Configuration");
   cli::printHelpItem("addr", "Read current bus address");
-  cli::printHelpItem("addr <0-7>", "Write persistent bus address (power cycle)");
+  cli::printHelpItem("addr <0-7>", "Write persistent bus address (session unchanged)");
   cli::printHelpItem("interval", "Read measurement interval");
   cli::printHelpItem("interval <dec>", "Write persistent interval (150..36000 ds)");
   cli::printHelpItem("factor", "Read CO2 interval factor");
@@ -540,7 +540,7 @@ void printHelp() {
   cli::printHelpItem("gain <val>", "Write persistent CO2 gain");
   cli::printHelpItem("calpoints", "Read last calibration points");
   cli::printHelpItem("autoadj", "Read auto-adjust status");
-  cli::printHelpItem("autoadj start", "Start config-changing auto-adjustment (~5 min)");
+  cli::printHelpItem("autoadj start", "Start maintenance adjustment (cannot be stopped)");
 
   cli::printHelpSection("Bus Safety");
   cli::printHelpItem("buscheck", "Check if bus is idle");
@@ -1359,7 +1359,7 @@ void processCommand(const String& cmd) {
       LOGW("addr must be a number 0..255");
       return;
     }
-    LOGI("Writing bus address %ld (power cycle required)...", val);
+    LOGI("Writing stored bus address %ld; session address unchanged...", val);
     auto st = device.writeBusAddress(static_cast<uint8_t>(val));
     printStatus(st);
   } else if (trimmed == "interval") {
@@ -1473,7 +1473,7 @@ void processCommand(const String& cmd) {
       Serial.printf("  Auto adjustment: %s\n", running ? "RUNNING" : "idle");
     }
   } else if (trimmed == "autoadj start") {
-    LOGI("Starting auto adjustment (takes ~5 minutes)...");
+    LOGI("Requesting auto adjustment; use autoadj to check status...");
     auto st = device.startAutoAdjust();
     printStatus(st);
   

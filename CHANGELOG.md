@@ -7,7 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## 1.1.0 - Unreleased
 
-Prepared for release after merge; no `v1.1.0` tag has been created.
+Release changes are merged into `main`; `1.1.0` remains unreleased and no
+`v1.1.0` tag has been created.
 
 ### Migration from 1.0.1
 
@@ -20,6 +21,10 @@ Prepared for release after merge; no `v1.1.0` tag has been created.
 - Calibration helpers now check support on demand before accessing calibration
   registers. Budget one additional pointer update and byte read per call;
   missing or malformed support flags return `NOT_SUPPORTED`.
+- Single-byte and raw writes can now require explicit resync after uncertain
+  completion. Recovery and end/begin retain that uncertainty. Allow resync's
+  pending-target and capability/status traffic in the maintenance budget;
+  auto-adjust start or resync can return `BUSY` while adjustment is running.
 - Treat OFFLINE as latched until explicit `recover()` succeeds. Ordinary
   operations fail immediately with the retained error code/detail and the
   message `Driver offline; call recover()`; original health diagnostics remain
@@ -51,7 +56,8 @@ Prepared for release after merge; no `v1.1.0` tag has been created.
   It accommodates documented 150/300 ms flash extensions without relaxing
   ordinary bit/byte budgets or replacing post-write waits and verification.
 - Native regressions for retries, byte latching, timing boundaries, identity,
-  OFFLINE/recovery, cleanup error precedence, and persistent dirty state;
+  OFFLINE/recovery, cleanup error precedence, calibration/capability guards,
+  auto-adjust preflight, and persistent dirty-state/resync transitions;
   Python lexical and CLI contract mutation coverage.
 
 ### Changed
@@ -64,6 +70,9 @@ Prepared for release after merge; no `v1.1.0` tag has been created.
 - Maintained documentation consolidates installation, IDF integration,
   protocol/runner guidance, and hardware evidence. September 11 CO2Control
   retry observations are recorded separately from historical bench results.
+- API reference, maintenance guides, and both CLI help texts describe current
+  capability and resync contracts without promising address-activation timing
+  or an unsupported fixed auto-adjustment duration.
 
 ### Fixed
 
@@ -71,7 +80,8 @@ Prepared for release after merge; no `v1.1.0` tag has been created.
   including PEC/ACK, STOP and verification failures. Definite PEC NACKs retain
   their precise error without claiming a possible write. A fixed pending-address
   bitmap keeps every affected target until complete resync, across recovery and
-  end/begin; unrelated readback cannot clear the uncertainty.
+  end/begin; unrelated readback cannot clear the uncertainty. Resync retains
+  dirty state if support for pending calibration or part-name fields disappears.
 - Auto adjustment checks validated status before issuing a start and returns
   `BUSY` if already running. Resync of an uncertain start requires idle status
   before calibration readback; it does not certify calibration success.
@@ -117,8 +127,12 @@ Prepared for release after merge; no `v1.1.0` tag has been created.
   matrix; previous report versions remain available in Git history.
 - Ineffective IDF polling sniffer; callback-based diagnostic sniffing remains.
 
-Validation commands, exact firmware evidence and unrun hardware scenarios are
-maintained in the [validation matrix](docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md).
+Implementation `3d32ac3` passed 93 native tests, 58 Python tests, three local
+Arduino builds, and [all six CI jobs](https://github.com/janhavelka/EE871-E2/actions/runs/34605633301),
+including native ESP-IDF 6.0.1 on S2/S3. The new maintenance guards and uncertainty
+paths have not been exercised on hardware. Commands, exact firmware evidence
+and unrun scenarios are maintained in the
+[validation matrix](docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md).
 
 ## [1.0.1] - 2026-07-31
 

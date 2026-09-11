@@ -17,15 +17,19 @@ examples, and HIL validation evidence.
 
 ## Release And Validation Status
 
-Source/package version `1.1.0` is prepared for the next release; `v1.0.1`
-remains the published tag until the release branch is merged and tagged.
+Source/package version `1.1.0` is merged into `main` and remains unreleased;
+`v1.0.1` is the published tag. No `v1.1.0` tag has been created.
 [CHANGELOG.md](CHANGELOG.md) covers migration, stricter startup/recovery,
-ordinary STOP timing, and the opt-in control-NACK retries.
+ordinary STOP timing, opt-in control-NACK retries, calibration guards, and
+persistent-write uncertainty.
 
-Software verification on 2026-09-11 passed 71 native tests, 58 Python tests,
-the timing/CLI/IDF contracts, synchronized version metadata, and all three
-Arduino builds (ESP32-S3, ESP32-S2, and the older TunnelMonitor compatibility
-stack). Native ESP-IDF S2/S3 builds are separate CI jobs.
+Software verification of implementation commit `3d32ac3` on 2026-09-11 passed
+93 native tests, 58 Python tests, the timing/CLI/IDF contracts, synchronized
+version metadata, Doxygen, and all three local Arduino builds (ESP32-S3,
+ESP32-S2, and the older TunnelMonitor compatibility stack).
+[All six CI jobs passed](https://github.com/janhavelka/EE871-E2/actions/runs/34605633301),
+including native ESP-IDF 6.0.1 builds for S2 and S3. These are software checks;
+the hardware evidence below belongs to the earlier recorded firmware.
 
 Recorded CO2Control ESP32-S3 hardware testing used the exact library commit
 `a358f92`: a ten-minute stress run completed 562 successful owner operations;
@@ -38,9 +42,10 @@ because Web-session cleanup returned HTTP 403.
 These observations establish one hardware retry recovery. They do not establish
 a long-term fault rate or the physical cause of the NACK. Retry exhaustion and
 non-NACK fault behavior have native fake coverage; they were not physically
-forced in that campaign. The added calibration and metadata guards were not
-covered by that hardware campaign. ESP32-S2 and native ESP-IDF hardware remain
-untested, and no completed long soak is claimed for the current candidate. The
+forced in that campaign. The later calibration/metadata guards, auto-adjust
+preflight, and expanded dirty/resync behavior have native fake coverage only.
+ESP32-S2 and native ESP-IDF hardware remain untested, and no completed long soak
+is claimed for the current candidate. The
 [validation matrix](docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md) records exact
 images, evidence sources, historical results, and remaining coverage gaps.
 
@@ -154,8 +159,8 @@ void loop() {
 }
 ```
 
-This quick start proves transport setup, the EE871 group/subgroup, CO2
-capability, and a complete feature-cache read. `readCo2Fast()` and
+This quick start checks transport setup, the EE871 group/subgroup, CO2
+capability, and a complete, valid feature-cache read. `readCo2Fast()` and
 `readCo2Average()` are raw MV3/MV4 reads: they do not check status, warm-up,
 freshness, or the product-specific valid ppm range. A sampling application
 should wait for its warm-up policy, read the selected measured value first,
@@ -189,9 +194,9 @@ Serial.printf("Failures: %u consecutive, %lu total\n",
               static_cast<unsigned long>(sensor.totalFailures()));
 ```
 
-Parameter and precondition errors return before E2 traffic. During ordinary
-reads, validating returned metadata adds no health event; preceding transfers
-remain tracked. `probe()` uses raw E2 reads and is diagnostic-only; normal
+Parameter validation and cache-only precondition checks return before E2 traffic.
+During ordinary reads, validating returned metadata adds no health event;
+preceding transfers remain tracked. `probe()` uses raw E2 reads and is diagnostic-only; normal
 reads/writes use tracked wrappers. Health counts tracked bus transfers rather
 than application sampling cycles: a failed low byte short-circuits a 16-bit
 read before its high byte is attempted. `BUSY` means auto adjustment is already
@@ -310,12 +315,15 @@ clean single-byte write dirty.
 
 Use `persistentConfigDirty()` and `persistentConfigDirtyError()` to detect the
 condition and retrieve the original failing `Status`. `SettingsSnapshot`
-includes the same diagnostics. A fixed 32-byte bitmap retains every uncertain
-target across further failures, recovery, and end/begin. `resyncPersistentConfig()`
-checks the global interval, advertised calibration and part-name fields, and
-all pending registers, including stored address/mode/status validation. Only
-a complete successful readback clears dirty state. Budget up to 256 additional
-pointer/read pairs when many raw targets are pending; this is a maintenance API.
+includes the same diagnostics. Every uncertain target remains recorded across
+further failures, recovery, and end/begin. `resyncPersistentConfig()` checks the
+global interval, advertised offset/gain and part-name fields, and all pending
+registers, including stored address/mode/status validation. Missing support for
+a pending calibration or part-name register prevents resync. Raw targets get
+readability checks; resync does not validate every raw register's meaning.
+Only a complete successful readback clears dirty state. Budget up to 256
+pending-target pointer/read pairs, plus baseline, capability and status checks;
+this is a maintenance API.
 
 `startAutoAdjust()` validates status before writing and returns `BUSY` when
 adjustment is already running. Resync of an uncertain adjustment also requires
@@ -432,8 +440,8 @@ idf.py -C examples/idf/basic_bringup set-target esp32s3 build
 idf.py -C examples/idf/basic_bringup set-target esp32s2 build
 ```
 
-Use `docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md` for the current evidence
-ledger and remaining per-board validation gaps. The
+Use the [validation matrix](docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md) for the
+current evidence ledger and remaining per-board validation gaps. The
 [HIL runner guide](docs/EE871_E2_HIL_RUNNER.md) provides the safe CLI recipe
 and explicit opt-ins for persistent writes and physical fault tests.
 
@@ -473,6 +481,10 @@ why the sensor NACKed.
 - [HIL runner guide](docs/EE871_E2_HIL_RUNNER.md) - commands, framing, and verdict rules.
 - [ESP-IDF guide](docs/IDF_PORT.md) - native integration and build instructions.
 - [Protocol and register map](docs/EE871_E2_Protocol_and_Register_Map.md) - E2 timing, transactions, and EE871 registers.
+
+Generate the API reference with `doxygen Doxyfile`, then open
+`docs/doxygen/html/index.html`. Generated HTML is ignored by Git; public header
+comments and the maintained guides are its source.
 
 ## License
 

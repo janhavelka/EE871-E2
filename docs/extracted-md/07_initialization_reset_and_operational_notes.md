@@ -11,6 +11,10 @@
 
 Sources: E2 specification v4.1, pp. 7-10; AN1611-1, pp. 2-5.
 
+The library's `begin()` also validates reserved bits in `0x07..0x09` before
+installing its capability cache. Calibration support at `0x03`/`0x04` is
+queried by typed calibration operations on demand; it adds no startup reads.
+
 ## Reset / Pointer State
 
 - The internal custom-memory pointer defaults to 0x0000 after power-up.
@@ -28,4 +32,27 @@ Source: E2 specification v4.1, pp. 8, 10.
 - A direct custom write may need 150 ms; the interval pair may need 300 ms. The volatile 0x50 pointer update has no flash delay and uses the ordinary STOP timeout.
 - Persistent writes require bounded commit waits and readback verification. Partial or uncertain writes remain visible through dirty/resync diagnostics until a documented verification path succeeds.
 
-Sources: E2 specification v4.1, pp. 10-11; AN1611-1, p. 8.
+Sources: E2 specification v4.1, pp. 10-11; AN1611-1, pp. 5, 8-9.
+
+## Driver Persistent-State Diagnostics
+
+Dirty tracking covers single-byte and raw custom writes as well as paired
+writes. Once PEC transmission starts, a failed frame may already have changed
+hardware unless a definite final PEC NACK proves rejection. Failed STOP or
+readback also retains uncertainty. The first error and every affected target
+survive recovery, later successful operations, and `end()`/`begin()`.
+
+Only a complete `resyncPersistentConfig()` clears this record. It checks the
+interval, advertised offset/gain and part-name fields, and all pending targets.
+Absent support for a pending calibration or part-name target prevents clearing.
+A pending auto-adjustment trigger must report idle; `BUSY` preserves dirty
+state. Resync does not restore values or prove a requested calibration ran or
+succeeded. Compare current values with the application's recorded baseline.
+
+`writeBusAddress()` does not change the session address. The retained vendor
+sources do not establish when the stored address takes effect; locate the
+responding address before restarting communication and resynchronizing after
+an uncertain address write.
+
+Current implementation contract:
+[protocol reference, Section 10](../EE871_E2_Protocol_and_Register_Map.md#10-write-timing-and-flash-behavior-critical).

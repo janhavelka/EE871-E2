@@ -126,6 +126,20 @@ operations return the latched error. `probe()` is health-neutral diagnostics.
 Status reads can trigger a measurement under the sensor's documented timing
 conditions, so account for that side effect in a sampling design.
 
+Typed offset/gain and calibration-point operations read their support byte
+on demand before accessing calibration; include that pointer/read pair in the
+operation budget. `startAutoAdjust()` validates status first and returns
+`BUSY` if adjustment is already running. These checks are shared core behavior
+for both framework adapters.
+
+Treat `persistentConfigDirty()` independently of transport health. An
+uncertain single-byte, multi-byte, or raw custom write can leave hardware
+changed even when later communication succeeds. `resyncPersistentConfig()`
+reads the affected registers before clearing dirty state; its traffic grows
+with the number of pending targets. Recovery and restarting a session retain
+that record. See the [persistent-write contract](../README.md#persistent-configuration-writes)
+for the resync checks and limits of readback verification.
+
 ## Verification
 
 Run the framework and CLI checks from the repository root:

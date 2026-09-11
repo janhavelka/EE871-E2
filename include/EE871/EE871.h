@@ -90,6 +90,10 @@ struct SettingsSnapshot {
 /// physical cause. The application still owns sampling cadence and recovery.
 /// A 16-bit read stops after a failed low-byte frame; a retried high byte does
 /// not re-read the low byte or disturb its sensor-side latch.
+///
+/// Read outputs are valid only when the returned Status is OK. Raw byte and
+/// buffer reads may change their outputs before a later PEC, STOP, or transfer
+/// failure; methods that preserve outputs on failure document that separately.
 class EE871 {
 public:
   /// @brief Construct an uninitialized driver instance.
@@ -111,9 +115,13 @@ public:
   /// Initialize the driver with configuration.
   ///
   /// begin() validates timing and callbacks, normalizes configuration, verifies
-  /// the EE871 group/subgroup and CO2 capability, and caches feature flags.
-  /// Identity, capability, or feature-cache transfer failures fail
-  /// initialization closed with their precise status.
+  /// the EE871 group/subgroup and CO2 capability, and atomically caches valid
+  /// feature flags from 0x07..0x09. Reserved feature bits return NOT_SUPPORTED;
+  /// identity, capability, or transfer failures retain their precise status.
+  /// Failed initialization from UNINIT leaves an empty feature cache; calling
+  /// begin() on an active session returns ALREADY_INITIALIZED without changes.
+  /// Adjustment support at 0x03/0x04 is checked by the typed calibration APIs.
+  /// Neither successful nor failed initialization clears persistent dirty state.
   /// The driver does not configure GPIO, pins, pull-ups, tasks, locks, or
   /// framework handles.
   /// @param config Configuration including E2 transport callbacks.
@@ -131,8 +139,8 @@ public:
   ///
   /// The core driver owns no GPIO or framework resources, so application-owned
   /// callback state remains the caller's responsibility. Persistent dirty
-  /// diagnostics survive end() and a later failed begin() so uncertain sensor
-  /// state is not silently forgotten.
+  /// diagnostics and their pending readback targets survive end(), subsequent
+  /// begin() attempts, and recover() until resyncPersistentConfig() succeeds.
   void end();
 
   // =========================================================================
@@ -149,24 +157,31 @@ public:
   /// Attempt to recover from DEGRADED/OFFLINE state.
   ///
   /// Recovery performs a bounded raw bus reset, complete raw identity check,
-  /// and atomic feature-cache refresh, then commits that attempt to health
-  /// once. A failed recovery clears all cached capabilities and latches OFFLINE
+  /// and atomic feature-cache refresh with reserved-bit validation, then
+  /// commits that attempt to health once. A failed recovery clears all cached
+  /// capabilities and latches OFFLINE
   /// even from READY/DEGRADED; only a fully compatible response restores READY.
+  /// Recovery preserves persistent dirty diagnostics and pending readback
+  /// targets; responsive transport does not verify uncertain writes.
   /// @return Status::Ok() if a compatible device is responsive, error otherwise.
   Status recover();
 
   /// Re-read persistent configuration and clear dirty diagnostics when coherent.
   ///
   /// This proves the persistent fields are readable and coherent by the
-  /// driver's rules: a valid global interval, advertised CO2 offset/gain and
-  /// part name, plus every register implicated in an uncertain write. Stored
-  /// address/mode/status values receive their domain checks. An uncertain
-  /// auto-adjust request requires idle status before reading calibration.
+  /// driver's rules: a valid global interval, valid support byte 0x03,
+  /// advertised CO2 offset/gain and part name, plus every register implicated
+  /// in an uncertain write. Pending bus-address (0xC0), mode (0xD8), and
+  /// auto-adjust status (0xD9) values receive their domain checks. Pending
+  /// calibration or part-name targets require their advertised support.
+  /// An uncertain auto-adjust request requires idle status before calibration
+  /// readback and again when its pending target is visited; running returns BUSY.
   /// This cannot prove the requested values were applied or that an uncertain
   /// calibration request ran or succeeded; compare with an application-owned
   /// baseline. Dirty state clears only after the entire readback succeeds.
-  /// Up to 256 additional pointer/read pairs may be needed for pending targets;
-  /// allow a maintenance-time budget using the configured frame bounds.
+  /// Pending targets add at most 256 pointer/read pairs, up to four support
+  /// byte 0x04 pointer/read pairs, and an initial auto-adjust status pair.
+  /// Allow a maintenance-time budget using the configured frame bounds.
   ///
   /// This API touches the E2 bus, is blocking within configured timing/write
   /// delay bounds, is not ISR-safe, and uses tracked operations that can update
@@ -235,12 +250,12 @@ public:
   /// @return Current consecutive tracked failure count.
   uint8_t consecutiveFailures() const { return _consecutiveFailures; }
 
-  /// Total failure count (lifetime).
-  /// @return Lifetime tracked failure count.
+  /// Total tracked failure count in the current session.
+  /// @return Count since begin(); end() resets it, failed recover() adds one.
   uint32_t totalFailures() const { return _totalFailures; }
 
-  /// Total success count (lifetime).
-  /// @return Lifetime tracked success count.
+  /// Total tracked success count in the current session.
+  /// @return Count since begin(); end() resets it, successful recover() adds one.
   uint32_t totalSuccess() const { return _totalSuccess; }
 
   /// Copy cached session retry counters and the latest NACK-bearing frame.
@@ -254,10 +269,12 @@ public:
   /// Check if a persistent write may have applied without verified completion.
   ///
   /// Single-byte writes can fail after acceptance; multi-byte writes are not
-  /// bus-atomic. An interrupted PEC transmission is conservatively uncertain.
-  /// Dirty means sensor
-  /// persistent configuration may need operator inspection or a verified
-  /// resyncPersistentConfig(); unrelated successful reads do not clear it.
+  /// bus-atomic. Once PEC transmission starts, interrupted signaling is
+  /// conservatively uncertain unless a definite PEC NACK was sampled. Earlier
+  /// rejection does not dirty that byte, but cannot undo earlier bytes in a
+  /// multi-byte operation. Dirty state and all pending targets survive
+  /// unrelated successes, end()/begin(), and recover(); only a successful
+  /// resyncPersistentConfig() clears them.
   /// @return true when persistent configuration needs explicit resync/inspection.
   bool persistentConfigDirty() const { return _persistentConfigDirty; }
 
@@ -273,6 +290,7 @@ public:
   // =========================================================================
 
   /// Read a control-byte addressed value.
+  /// Output may change on failure and must only be used after success.
   /// @param mainCommandNibble EE871-supported main-command nibble.
   /// @param[out] data Returned data byte.
   /// @return Status::Ok() on success; NOT_SUPPORTED for EE871-unsupported
@@ -286,7 +304,7 @@ public:
   /// captures the associated high byte; this method preserves that order.
   /// @param mainCommandLow Low-byte main-command nibble.
   /// @param mainCommandHigh High-byte main-command nibble.
-  /// @param[out] value Little-endian assembled value.
+  /// @param[out] value Little-endian assembled value; unchanged on failure.
   /// @return Status::Ok() when both byte reads succeed.
   Status readU16(uint8_t mainCommandLow, uint8_t mainCommandHigh, uint16_t& value);
 
@@ -294,22 +312,27 @@ public:
   ///
   /// This is a volatile pointer update, not a flash write; no write delay is
   /// applied and its STOP uses the ordinary bitTimeoutUs budget.
-  /// @param address Custom-memory address; the high byte is sent but ignored by
-  /// the EE871 (its custom memory is 256 bytes).
-  /// @return Status::Ok() after the pointer write is acknowledged.
+  /// @param address Custom-memory address, 0x00..0xFF; the transmitted high byte is zero.
+  /// @return Status::Ok() after acknowledged pointer write and successful STOP;
+  /// OUT_OF_RANGE for an address above 0xFF, before bus traffic.
   Status setCustomPointer(uint16_t address);
 
   /// Read one custom-memory byte.
+  /// Raw access does not validate register support or value semantics; output
+  /// may change on failure and must only be used after success.
   /// @param address Custom-memory address.
   /// @param[out] data Returned byte.
   /// @return Status::Ok() when pointer write and data read succeed.
   Status customRead(uint8_t address, uint8_t& data);
 
   /// Read a custom-memory block using pointer auto-increment.
+  /// Raw access does not validate register support or value semantics. The
+  /// buffer can be partially updated on failure; discard it unless all reads succeed.
   /// @param address First custom-memory address.
   /// @param[out] buf Destination buffer; must be non-null when len > 0.
   /// @param len Number of bytes to read; zero is rejected as INVALID_PARAM.
-  /// @return Status::Ok() when all bytes are read, INVALID_PARAM for invalid buffer/length.
+  /// @return Status::Ok() when all bytes are read, INVALID_PARAM for invalid
+  /// buffer/zero length, or OUT_OF_RANGE if the read extends beyond 0xFF.
   Status customRead(uint8_t address, uint8_t* buf, size_t len);
 
   /// Write one custom-memory byte with command 0x10 and verify by readback.
@@ -331,8 +354,8 @@ public:
   /// Write global measurement interval (0xC6/0xC7) and verify.
   /// @param intervalDeciSeconds Interval in 0.1 s units, from 150 through
   /// 36000 (15 through 3600 seconds).
-  /// @return Status::Ok() when both interval bytes verify. A failure after the
-  /// first byte succeeds marks persistent configuration dirty;
+  /// @return Status::Ok() when both interval bytes verify. Uncertain first-byte
+  /// completion or any subsequent write/readback failure marks both bytes dirty;
   /// OUT_OF_RANGE is returned before capability checks or bus traffic.
   Status writeMeasurementInterval(uint16_t intervalDeciSeconds);
 
@@ -376,30 +399,37 @@ public:
   // Feature Discovery
   // =========================================================================
 
-  /// Read operating functions bitfield (0x07)
+  /// Read operating functions bitfield (0x07).
+  /// Raw diagnostic read: does not validate reserved bits or refresh the cache
+  /// used by has*() queries. begin()/recover() validate and install the cache.
   /// @param[out] bits Feature flags from custom memory 0x07.
   /// @return Status::Ok() when the byte is read.
   /// @see cmd::FEATURE_* constants for bit meanings
   Status readOperatingFunctions(uint8_t& bits);
 
-  /// Read operating mode support bitfield (0x08)
+  /// Read operating mode support bitfield (0x08).
+  /// Raw diagnostic read: does not validate reserved bits or refresh the cache
+  /// used by has*() queries. begin()/recover() validate and install the cache.
   /// @param[out] bits Operating-mode support flags from custom memory 0x08.
   /// @return Status::Ok() when the byte is read.
   /// @see cmd::MODE_SUPPORT_* constants
   Status readOperatingModeSupport(uint8_t& bits);
 
-  /// Read special features bitfield (0x09)
+  /// Read special features bitfield (0x09).
+  /// Raw diagnostic read: does not validate reserved bits or refresh the cache
+  /// used by has*() queries. begin()/recover() validate and install the cache.
   /// @param[out] bits Special-feature flags from custom memory 0x09.
   /// @return Status::Ok() when the byte is read.
   /// @see cmd::SPECIAL_FEATURE_* constants
   Status readSpecialFeatures(uint8_t& bits);
 
   // =========================================================================
-  // Feature Support Queries (use cached values from begin())
+  // Feature Support Queries (use validated cache from begin()/recover())
   // =========================================================================
   //
   // A false result means "not present in the current cache." Before successful
-  // begin(), false does not prove the physical device lacks that feature.
+  // begin() or after failed recover(), false does not prove the physical device
+  // lacks that feature. Raw feature reads do not refresh this cache.
 
   /// Check if serial number is readable.
   /// @return true when cached feature flags advertise serial number support.
@@ -446,27 +476,31 @@ public:
   // =========================================================================
 
   /// Read 16-byte serial number (0xA0-0xAF).
+  /// The buffer may be partially updated on failure; use it only after success.
   /// @param[out] buf Buffer of at least cmd::CUSTOM_SERIAL_LEN bytes; not NUL-terminated by the driver.
   /// @return Status::Ok() when all 16 bytes are read, INVALID_PARAM for null buffer.
   Status readSerialNumber(uint8_t* buf);
 
   /// Read 16-byte part name (0xB0-0xBF).
+  /// The buffer may be partially updated on failure; use it only after success.
   /// @param[out] buf Buffer of at least cmd::CUSTOM_PART_NAME_LEN bytes; not NUL-terminated by the driver.
   /// @return Status::Ok() when all 16 bytes are read, INVALID_PARAM for null buffer.
   Status readPartName(uint8_t* buf);
 
   /// Write 16-byte part name (0xB0-0xBF).
   /// @param buf Buffer of exactly cmd::CUSTOM_PART_NAME_LEN bytes; embedded NUL bytes are written as data.
-  /// @return Status::Ok() when all bytes verify. A failure after one byte
-  /// succeeds marks persistent configuration dirty; null buffer returns INVALID_PARAM.
+  /// @return Status::Ok() when all bytes verify. Uncertain first-byte completion
+  /// or a later failure marks the whole part name dirty; null buffer returns INVALID_PARAM.
   Status writePartName(const uint8_t* buf);
 
   // =========================================================================
   // Bus Address
   // =========================================================================
 
-  /// Read current bus address (0xC0).
-  /// @param[out] address Current E2 device address.
+  /// Read the stored bus address (0xC0) without validating its range.
+  /// This does not change Config::deviceAddress or establish when a pending
+  /// address change becomes active on the sensor.
+  /// @param[out] address Raw stored E2 device address; valid only after success.
   /// @return Status::Ok() when the byte is read.
   Status readBusAddress(uint8_t& address);
 
@@ -483,14 +517,15 @@ public:
   // Measurement Interval
   // =========================================================================
 
-  /// Read global measurement interval
-  /// @param intervalDeciSeconds Interval in 0.1 s units
+  /// Read global measurement interval without enforcing its configured range.
+  /// Fixed intervals remain readable without advertised configuration support.
+  /// @param[out] intervalDeciSeconds Interval in 0.1 s units; unchanged on failure.
   /// @return Status::Ok() when both bytes are read.
   Status readMeasurementInterval(uint16_t& intervalDeciSeconds);
 
   /// Read CO2-specific interval factor (0xCB)
   /// Positive = multiplier, Negative = divider
-  /// @param[out] factor Signed interval factor.
+  /// @param[out] factor Signed interval factor; unchanged on failure.
   /// @return Status::Ok() when the byte is read.
   Status readCo2IntervalFactor(int8_t& factor);
 
@@ -504,6 +539,7 @@ public:
   // =========================================================================
 
   /// Read CO2 filter setting (0xD3).
+  /// Fixed filter settings remain readable without advertised configuration support.
   /// @param[out] filter Filter setting byte.
   /// @return Status::Ok() when the byte is read.
   Status readCo2Filter(uint8_t& filter);
@@ -518,7 +554,7 @@ public:
   /// Fails closed with NOT_SUPPORTED when neither operating-mode capability is
   /// advertised. Reserved bits in a returned value produce OUT_OF_RANGE;
   /// an active mode bit whose capability is absent produces NOT_SUPPORTED.
-  /// @param[out] mode Operating-mode byte.
+  /// @param[out] mode Operating-mode byte; unchanged on failure.
   /// @return Status::Ok() only when a supported, valid mode byte is read.
   /// @see cmd::OPERATING_MODE_* constants
   Status readOperatingMode(uint8_t& mode);
@@ -529,6 +565,7 @@ public:
   /// 1=E2 priority.
   /// Fails closed with NOT_SUPPORTED when neither operating-mode capability is
   /// advertised, including for mode 0.
+  /// Each active bit also requires its corresponding advertised capability.
   /// @param mode Operating-mode byte.
   /// @return Status::Ok() when the byte verifies. This is a persistent single-byte write.
   Status writeOperatingMode(uint8_t mode);
@@ -559,40 +596,45 @@ public:
   // =========================================================================
 
   /// Read CO2 offset (signed, ppm).
-  /// First reads support byte 0x03 with a pointer update and one byte read;
-  /// unsupported or malformed capability flags return NOT_SUPPORTED.
-  /// @param[out] offset Signed offset in ppm.
+  /// Every call first reads support byte 0x03 with a pointer update and one
+  /// byte read. Missing CO2 bit3 or nonzero reserved high bits return
+  /// NOT_SUPPORTED; support-read transfer failures retain their precise status.
+  /// @param[out] offset Signed offset in ppm; unchanged on failure.
   /// @return Status::Ok() when both bytes are read.
   Status readCo2Offset(int16_t& offset);
 
   /// Write CO2 offset (signed, ppm).
-  /// Maintenance operation. First reads support byte 0x03 with a pointer
-  /// update and one byte read; unsupported or malformed flags prevent writes.
+  /// Maintenance operation. Every call first reads support byte 0x03 with a
+  /// pointer update and one byte read; unsupported or malformed flags return
+  /// NOT_SUPPORTED before any persistent write. Transfer errors are preserved.
   /// @param offset Signed offset in ppm.
-  /// @return Status::Ok() when both bytes verify. A high-byte failure after the
-  /// low byte succeeds marks persistent configuration dirty.
+  /// @return Status::Ok() when both bytes verify. Uncertain low-byte completion
+  /// or a later write/readback failure marks both offset bytes dirty.
   Status writeCo2Offset(int16_t offset);
 
   /// Read CO2 gain (gain = value / 32768).
-  /// First reads support byte 0x03 with a pointer update and one byte read;
-  /// unsupported or malformed capability flags return NOT_SUPPORTED.
-  /// @param[out] gain Raw gain value.
+  /// Every call first reads support byte 0x03 with a pointer update and one
+  /// byte read. Missing CO2 bit3 or nonzero reserved high bits return
+  /// NOT_SUPPORTED; support-read transfer failures retain their precise status.
+  /// @param[out] gain Raw gain value; unchanged on failure.
   /// @return Status::Ok() when both bytes are read.
   Status readCo2Gain(uint16_t& gain);
 
   /// Write CO2 gain (gain = value / 32768).
-  /// Maintenance operation. First reads support byte 0x03 with a pointer
-  /// update and one byte read; unsupported or malformed flags prevent writes.
+  /// Maintenance operation. Every call first reads support byte 0x03 with a
+  /// pointer update and one byte read; unsupported or malformed flags return
+  /// NOT_SUPPORTED before any persistent write. Transfer errors are preserved.
   /// @param gain Raw gain value.
-  /// @return Status::Ok() when both bytes verify. A high-byte failure after the
-  /// low byte succeeds marks persistent configuration dirty.
+  /// @return Status::Ok() when both bytes verify. Uncertain low-byte completion
+  /// or a later write/readback failure marks both gain bytes dirty.
   Status writeCo2Gain(uint16_t gain);
 
   /// Read last calibration points.
-  /// First reads support byte 0x04 with a pointer update and one byte read;
-  /// unsupported or malformed capability flags return NOT_SUPPORTED.
-  /// @param[out] lower Lower calibration point in ppm.
-  /// @param[out] upper Upper calibration point in ppm.
+  /// Every call first reads support byte 0x04 with a pointer update and one
+  /// byte read. Missing CO2 bit3 or nonzero reserved high bits return
+  /// NOT_SUPPORTED; support-read transfer failures retain their precise status.
+  /// @param[out] lower Lower calibration point in ppm; unchanged on failure.
+  /// @param[out] upper Upper calibration point in ppm; unchanged on failure.
   /// @return Status::Ok() when both 16-bit values are read.
   Status readCo2CalPoints(uint16_t& lower, uint16_t& upper);
 
@@ -606,7 +648,7 @@ public:
   /// when the global interval is >15 s and the prior value is >10 s old
   /// (AN1611-1 sections 4 and 10). For checked sampling, read MV3/MV4 first
   /// and status second so status describes the last measured value.
-  /// @param[out] status Status byte.
+  /// @param[out] status Raw status byte; valid only after success.
   /// @return Status::Ok() when the status byte and PEC verify. Control-byte
   /// NACK retries follow Config::readNackRetries (disabled by default).
   Status readStatus(uint8_t& status);
@@ -630,7 +672,7 @@ public:
   /// Reading MV3 low first captures the associated high byte in the sensor.
   /// Control-byte NACK retries follow Config::readNackRetries (default off),
   /// without inferring the sensor's internal reason.
-  /// @param[out] ppm CO2 concentration in ppm.
+  /// @param[out] ppm CO2 concentration in ppm; unchanged on failure.
   /// @return Status::Ok() when MV3 low/high reads succeed.
   Status readCo2Fast(uint16_t& ppm);
 
@@ -641,7 +683,7 @@ public:
   /// Reading MV4 low first captures the associated high byte in the sensor.
   /// Control-byte NACK retries follow Config::readNackRetries (default off),
   /// without inferring the sensor's internal reason.
-  /// @param[out] ppm CO2 concentration in ppm.
+  /// @param[out] ppm CO2 concentration in ppm; unchanged on failure.
   /// @return Status::Ok() when MV4 low/high reads succeed.
   Status readCo2Average(uint16_t& ppm);
 
@@ -697,7 +739,7 @@ private:
   // =========================================================================
 
   /// Update health counters and state based on operation result
-  /// Called ONLY from tracked transport wrappers
+  /// Called only from the two tracked transfer wrappers and _recoverTracked().
   Status _updateHealth(const Status& st);
 
   void _resetStoppedState();
@@ -713,7 +755,7 @@ private:
   DriverState _driverState = DriverState::UNINIT;
   uint32_t _nowMs = 0;
 
-  // Feature flags (cached during begin())
+  // Feature flags (validated and cached during begin()/recover())
   uint8_t _operatingFunctions = 0;   ///< Cached 0x07
   uint8_t _operatingModeSupport = 0; ///< Cached 0x08
   uint8_t _specialFeatures = 0;      ///< Cached 0x09

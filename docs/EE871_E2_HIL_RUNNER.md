@@ -166,6 +166,21 @@ Use a bench sensor with recorded original settings. The plan checks `dirty`
 and `resync` around writes and blocks maintenance writes when clean state has
 not been established.
 
+Typed offset/gain commands now check `0x03` for CO2 adjustment support before
+accessing calibration. Unsupported or malformed capability bytes return
+`NOT_SUPPORTED`; an opted-in calibration plan expects success and records
+that rejection as a failed requested operation. Inspect support before
+selecting these maintenance options. Raw calibration-register writes bypass typed
+capability checks and are not a substitute for an unsupported typed write.
+
+Dirty state covers uncertain single-byte/raw writes as well as multi-byte
+writes. `resync` must read every uncertain target successfully; recovery or
+another successful write does not clear the record. A pending auto-adjustment
+trigger keeps resync `BUSY` while adjustment runs. A clean resync establishes
+readable current configuration, not that the requested values or calibration
+were applied. Compare the readback with recorded expected values before
+accepting a maintenance result.
+
 ## Operator Fault Steps
 
 `--include-unplug-replug`, `--include-stuck-line`, and `--include-power-cycle`

@@ -9,13 +9,15 @@ E2 custom memory is byte-addressed. Use control byte 0x50 to set the internal po
 | 0x00 | R | Firmware main version | 0x55/0x55 indicates no command support in generic spec wording. |
 | 0x01 | R | Firmware sub-version | Generic E2 definition. |
 | 0x02 | R | E2 spec version | Version used during product development. |
-| 0x03..0x06 | R | Supported-function bit fields | Generic E2 feature-discovery bytes for adjustment/timestamp features. Bit value 1 means the function exists; 0 means it does not. |
+| 0x03 | R | Offset/gain adjustment support | bit3 permits CO2 offset/gain access; bits4..7 reserved. |
+| 0x04 | R | Adjustment-point support | bit3 permits CO2 lower/upper adjustment-point access; bits4..7 reserved. |
+| 0x05..0x06 | R | Other supported-function bit fields | Generic E2 feature-discovery bytes for adjustment/timestamp features; not queried by the current typed CO2 helpers. |
 | 0x07 | R | Operating-function support | bit0 serial number, bit1 part name, bit2 E2 bus address, bit3 reserved, bit4 global measurement interval, bit5 specific measurement interval, bit6 measurement-value filter, bit7 error code. |
 | 0x08 | R | Operating-mode support | bit0 low-power mode, bit1 E2 priority, bits2..7 reserved. |
 | 0x09 | R | Special-feature support | bit0 manual auto adjustment, bits1..7 reserved. |
-| 0x58..0x59 | R/W | CO2 offset | Signed int ppm. |
-| 0x5A..0x5B | R/W | CO2 gain | Gain value / 32768. |
-| 0x5C..0x5F | R/W | CO2 lower/upper adjustment points | ppm values. |
+| 0x58..0x59 | R/W | CO2 offset | Signed int ppm; requires 0x03 bit3. |
+| 0x5A..0x5B | R/W | CO2 gain | Gain value / 32768; requires 0x03 bit3. |
+| 0x5C..0x5F | R/W | CO2 lower/upper adjustment points | ppm values; requires 0x04 bit3. |
 | 0x8C..0x8E | R/W | Last CO2 custom adjustment date | Year/month/day. |
 | 0xA0..0xAF | R | E+E serial number | Unique serial number. |
 | 0xB0..0xBF | R/W | Part name | Filled with sensor type on delivery, e.g. EE871. |
@@ -28,7 +30,20 @@ E2 custom memory is byte-addressed. Use control byte 0x50 to set the internal po
 | 0xD8 | R/W | Operating mode | bit0 measure mode: 0 free-running/trigger mode, 1 low-power mode; bit1 E2 priority: 0 measurement priority/NACK during measurement, 1 E2 communication priority; bits2..7 reserved. |
 | 0xD9 | R/W | Auto adjustment control/status | bit0 read 1 while auto adjustment is running, read 0 in normal operation; write 1 starts auto adjustment; write 0 cannot interrupt it; bits1..7 reserved. |
 
-Source: E2 interface specification v4.1, pp. 12-14; EE871 E2 CO2 interface AN1611-1, pp. 2-8.
+Source: E2 interface specification v4.1, pp. 12-17; EE871 E2 CO2 interface AN1611-1, pp. 2-8.
+
+## Driver Capability Checks
+
+`begin()` and `recover()` validate all three support bytes at `0x07..0x09`
+before caching them. Reserved bits cause `NOT_SUPPORTED`. Typed offset/gain
+access reads `0x03` on each call; `readCo2CalPoints()` reads `0x04`. These
+helpers reject missing CO2 support and reserved bits before calibration access.
+The extra capability read uses one pointer write and one custom read frame.
+Raw calibration-register access leaves support checks to the caller.
+
+These are current library checks; the table above describes the vendor map.
+See [the protocol reference](../EE871_E2_Protocol_and_Register_Map.md#73-calibrationadjustment-registers-offsetgain-and-points)
+for the access contract.
 
 ## Measurement Interval
 

@@ -11,11 +11,11 @@ for capture commands.
 
 ## Software Validation
 
-Local safety-follow-up checks on 2026-09-11 used `main` at `7d57b1e` plus the
-calibration/capability guards, persistent-write uncertainty tracking, and
-auto-adjust preflight changes described in the unreleased changelog. The
-earlier `a358f92` release-preparation run passed 71 native tests; these changes
-add 22 regression cases.
+Software checks on 2026-09-11 validated implementation
+[`3d32ac30cc4b228299d3f0feaffd538c031f5276`](https://github.com/janhavelka/EE871-E2/commit/3d32ac30cc4b228299d3f0feaffd538c031f5276),
+including the calibration/capability guards, persistent-write uncertainty
+tracking, and auto-adjust preflight. The earlier `a358f92` release-preparation
+run passed 71 native tests; this implementation adds 22 regression cases.
 
 | Check | Result |
 | --- | --- |
@@ -25,6 +25,7 @@ add 22 regression cases.
 | `python scripts/generate_version.py check` | Version.h, IDF manifest and Doxyfile match package version 1.1.0. |
 | `doxygen Doxyfile` and local Markdown target check | Documentation generated without warnings; local links resolve. |
 | `.\scripts\pio.cmd run -e ex_bringup_s3 -e ex_bringup_s2 -e compat_tunnelmonitor_s3` | All three Arduino builds passed; build-only evidence. |
+| [CI run 34605633301](https://github.com/janhavelka/EE871-E2/actions/runs/34605633301) at `3d32ac3` | All six jobs passed: native tests, library validation, Arduino S2/S3, and native ESP-IDF 6.0.1 S2/S3. Build/test evidence only. |
 
 The final release revision must pass the CI workflow, including native
 ESP-IDF 6.0.1 builds for both ESP32-S3 and ESP32-S2. Each workflow run identifies
@@ -153,7 +154,7 @@ capture or cleanup prevents an overall verdict.
 | F-14/F-15 | Ten-minute scheduled reads / eight-hour soak | Historical H-54 FAIL as recorded above; current long soak NOT RUN. |
 | F-16/F-17/F-18 | Platform regression / state-only USB / scheduled application retry | H-39 results above are historical PASS within their selected commands and exposure. The 1.5 s application retry is separate from current library retries. |
 | F-20/F-21 | Full standalone CLI / process reattachment | H-311 184/184 HIL and 100/100 process sessions PASS; current standalone CLI HIL NOT RUN. |
-| F-22 | Explicit read retries during normal acquisition | September current-library observation: one `0xC1` NACK recovered on first retry, complete measurement OK, qualification retained. |
+| F-22 | Explicit read retries during normal acquisition | September `a358f92` observation: one `0xC1` NACK recovered on first retry, complete measurement OK, qualification retained. |
 | F-23 | Retry budget exhaustion, veto, STOP/idle failure and non-NACK exclusion | Current native fake coverage; physical fault injection NOT RUN for the retry candidate. Preserve final transport status, health and retry diagnostics. |
 
 ### Persistent Configuration
@@ -170,7 +171,8 @@ Recovery restores communication but retains persistent uncertainty.
 | P-03/P-04 | Record `offset`/`gain`, same-value writes, readback, `dirty` | H-54 PASS: `0 ppm` / `32768`, clean. These qualify custom-memory command/readback only; no calibration capability, accuracy or calibration correctness was validated. |
 | P-05 | Record `partname`, same-value write/readback, `dirty` | H-54 ad-hoc `EE871` readback PASS; the whole ad-hoc session was not classified PASS. |
 | P-06 | Supported address write, power cycle, retarget firmware, `scan`/`probe`, restore | NOT APPLICABLE to this sensor: address configuration unadvertised. Valid `addr 0` returned `NOT_SUPPORTED`; invalid `addr 8` returned `OUT_OF_RANGE` without bus/health effects. |
-| P-07 | Induce partial persistent write, inspect dirty diagnostics, verify full resync/recovery | Native fake coverage only; physical failure injection NOT RUN. |
+| P-07 | Induce partial or uncertain persistent write; inspect dirty diagnostics, recover communication if needed, then resync | Native fake coverage covers single/raw and multi-byte writes, interrupted PEC/final ACK/STOP/readback, multiple pending targets, lifecycle retention, and lost capabilities. Physical failure injection NOT RUN. |
+| P-08 | Supported auto-adjust start/status; duplicate request; uncertain start followed by idle-status resync | Native fake coverage of support/reserved-bit guards, `BUSY` without another start, precise transport errors, and dirty retention until complete resync. Hardware calibration NOT RUN; resync does not prove adjustment success. |
 
 H-54 invalid intervals `149`/`36001` and mode `4` also returned
 `OUT_OF_RANGE`. Unsupported address, factor, filter, mode and auto-adjust writes
