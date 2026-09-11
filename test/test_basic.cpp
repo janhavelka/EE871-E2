@@ -627,7 +627,7 @@ void test_stop_timeout_releases_both_master_lines() {
   EE871::EE871 dev;
   TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
 
-  fake.stretchClockReleaseAfter(29, dev.getConfig().flashStretchTimeoutUs + 1U);
+  fake.stretchClockReleaseAfter(29, dev.getConfig().bitTimeoutUs + 1U);
   uint8_t status = 0;
   Status st = dev.readStatus(status);
 
@@ -1194,22 +1194,30 @@ void test_dirty_state_survives_offline() {
 }
 
 void test_transfer_failure_survives_cleanup_stop_timeout() {
-  for (uint8_t scenario = 0; scenario < 3; ++scenario) {
+  for (uint8_t scenario = 0; scenario < 4; ++scenario) {
     FakeE2Transport fake;
     EE871::EE871 dev;
     TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
     const bool badPec = scenario == 2;
     fake.setDevicePresent(badPec);
     fake.setCorruptReadPec(badPec);
+    fake.resetElapsed();
+    const uint32_t stopTimeoutUs = scenario == 1
+        ? dev.getConfig().flashStretchTimeoutUs : dev.getConfig().bitTimeoutUs;
     // START release + 9 control bits (or 27 read bits) + STOP release.
-    fake.stretchClockReleaseAfter(badPec ? 29 : 11,
-                                 dev.getConfig().flashStretchTimeoutUs + 1U);
+    fake.stretchClockReleaseAfter(badPec ? 29 : 11, stopTimeoutUs + 1U);
     uint8_t value = 0;
     const Status st = scenario == 1
-        ? dev.customWrite(cmd::CUSTOM_FILTER_CO2, 10) : dev.readStatus(value);
+        ? dev.customWrite(cmd::CUSTOM_FILTER_CO2, 10)
+        : scenario == 3 ? dev.setCustomPointer(cmd::CUSTOM_FILTER_CO2)
+                        : dev.readStatus(value);
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(badPec ? Err::PEC_MISMATCH : Err::NACK),
                             static_cast<uint8_t>(st.code));
     TEST_ASSERT_EQUAL_STRING(badPec ? "PEC mismatch" : "Control byte NACK", st.msg);
+    TEST_ASSERT_EQUAL_INT32(badPec ? 0x70 : 0, st.detail);
+    // Fake defaults: START 108 us, each bit 210 us, failed STOP 110 us.
+    TEST_ASSERT_EQUAL_UINT32(108U + (badPec ? 27U : 9U) * 210U +
+                                110U + stopTimeoutUs, fake.elapsedUs());
     TEST_ASSERT_TRUE(fake.masterSclReleased());
     TEST_ASSERT_TRUE(fake.masterSdaReleased());
     TEST_ASSERT_EQUAL_UINT32(1, dev.totalFailures());
@@ -1331,34 +1339,118 @@ void test_flash_stretch_config_boundaries() {
 }
 
 void test_flash_write_stop_stretches_commit_and_verify() {
+  const uint8_t addresses[] = {0, 7};
   const uint32_t stretches[] = {150000, 300000, 350000, 350001};
-  for (uint32_t stretch : stretches) {
-    for (uint8_t operation = 0; operation < 3; ++operation) {
-      FakeE2Transport fake;
-      EE871::EE871 dev;
-      TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
-      // Each write uses START + 36 bits + STOP. Interval commits on write two.
-      fake.stretchClockReleaseAfter(operation == 1 ? 76 : 38, stretch);
-      Status st;
-      if (operation == 0) st = dev.customWrite(cmd::CUSTOM_FILTER_CO2, 10);
-      if (operation == 1) st = dev.writeMeasurementInterval(300);
-      if (operation == 2) st = dev.setCustomPointer(cmd::CUSTOM_FILTER_CO2);
-      if (stretch <= dev.getConfig().flashStretchTimeoutUs) {
-        TEST_ASSERT_TRUE(st.ok());
-        TEST_ASSERT_FALSE(dev.persistentConfigDirty());
-        TEST_ASSERT_EQUAL_UINT32(0, dev.totalFailures());
-        if (operation == 0) TEST_ASSERT_EQUAL_UINT8(10, fake.memory(cmd::CUSTOM_FILTER_CO2));
-        if (operation == 1) {
-          uint16_t interval = 0;
-          TEST_ASSERT_TRUE(dev.readMeasurementInterval(interval).ok());
-          TEST_ASSERT_EQUAL_UINT16(300, interval);
+  for (uint8_t address : addresses) {
+    for (uint32_t stretch : stretches) {
+      for (uint8_t operation = 0; operation < 2; ++operation) {
+        FakeE2Transport fake;
+        EE871::EE871 dev;
+        Config cfg = fake.makeConfig();
+        cfg.deviceAddress = address;
+        TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+        // Each write uses START + 36 bits + STOP. Interval commits on write two.
+        fake.stretchClockReleaseAfter(operation == 1 ? 76 : 38, stretch);
+        Status st;
+        if (operation == 0) st = dev.customWrite(cmd::CUSTOM_FILTER_CO2, 10);
+        if (operation == 1) st = dev.writeMeasurementInterval(300);
+        if (stretch <= dev.getConfig().flashStretchTimeoutUs) {
+          TEST_ASSERT_TRUE(st.ok());
+          TEST_ASSERT_FALSE(dev.persistentConfigDirty());
+          TEST_ASSERT_EQUAL_UINT32(0, dev.totalFailures());
+          if (operation == 0) TEST_ASSERT_EQUAL_UINT8(10, fake.memory(cmd::CUSTOM_FILTER_CO2));
+          if (operation == 1) {
+            uint16_t interval = 0;
+            TEST_ASSERT_TRUE(dev.readMeasurementInterval(interval).ok());
+            TEST_ASSERT_EQUAL_UINT16(300, interval);
+          }
+        } else {
+          TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::TIMEOUT), static_cast<uint8_t>(st.code));
+          TEST_ASSERT_EQUAL_INT32(dev.getConfig().flashStretchTimeoutUs, st.detail);
+          if (operation == 1) TEST_ASSERT_TRUE(dev.persistentConfigDirty());
+          TEST_ASSERT_TRUE(fake.masterSclReleased());
+          TEST_ASSERT_TRUE(fake.masterSdaReleased());
         }
-      } else {
-        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::TIMEOUT), static_cast<uint8_t>(st.code));
-        TEST_ASSERT_EQUAL_INT32(dev.getConfig().flashStretchTimeoutUs, st.detail);
-        if (operation == 1) TEST_ASSERT_TRUE(dev.persistentConfigDirty());
-        TEST_ASSERT_TRUE(fake.masterSclReleased());
-        TEST_ASSERT_TRUE(fake.masterSdaReleased());
+      }
+    }
+  }
+}
+
+void test_accepted_interval_low_byte_stop_failure_marks_dirty() {
+  const uint8_t addresses[] = {0, 7};
+  for (uint8_t address : addresses) {
+    FakeE2Transport fake;
+    Config cfg = fake.makeConfig();
+    cfg.deviceAddress = address;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+    fake.stretchClockReleaseAfter(38, cfg.flashStretchTimeoutUs + 1U);
+    const Status st = dev.writeMeasurementInterval(300);
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::TIMEOUT),
+                           static_cast<uint8_t>(st.code));
+    TEST_ASSERT_EQUAL_INT32(cfg.flashStretchTimeoutUs, st.detail);
+    assertDirtyWithOriginalError(dev, st);
+    TEST_ASSERT_EQUAL_UINT8(0x2C, fake.memory(cmd::CUSTOM_INTERVAL_L));
+    TEST_ASSERT_EQUAL_UINT8(0, fake.memory(cmd::CUSTOM_INTERVAL_H));
+    TEST_ASSERT_EQUAL_UINT32(1, dev.totalFailures());
+    TEST_ASSERT_TRUE(fake.masterSclReleased());
+    TEST_ASSERT_TRUE(fake.masterSdaReleased());
+  }
+}
+
+void test_read_and_pointer_stop_use_ordinary_timeout() {
+  const uint8_t addresses[] = {0, 7};
+  const uint32_t timeouts[] = {27, 25000};
+  const bool operations[] = {false, true};
+  for (uint8_t address : addresses) {
+    for (uint32_t timeout : timeouts) {
+      const uint32_t stretches[] = {
+          timeout - timeout % 5U - 5U, timeout, timeout + 1U, 350000U};
+      for (uint32_t stretch : stretches) {
+        for (bool pointer : operations) {
+          FakeE2Transport fake;
+          Config cfg = fake.makeConfig();
+          cfg.deviceAddress = address;
+          cfg.startHoldUs = 100;
+          cfg.stopHoldUs = 100;
+          cfg.bitTimeoutUs = timeout;
+          EE871::EE871 dev;
+          TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+          fake.setMemory(cmd::CUSTOM_FILTER_CO2, 42);
+          fake.resetElapsed();
+          // START + 27 read / 36 write bit clocks + STOP.
+          fake.stretchClockReleaseAfter(pointer ? 38 : 29, stretch);
+          uint8_t value = 0xFF;
+          const Status st = pointer ? dev.setCustomPointer(cmd::CUSTOM_FILTER_CO2)
+                                    : dev.readStatus(value);
+          const uint32_t nominalUs = pointer ? 8170U : 6280U;
+          if (stretch <= timeout) {
+            TEST_ASSERT_TRUE(st.ok());
+            TEST_ASSERT_EQUAL_UINT32(nominalUs + stretch, fake.elapsedUs());
+            TEST_ASSERT_EQUAL_UINT32(1, dev.totalSuccess());
+            TEST_ASSERT_EQUAL_UINT32(0, dev.totalFailures());
+            if (pointer) {
+              TEST_ASSERT_TRUE(dev.readControlByte(cmd::MAIN_CUSTOM_PTR, value).ok());
+              TEST_ASSERT_EQUAL_UINT8(42, value);
+            } else {
+              TEST_ASSERT_EQUAL_UINT8(0, value);
+            }
+          } else {
+            TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::TIMEOUT),
+                                   static_cast<uint8_t>(st.code));
+            TEST_ASSERT_EQUAL_STRING("Clock stretch timeout", st.msg);
+            TEST_ASSERT_EQUAL_INT32(timeout, st.detail);
+            // An unsuccessful STOP omits both 100 us hold phases.
+            TEST_ASSERT_EQUAL_UINT32(nominalUs + timeout - 200U, fake.elapsedUs());
+            TEST_ASSERT_EQUAL_UINT32(0, dev.totalSuccess());
+            TEST_ASSERT_EQUAL_UINT32(1, dev.totalFailures());
+            TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::DEGRADED),
+                                   static_cast<uint8_t>(dev.state()));
+          }
+          TEST_ASSERT_FALSE(dev.persistentConfigDirty());
+          TEST_ASSERT_TRUE(fake.masterSclReleased());
+          TEST_ASSERT_TRUE(fake.masterSdaReleased());
+        }
       }
     }
   }
@@ -1401,13 +1493,344 @@ void test_flash_budget_does_not_relax_bit_transfer_deadline() {
   TEST_ASSERT_EQUAL_UINT32(1, dev.totalFailures());
 }
 
+static Config retryConfig(FakeE2Transport& fake, uint8_t retries = 3) {
+  Config cfg = fake.makeConfig(1);
+  cfg.bitTimeoutUs = 25000;
+  cfg.startHoldUs = 100;
+  cfg.stopHoldUs = 100;
+  cfg.readNackRetries = retries;
+  return cfg;
+}
+
+void test_read_retry_config_rejects_invalid_without_io() {
+  const uint8_t invalid[] = {4, 255};
+  for (uint8_t retries : invalid) {
+    FakeE2Transport fake;
+    fake.setHoldSclLow(true);
+    EE871::EE871 dev;
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_CONFIG),
+        static_cast<uint8_t>(dev.begin(retryConfig(fake, retries)).code));
+    TEST_ASSERT_EQUAL_UINT32(0, fake.elapsedUs());
+    TEST_ASSERT_FALSE(dev.isInitialized());
+  }
+  TEST_ASSERT_EQUAL_UINT8(0, Config{}.readNackRetries);
+  TEST_ASSERT_NULL(Config{}.allowReadRetry);
+}
+
+void test_measurement_status_retries_recover_on_each_allowed_attempt() {
+  const uint8_t commands[] = {cmd::MAIN_MV3_LO, cmd::MAIN_MV3_HI,
+      cmd::MAIN_MV4_LO, cmd::MAIN_MV4_HI, cmd::MAIN_STATUS};
+  const uint8_t addresses[] = {0, 7};
+  for (uint8_t address : addresses) {
+    for (uint8_t mainCommand : commands) {
+      for (uint8_t nacks = 1; nacks <= 3; ++nacks) {
+        FakeE2Transport fake;
+        Config cfg = retryConfig(fake);
+        cfg.deviceAddress = address;
+        EE871::EE871 dev;
+        TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+        fake.nackNextReadMainCommand(mainCommand, nacks);
+        fake.resetElapsed();
+        uint8_t value = 0;
+        TEST_ASSERT_TRUE(dev.readControlByte(mainCommand, value).ok());
+        const uint8_t control = cmd::makeControlRead(mainCommand, address);
+        TEST_ASSERT_EQUAL_UINT32(nacks + 1U, fake.controlCount(control));
+        TEST_ASSERT_EQUAL_UINT32(6280U + nacks * (2500U + 1000U), fake.elapsedUs());
+        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::READY),
+                               static_cast<uint8_t>(dev.state()));
+        TEST_ASSERT_EQUAL_UINT32(1, dev.totalSuccess());
+        TEST_ASSERT_EQUAL_UINT32(0, dev.totalFailures());
+        const ReadRetryDiagnostics stats = dev.readRetryDiagnostics();
+        TEST_ASSERT_EQUAL_UINT32(nacks, stats.controlNacks);
+        TEST_ASSERT_EQUAL_UINT32(nacks, stats.retries);
+        TEST_ASSERT_EQUAL_UINT32(1, stats.recovered);
+        TEST_ASSERT_EQUAL_UINT32(0, stats.exhausted);
+        TEST_ASSERT_EQUAL_UINT8(control, stats.lastControlByte);
+        TEST_ASSERT_EQUAL_UINT8(nacks, stats.lastRetriesUsed);
+        TEST_ASSERT_TRUE(stats.lastError.ok());
+        TEST_ASSERT_TRUE(stats.lastRecovered);
+        TEST_ASSERT_FALSE(stats.cleanupBlocked);
+        TEST_ASSERT_FALSE(stats.retryVetoed);
+        TEST_ASSERT_EQUAL_UINT32(stats.controlNacks, dev.getSettings().readRetry.controlNacks);
+      }
+    }
+  }
+}
+
+void test_retry_exhaustion_counts_one_health_failure_and_preserves_session() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(dev.begin(retryConfig(fake)).ok());
+  fake.nackNextReadMainCommand(cmd::MAIN_STATUS, 4);
+  fake.resetElapsed();
+  uint8_t value = 0;
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NACK),
+      static_cast<uint8_t>(dev.readStatus(value).code));
+  TEST_ASSERT_EQUAL_UINT32(4, fake.controlCount(0x71));
+  TEST_ASSERT_EQUAL_UINT32(13000, fake.elapsedUs());
+  TEST_ASSERT_EQUAL_UINT32(1, dev.totalFailures());
+  TEST_ASSERT_EQUAL_UINT32(0, dev.totalSuccess());
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::OFFLINE),
+                         static_cast<uint8_t>(dev.state()));
+  const ReadRetryDiagnostics stats = dev.readRetryDiagnostics();
+  TEST_ASSERT_EQUAL_UINT32(4, stats.controlNacks);
+  TEST_ASSERT_EQUAL_UINT32(3, stats.retries);
+  TEST_ASSERT_EQUAL_UINT32(1, stats.exhausted);
+  TEST_ASSERT_EQUAL_UINT32(0, stats.recovered);
+  TEST_ASSERT_EQUAL_UINT8(3, stats.lastRetriesUsed);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NACK), static_cast<uint8_t>(stats.lastError.code));
+  fake.resetElapsed();
+  TEST_ASSERT_FALSE(dev.readStatus(value).ok());
+  TEST_ASSERT_EQUAL_UINT32(0, fake.elapsedUs());
+  TEST_ASSERT_EQUAL_UINT32(4, dev.readRetryDiagnostics().controlNacks);
+  TEST_ASSERT_TRUE(dev.recover().ok());
+  TEST_ASSERT_EQUAL_UINT32(4, dev.readRetryDiagnostics().controlNacks);
+  TEST_ASSERT_TRUE(dev.readStatus(value).ok());
+  TEST_ASSERT_EQUAL_UINT32(1, dev.readRetryDiagnostics().exhausted);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NACK),
+      static_cast<uint8_t>(dev.readRetryDiagnostics().lastError.code));
+  dev.end();
+  TEST_ASSERT_EQUAL_UINT32(0, dev.readRetryDiagnostics().controlNacks);
+  TEST_ASSERT_EQUAL_UINT8(0, dev.readRetryDiagnostics().lastControlByte);
+  TEST_ASSERT_TRUE(dev.begin(retryConfig(fake)).ok());
+  TEST_ASSERT_EQUAL_UINT32(0, dev.getSettings().readRetry.retries);
+}
+
+void test_disabled_retry_still_counts_nack_and_metadata_keeps_event() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  Config cfg = retryConfig(fake, 0);
+  cfg.offlineThreshold = 5;
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+  fake.nackNextReadMainCommand(cmd::MAIN_STATUS);
+  uint8_t value = 0;
+  TEST_ASSERT_FALSE(dev.readStatus(value).ok());
+  TEST_ASSERT_EQUAL_UINT32(1, fake.controlCount(0x71));
+  TEST_ASSERT_EQUAL_UINT32(1, dev.readRetryDiagnostics().controlNacks);
+  TEST_ASSERT_EQUAL_UINT32(0, dev.readRetryDiagnostics().retries);
+  TEST_ASSERT_EQUAL_UINT32(0, dev.readRetryDiagnostics().exhausted);
+  uint8_t fwMain = 0, fwSub = 0;
+  TEST_ASSERT_TRUE(dev.readFirmwareVersion(fwMain, fwSub).ok());
+  TEST_ASSERT_EQUAL_UINT8(0x71, dev.readRetryDiagnostics().lastControlByte);
+  TEST_ASSERT_EQUAL_UINT32(1, dev.readRetryDiagnostics().controlNacks);
+}
+
+void test_retry_respects_smaller_configured_limit() {
+  for (uint8_t retries = 1; retries <= 2; ++retries) {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(dev.begin(retryConfig(fake, retries)).ok());
+    fake.nackNextReadMainCommand(cmd::MAIN_STATUS, 4);
+    uint8_t value = 0;
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NACK),
+        static_cast<uint8_t>(dev.readStatus(value).code));
+    TEST_ASSERT_EQUAL_UINT32(retries + 1U, fake.controlCount(0x71));
+    TEST_ASSERT_EQUAL_UINT32(retries, dev.readRetryDiagnostics().retries);
+    TEST_ASSERT_EQUAL_UINT32(1, dev.readRetryDiagnostics().exhausted);
+    TEST_ASSERT_EQUAL_UINT32(1, dev.totalFailures());
+  }
+}
+
+void test_retry_stops_on_later_transfer_timeout() {
+  FakeE2Transport fake;
+  Config cfg = retryConfig(fake);
+  cfg.allowReadRetry = [](void* user) {
+    auto& bus = *static_cast<FakeE2Transport*>(user);
+    // The next frame reaches START, then its first control-byte clock times out.
+    bus.stretchClockReleaseAfter(2, 25001);
+    return true;
+  };
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+  fake.nackNextReadMainCommand(cmd::MAIN_STATUS);
+  uint8_t value = 0;
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::TIMEOUT),
+      static_cast<uint8_t>(dev.readStatus(value).code));
+  const auto stats = dev.readRetryDiagnostics();
+  TEST_ASSERT_EQUAL_UINT32(1, stats.controlNacks);
+  TEST_ASSERT_EQUAL_UINT32(1, stats.retries);
+  TEST_ASSERT_EQUAL_UINT32(0, stats.recovered);
+  TEST_ASSERT_EQUAL_UINT32(0, stats.exhausted);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::TIMEOUT),
+      static_cast<uint8_t>(stats.lastError.code));
+  TEST_ASSERT_EQUAL_UINT32(1, dev.totalFailures());
+  TEST_ASSERT_TRUE(fake.masterSclReleased());
+  TEST_ASSERT_TRUE(fake.masterSdaReleased());
+}
+
+void test_retry_never_replays_identity_custom_reads_or_writes() {
+  const uint8_t commands[] = {cmd::MAIN_TYPE_LO, cmd::MAIN_TYPE_HI,
+      cmd::MAIN_TYPE_SUB, cmd::MAIN_AVAIL_MEAS, cmd::MAIN_CUSTOM_PTR};
+  for (uint8_t command : commands) {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(dev.begin(retryConfig(fake)).ok());
+    const uint8_t control = cmd::makeControlRead(command, 0);
+    const uint32_t before = fake.controlCount(control);
+    fake.nackNextReadMainCommand(command, 4);
+    uint8_t value = 0;
+    TEST_ASSERT_FALSE(dev.readControlByte(command, value).ok());
+    TEST_ASSERT_EQUAL_UINT32(before + 1, fake.controlCount(control));
+    TEST_ASSERT_EQUAL_UINT32(0, dev.readRetryDiagnostics().controlNacks);
+    TEST_ASSERT_EQUAL_UINT32(0, dev.readRetryDiagnostics().retries);
+  }
+  for (uint8_t operation = 0; operation < 3; ++operation) {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(dev.begin(retryConfig(fake)).ok());
+    const uint32_t pointerBefore = fake.controlCount(0x50);
+    if (operation == 0) fake.setDevicePresent(false);
+    if (operation == 1) fake.failNextWriteToAddress(cmd::CUSTOM_FILTER_CO2);
+    if (operation == 2) fake.nackNextReadMainCommand(cmd::MAIN_CUSTOM_PTR, 4);
+    uint8_t value = 0;
+    Status st;
+    if (operation == 0) st = dev.setCustomPointer(cmd::CUSTOM_FILTER_CO2);
+    if (operation == 1) st = dev.customWrite(cmd::CUSTOM_FILTER_CO2, 42);
+    if (operation == 2) st = dev.customRead(cmd::CUSTOM_FILTER_CO2, value);
+    TEST_ASSERT_FALSE(st.ok());
+    TEST_ASSERT_EQUAL_UINT32(operation == 1 ? 1 : 0, fake.controlCount(0x10));
+    TEST_ASSERT_EQUAL_UINT32(pointerBefore + (operation == 1 ? 0 : 1), fake.controlCount(0x50));
+    TEST_ASSERT_EQUAL_UINT32(0, dev.readRetryDiagnostics().controlNacks);
+    TEST_ASSERT_EQUAL_UINT32(0, dev.readRetryDiagnostics().retries);
+  }
+}
+
+void test_retry_does_not_replay_pec_timeout_or_failed_cleanup() {
+  for (uint8_t scenario = 0; scenario < 4; ++scenario) {
+    FakeE2Transport fake;
+    Config cfg = retryConfig(fake);
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+    if (scenario == 0 || scenario == 1) fake.setCorruptReadPec(true);
+    if (scenario == 1 || scenario == 3) fake.nackNextReadMainCommand(cmd::MAIN_STATUS);
+    if (scenario == 2) fake.stretchClockReleaseAfter(2, cfg.bitTimeoutUs + 1U);
+    if (scenario == 3) fake.stretchClockReleaseAfter(11, cfg.bitTimeoutUs + 1U);
+    uint8_t value = 0;
+    const Status st = dev.readStatus(value);
+    const Err expected[] = {Err::PEC_MISMATCH, Err::PEC_MISMATCH, Err::TIMEOUT, Err::NACK};
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(expected[scenario]), static_cast<uint8_t>(st.code));
+    const ReadRetryDiagnostics stats = dev.readRetryDiagnostics();
+    TEST_ASSERT_EQUAL_UINT32(scenario == 1 ? 1 : 0, stats.retries);
+    TEST_ASSERT_EQUAL_UINT32(scenario == 1 || scenario == 3 ? 1 : 0, stats.controlNacks);
+    TEST_ASSERT_EQUAL_UINT32(0, stats.recovered);
+    TEST_ASSERT_EQUAL_UINT32(0, stats.exhausted);
+    TEST_ASSERT_EQUAL_UINT32(1, dev.totalFailures());
+    TEST_ASSERT_TRUE(fake.masterSclReleased());
+    TEST_ASSERT_TRUE(fake.masterSdaReleased());
+    if (scenario == 1) TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::PEC_MISMATCH), static_cast<uint8_t>(stats.lastError.code));
+    if (scenario == 3) {
+      TEST_ASSERT_TRUE(stats.cleanupBlocked);
+      TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::TIMEOUT), static_cast<uint8_t>(stats.lastCleanupError.code));
+      TEST_ASSERT_EQUAL_INT32(cfg.bitTimeoutUs, stats.lastCleanupError.detail);
+      TEST_ASSERT_EQUAL_UINT32(1, fake.controlCount(0x71));
+    }
+  }
+}
+
+void test_retry_guard_vetoes_before_and_after_pause() {
+  const uint8_t vetoCalls[] = {1, 2, 3};
+  for (uint8_t vetoCall : vetoCalls) {
+    FakeE2Transport fake;
+    Config cfg = retryConfig(fake);
+    cfg.allowReadRetry = [](void* user) {
+      return static_cast<FakeE2Transport*>(user)->allowReadRetry();
+    };
+    fake.vetoReadRetryOnCall(vetoCall);
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+    fake.nackNextReadMainCommand(cmd::MAIN_STATUS, 4);
+    fake.resetElapsed();
+    uint8_t value = 0;
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NACK), static_cast<uint8_t>(dev.readStatus(value).code));
+    TEST_ASSERT_EQUAL_UINT32(vetoCall == 1 ? 2500 : 3500, fake.elapsedUs());
+    TEST_ASSERT_EQUAL_UINT32(1, fake.controlCount(0x71));
+    const ReadRetryDiagnostics stats = dev.readRetryDiagnostics();
+    TEST_ASSERT_TRUE(stats.retryVetoed);
+    TEST_ASSERT_FALSE(stats.cleanupBlocked);
+    TEST_ASSERT_EQUAL_UINT32(0, stats.retries);
+    TEST_ASSERT_EQUAL_UINT8(0, stats.lastRetriesUsed);
+    TEST_ASSERT_EQUAL_UINT32(0, stats.exhausted);
+  }
+}
+
+void test_retry_rechecks_idle_after_pause() {
+  FakeE2Transport fake;
+  Config cfg = retryConfig(fake);
+  cfg.allowReadRetry = [](void* user) {
+    auto& bus = *static_cast<FakeE2Transport*>(user);
+    (void)bus.allowReadRetry();
+    if (bus.retryGuardCalls() == 2U) bus.setHoldSclLow(true);
+    return true;
+  };
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+  fake.nackNextReadMainCommand(cmd::MAIN_STATUS);
+  uint8_t value = 0;
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NACK), static_cast<uint8_t>(dev.readStatus(value).code));
+  const auto stats = dev.readRetryDiagnostics();
+  TEST_ASSERT_TRUE(stats.cleanupBlocked);
+  TEST_ASSERT_FALSE(stats.retryVetoed);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::BUS_STUCK), static_cast<uint8_t>(stats.lastCleanupError.code));
+  TEST_ASSERT_EQUAL_UINT32(0, stats.retries);
+  TEST_ASSERT_EQUAL_UINT32(1, fake.controlCount(0x71));
+}
+
+void test_high_byte_retry_preserves_latch_and_sticky_low_event() {
+  const bool modes[] = {false, true};
+  for (bool average : modes) {
+    FakeE2Transport fake;
+    Config cfg = retryConfig(fake);
+    cfg.allowReadRetry = [](void* user) {
+      auto& bus = *static_cast<FakeE2Transport*>(user);
+      bus.setMv3(0xABCD);
+      bus.setMv4(0xABCD);
+      return true;
+    };
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+    fake.setMv3(0x1234);
+    fake.setMv4(0x1234);
+    const uint8_t low = average ? cmd::MAIN_MV4_LO : cmd::MAIN_MV3_LO;
+    const uint8_t high = average ? cmd::MAIN_MV4_HI : cmd::MAIN_MV3_HI;
+    fake.nackNextReadMainCommand(high, 3);
+    uint16_t ppm = 0;
+    TEST_ASSERT_TRUE((average ? dev.readCo2Average(ppm) : dev.readCo2Fast(ppm)).ok());
+    TEST_ASSERT_EQUAL_UINT16(0x1234, ppm);
+    TEST_ASSERT_EQUAL_UINT32(1, fake.controlCount(cmd::makeControlRead(low, 0)));
+    TEST_ASSERT_EQUAL_UINT32(4, fake.controlCount(cmd::makeControlRead(high, 0)));
+    TEST_ASSERT_EQUAL_UINT8(cmd::makeControlRead(high, 0), dev.readRetryDiagnostics().lastControlByte);
+    uint8_t status = 0;
+    TEST_ASSERT_TRUE(dev.readStatus(status).ok());
+    TEST_ASSERT_EQUAL_UINT8(cmd::makeControlRead(high, 0), dev.readRetryDiagnostics().lastControlByte);
+    fake.nackNextReadMainCommand(low, 1);
+    TEST_ASSERT_TRUE((average ? dev.readCo2Average(ppm) : dev.readCo2Fast(ppm)).ok());
+    TEST_ASSERT_EQUAL_UINT8(cmd::makeControlRead(low, 0), dev.readRetryDiagnostics().lastControlByte);
+    TEST_ASSERT_TRUE(dev.readRetryDiagnostics().lastRecovered);
+    TEST_ASSERT_EQUAL_UINT8(1, dev.readRetryDiagnostics().lastRetriesUsed);
+    TEST_ASSERT_EQUAL_UINT32(2, dev.readRetryDiagnostics().recovered);
+  }
+}
+
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(test_read_retry_config_rejects_invalid_without_io);
+  RUN_TEST(test_measurement_status_retries_recover_on_each_allowed_attempt);
+  RUN_TEST(test_retry_exhaustion_counts_one_health_failure_and_preserves_session);
+  RUN_TEST(test_disabled_retry_still_counts_nack_and_metadata_keeps_event);
+  RUN_TEST(test_retry_respects_smaller_configured_limit);
+  RUN_TEST(test_retry_stops_on_later_transfer_timeout);
+  RUN_TEST(test_retry_never_replays_identity_custom_reads_or_writes);
+  RUN_TEST(test_retry_does_not_replay_pec_timeout_or_failed_cleanup);
+  RUN_TEST(test_retry_guard_vetoes_before_and_after_pause);
+  RUN_TEST(test_retry_rechecks_idle_after_pause);
+  RUN_TEST(test_high_byte_retry_preserves_latch_and_sticky_low_event);
   RUN_TEST(test_transfer_failure_survives_cleanup_stop_timeout);
   RUN_TEST(test_failed_recover_clears_capabilities_and_latches_from_ready_or_degraded);
   RUN_TEST(test_offline_replay_marks_message_and_preserves_original_diagnostics);
   RUN_TEST(test_flash_stretch_config_boundaries);
   RUN_TEST(test_flash_write_stop_stretches_commit_and_verify);
+  RUN_TEST(test_accepted_interval_low_byte_stop_failure_marks_dirty);
+  RUN_TEST(test_read_and_pointer_stop_use_ordinary_timeout);
   RUN_TEST(test_bus_reset_flash_stretch_is_bounded_and_health_neutral);
   RUN_TEST(test_flash_budget_does_not_relax_bit_transfer_deadline);
   RUN_TEST(test_status_ok);

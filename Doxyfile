@@ -34,18 +34,23 @@ STRIP_CODE_COMMENTS    = NO
 INPUT                  = README.md \
                          CHANGELOG.md \
                          CONTRIBUTING.md \
+                         docs/README.md \
+                         docs/extracted-md/README.md \
+                         docs/pdf-extracted-md/README.md \
+                         examples/idf/basic_bringup/README.md \
                          include/EE871 \
                          docs/EE871_E2_Protocol_and_Register_Map.md \
                          docs/EE871_E2_HIL_RUNNER.md \
                          docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md \
-                         docs/IDF_PORT.md \
-                         docs/IDF_PORT_IMPLEMENTATION.md
+                         docs/IDF_PORT.md
 FILE_PATTERNS          = *.h *.md
 RECURSIVE              = YES
-EXCLUDE_PATTERNS       = */.pio/* */.git/* */test/* */docs/doxygen/* */docs/extracted-md/* */docs/pdf-extracted-md/*
+EXCLUDE_PATTERNS       = */.pio/* */.git/* */test/* */docs/doxygen/*
 EXAMPLE_PATH           = examples/01_basic_bringup_cli
 
-USE_MDFILE_AS_MAINPAGE = README.md
+USE_MDFILE_AS_MAINPAGE = ./README.md
+# Render nested README guides as pages so their Markdown links can resolve.
+IMPLICIT_DIR_DOCS      = NO
 FULL_PATH_NAMES        = NO
 SORT_MEMBER_DOCS       = YES
 SORT_BRIEF_DOCS        = YES

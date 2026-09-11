@@ -43,6 +43,7 @@ docs/doxygen/
 
 # HIL / soak run artifacts (default --output-dir of tools/ee871_*_runner.py)
 hil_logs/
+hil_results/
 .tmp_hil_audit/
 
 # Generated packages

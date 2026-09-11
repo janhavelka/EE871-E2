@@ -13,7 +13,8 @@
 
 - Exact connector pinout should be verified against the ordered probe drawing before committing board-level documentation.
 - The E2 custom-memory map is generic; only use addresses confirmed by EE871/CO2 notes or by device probing.
-- The complete error-code table is not cleanly represented in compact notes; use the source PDF before exposing public symbolic error codes.
+- Numeric CO2 filter values and the exact signed encoding/default of the specific interval factor are not defined by the EE871 CO2 notes; do not infer them from generic E2 fields.
+- A control-byte NACK does not identify its cause. Generic measurement-priority behavior is qualified by AN0105's EE871 exception for enquiries during measurement.
 - Wireless EE240 timing/range facts should not be merged into the wired E2 API unless the same fact is present in wired E2 sources.
 
 Sources: EE871 digital interface user guide, pp. 1-2; EE871 EE240 wireless user guide, pp. 1-2; E2 specification v4.1; AN1611-1.

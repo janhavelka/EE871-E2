@@ -118,7 +118,7 @@ static Status e2Start(const Config& cfg) {
   return Status::Ok();
 }
 
-static Status e2Stop(const Config& cfg) {
+static Status e2Stop(const Config& cfg, uint32_t stretchTimeoutUs) {
   // Establish a complete low phase so cleanup is safe from any transfer stage.
   setScl(cfg, false);
   delayUs(cfg, cfg.clockLowUs, nullptr);
@@ -133,7 +133,7 @@ static Status e2Stop(const Config& cfg) {
     return Status::Error(Err::BUS_STUCK, "SDA did not go low for STOP");
   }
   setScl(cfg, true);
-  Status st = waitSclHigh(cfg, cfg.flashStretchTimeoutUs, nullptr);
+  Status st = waitSclHigh(cfg, stretchTimeoutUs, nullptr);
   if (!st.ok()) {
     releaseBusLines(cfg);
     return st;
@@ -148,9 +148,29 @@ static Status e2Stop(const Config& cfg) {
   return Status::Ok();
 }
 
-static Status finishWithStop(const Config& cfg, const Status& transferStatus) {
-  const Status stopStatus = e2Stop(cfg);
+static Status finishWithStop(const Config& cfg, const Status& transferStatus,
+                             uint8_t controlByte, Status* cleanupStatus = nullptr) {
+  // AN1611-1 section 5 permits flash stretching for direct custom writes
+  // (0x10 at address 0). Reads and volatile 0x50 pointer updates keep the
+  // ordinary timeout, including cleanup after a transfer failure.
+  const uint32_t stretchTimeoutUs =
+      controlByte == cmd::makeControlWrite(cmd::MAIN_CUSTOM_WRITE, cfg.deviceAddress)
+          ? cfg.flashStretchTimeoutUs : cfg.bitTimeoutUs;
+  const Status stopStatus = e2Stop(cfg, stretchTimeoutUs);
+  if (cleanupStatus != nullptr) *cleanupStatus = stopStatus;
   return transferStatus.ok() ? stopStatus : transferStatus;
+}
+
+static bool permitsReadNackRetry(uint8_t controlByte) {
+  if ((controlByte & cmd::RW_READ) == 0U) return false;
+  const uint8_t mainCommand = controlByte >> cmd::MAIN_SHIFT;
+  return mainCommand == cmd::MAIN_STATUS || mainCommand == cmd::MAIN_MV3_LO ||
+         mainCommand == cmd::MAIN_MV3_HI || mainCommand == cmd::MAIN_MV4_LO ||
+         mainCommand == cmd::MAIN_MV4_HI;
+}
+
+static void incrementSaturated(uint32_t& value) {
+  if (value != std::numeric_limits<uint32_t>::max()) ++value;
 }
 
 static Status finishClockLow(const Config& cfg, uint32_t* elapsedUs) {
@@ -292,6 +312,10 @@ Status EE871::begin(const Config& config) {
 
   _resetStoppedState();
 
+  if (config.readNackRetries > cmd::READ_NACK_RETRIES_MAX) {
+    return Status::Error(Err::INVALID_CONFIG, "Read NACK retries must be <=3");
+  }
+
   if (config.setScl == nullptr || config.setSda == nullptr ||
       config.readScl == nullptr || config.readSda == nullptr ||
       config.delayUs == nullptr) {
@@ -401,6 +425,7 @@ Status EE871::getSettings(SettingsSnapshot& out) const {
   out.totalSuccess = _totalSuccess;
   out.persistentConfigDirty = _persistentConfigDirty;
   out.persistentConfigDirtyError = _persistentConfigDirtyError;
+  out.readRetry = _readRetry;
   return Status::Ok();
 }
 
@@ -424,6 +449,7 @@ void EE871::_resetStoppedState() {
   _consecutiveFailures = 0;
   _totalFailures = 0;
   _totalSuccess = 0;
+  _readRetry = ReadRetryDiagnostics{};
 }
 
 void EE871::_markPersistentConfigDirty(const Status& st) {
@@ -1065,7 +1091,7 @@ Status EE871::_busResetRaw() {
   }
 
   // Generate a stretch-aware STOP; e2Stop establishes its own full low phase.
-  Status stopStatus = e2Stop(_config);
+  Status stopStatus = e2Stop(_config, _config.flashStretchTimeoutUs);
   if (!stopStatus.ok()) {
     if (stopStatus.code == Err::TIMEOUT) {
       return Status::Error(Err::BUS_STUCK, "SCL stuck during reset STOP");
@@ -1202,7 +1228,9 @@ Status EE871::_offlineStatus() const {
                        "Driver offline; call recover()", _lastError.detail);
 }
 
-Status EE871::_readControlByteRaw(uint8_t controlByte, uint8_t& data) {
+Status EE871::_readControlByteRaw(uint8_t controlByte, uint8_t& data,
+                                  ReadAttemptInfo* attempt) {
+  if (attempt != nullptr) *attempt = ReadAttemptInfo{};
   Status st = e2Start(_config);
   if (!st.ok()) {
     return st;
@@ -1211,49 +1239,123 @@ Status EE871::_readControlByteRaw(uint8_t controlByte, uint8_t& data) {
   uint32_t elapsedUs = 0;
   st = writeByte(_config, controlByte, &elapsedUs);
   if (!st.ok()) {
-    return finishWithStop(_config, st);
+    return finishWithStop(_config, st, controlByte);
   }
 
   bool acked = false;
   st = readAck(_config, acked, &elapsedUs);
   if (!st.ok()) {
-    return finishWithStop(_config, st);
+    return finishWithStop(_config, st, controlByte);
   }
   if (!acked) {
-    return finishWithStop(_config, Status::Error(Err::NACK, "Control byte NACK"));
+    if (attempt != nullptr) attempt->controlNack = true;
+    return finishWithStop(_config, Status::Error(Err::NACK, "Control byte NACK"),
+                          controlByte, attempt != nullptr ? &attempt->stopStatus : nullptr);
   }
 
   elapsedUs = 0;
   st = readByte(_config, data, &elapsedUs);
   if (!st.ok()) {
-    return finishWithStop(_config, st);
+    return finishWithStop(_config, st, controlByte);
   }
   st = sendAck(_config, true, &elapsedUs);
   if (!st.ok()) {
-    return finishWithStop(_config, st);
+    return finishWithStop(_config, st, controlByte);
   }
 
   uint8_t pec = 0;
   elapsedUs = 0;
   st = readByte(_config, pec, &elapsedUs);
   if (!st.ok()) {
-    return finishWithStop(_config, st);
+    return finishWithStop(_config, st, controlByte);
   }
   st = sendAck(_config, false, &elapsedUs);
   if (!st.ok()) {
-    return finishWithStop(_config, st);
+    return finishWithStop(_config, st, controlByte);
   }
 
   const uint8_t expected = calcPecRead(controlByte, data);
   return finishWithStop(_config, pec == expected
-      ? Status::Ok() : Status::Error(Err::PEC_MISMATCH, "PEC mismatch", pec));
+      ? Status::Ok() : Status::Error(Err::PEC_MISMATCH, "PEC mismatch", pec),
+      controlByte);
 }
 
 Status EE871::_readControlByteTracked(uint8_t controlByte, uint8_t& data) {
   if (_driverState == DriverState::OFFLINE) {
     return _offlineStatus();
   }
-  Status st = _readControlByteRaw(controlByte, data);
+  if (!permitsReadNackRetry(controlByte)) {
+    return _updateHealth(_readControlByteRaw(controlByte, data));
+  }
+
+  Status st = Status::Ok();
+  bool sawNack = false;
+  for (uint8_t retry = 0; retry <= _config.readNackRetries; ++retry) {
+    if (retry != 0U) incrementSaturated(_readRetry.retries);
+    ReadAttemptInfo attempt;
+    st = _readControlByteRaw(controlByte, data, &attempt);
+    if (attempt.controlNack) {
+      incrementSaturated(_readRetry.controlNacks);
+      if (!sawNack) {
+        _readRetry.lastControlByte = controlByte;
+        _readRetry.lastCleanupError = Status::Ok();
+        _readRetry.cleanupBlocked = false;
+        _readRetry.retryVetoed = false;
+        _readRetry.lastRecovered = false;
+        sawNack = true;
+      }
+    }
+    if (sawNack) {
+      _readRetry.lastRetriesUsed = retry;
+      _readRetry.lastError = st;
+    }
+    if (st.ok()) {
+      if (retry != 0U) {
+        incrementSaturated(_readRetry.recovered);
+        _readRetry.lastRecovered = true;
+      }
+      break;
+    }
+    if (!attempt.controlNack) break;
+    if (!attempt.stopStatus.ok()) {
+      _readRetry.cleanupBlocked = true;
+      _readRetry.lastCleanupError = attempt.stopStatus;
+      break;
+    }
+    if (retry == _config.readNackRetries) {
+      if (retry != 0U) incrementSaturated(_readRetry.exhausted);
+      break;
+    }
+
+    // HAL failures/deadlines are application-owned; the optional guard lets
+    // that owner veto further bus traffic without replacing the original NACK.
+    if (_config.allowReadRetry != nullptr && !_config.allowReadRetry(_config.busUser)) {
+      _readRetry.retryVetoed = true;
+      break;
+    }
+    Status idle = checkBusIdle();
+    if (!idle.ok()) {
+      _readRetry.cleanupBlocked = true;
+      _readRetry.lastCleanupError = idle;
+      break;
+    }
+    delayUs(_config, cmd::READ_NACK_RETRY_DELAY_US, nullptr);
+    if (_config.allowReadRetry != nullptr && !_config.allowReadRetry(_config.busUser)) {
+      _readRetry.retryVetoed = true;
+      break;
+    }
+    idle = checkBusIdle();
+    if (!idle.ok()) {
+      _readRetry.cleanupBlocked = true;
+      _readRetry.lastCleanupError = idle;
+      break;
+    }
+    // The idle read callbacks can themselves latch an application HAL error.
+    if (_config.allowReadRetry != nullptr && !_config.allowReadRetry(_config.busUser)) {
+      _readRetry.retryVetoed = true;
+      break;
+    }
+  }
   return _updateHealth(st);
 }
 
@@ -1271,62 +1373,65 @@ Status EE871::_writeCommandRaw(uint8_t controlByte, uint8_t addressByte, uint8_t
   uint32_t elapsedUs = 0;
   st = writeByte(_config, controlByte, &elapsedUs);
   if (!st.ok()) {
-    return finishWithStop(_config, st);
+    return finishWithStop(_config, st, controlByte);
   }
   bool acked = false;
   st = readAck(_config, acked, &elapsedUs);
   if (!st.ok()) {
-    return finishWithStop(_config, st);
+    return finishWithStop(_config, st, controlByte);
   }
   if (!acked) {
-    return finishWithStop(_config, Status::Error(Err::NACK, "Control byte NACK"));
+    return finishWithStop(_config, Status::Error(Err::NACK, "Control byte NACK"),
+                          controlByte);
   }
 
   elapsedUs = 0;
   st = writeByte(_config, addressByte, &elapsedUs);
   if (!st.ok()) {
-    return finishWithStop(_config, st);
+    return finishWithStop(_config, st, controlByte);
   }
   st = readAck(_config, acked, &elapsedUs);
   if (!st.ok()) {
-    return finishWithStop(_config, st);
+    return finishWithStop(_config, st, controlByte);
   }
   if (!acked) {
-    return finishWithStop(_config, Status::Error(Err::NACK, "Address byte NACK"));
+    return finishWithStop(_config, Status::Error(Err::NACK, "Address byte NACK"),
+                          controlByte);
   }
 
   elapsedUs = 0;
   st = writeByte(_config, dataByte, &elapsedUs);
   if (!st.ok()) {
-    return finishWithStop(_config, st);
+    return finishWithStop(_config, st, controlByte);
   }
   st = readAck(_config, acked, &elapsedUs);
   if (!st.ok()) {
-    return finishWithStop(_config, st);
+    return finishWithStop(_config, st, controlByte);
   }
   if (!acked) {
-    return finishWithStop(_config, Status::Error(Err::NACK, "Data byte NACK"));
+    return finishWithStop(_config, Status::Error(Err::NACK, "Data byte NACK"),
+                          controlByte);
   }
 
   const uint8_t pec = calcPecWrite(controlByte, addressByte, dataByte);
   elapsedUs = 0;
   st = writeByte(_config, pec, &elapsedUs);
   if (!st.ok()) {
-    return finishWithStop(_config, st);
+    return finishWithStop(_config, st, controlByte);
   }
   st = readAck(_config, acked, &elapsedUs);
   if (!st.ok()) {
-    return finishWithStop(_config, st);
+    return finishWithStop(_config, st, controlByte);
   }
   if (!acked) {
-    return finishWithStop(_config, Status::Error(Err::NACK, "PEC NACK"));
+    return finishWithStop(_config, Status::Error(Err::NACK, "PEC NACK"), controlByte);
   }
 
   if (writeAccepted != nullptr) {
     *writeAccepted = true;
   }
 
-  return finishWithStop(_config, Status::Ok());
+  return finishWithStop(_config, Status::Ok(), controlByte);
 }
 
 Status EE871::_writeCommandTracked(uint8_t controlByte, uint8_t addressByte, uint8_t dataByte,

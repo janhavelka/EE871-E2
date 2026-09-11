@@ -15,9 +15,10 @@ Source: E2 interface specification v4.1, p. 9; AN1611-1, p. 3.
 
 ## Measurement Trigger Behavior
 
-- Reading the status byte starts a new measurement in the slave.
-- For measuring intervals longer than 15 s, the master can trigger a measurement by reading status byte 0x71 only if the last measurement is older than 10 s.
+- Reading status byte 0x71 can trigger a measurement only when the global interval is longer than 15 s and the last measurement is older than 10 s.
 - After a triggered measurement, the interval counter is set to 0.
+- A new value is typically available 5..10 s after a trigger.
+- For checked sampling, read the measured value first and status second. Raw MV3/MV4 APIs do not read status, check the CO2 error bit, or impose warm-up/freshness policy.
 
 Source: AN1611-1, pp. 5, 10.
 
@@ -28,6 +29,8 @@ AN1611-1 describes sleep, sensor-element stabilization, measurement, infrared-la
 ## Errors
 
 When status bit3 is 1, read custom-memory address 0xC1 for the EE871/CO2 error code.
+These sensor-domain errors do not represent a transport failure when the E2
+transactions themselves succeeded.
 
 | Code | Meaning |
 |---:|---|

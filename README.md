@@ -17,103 +17,31 @@ examples, and HIL validation evidence.
 
 ## Release And Validation Status
 
-The current source/package version is `1.1.0`. See `CHANGELOG.md` for behavior
-changes and migration guidance. Recorded ESP32-S3/EE871 hardware results below
-predate the latched-OFFLINE, fail-closed startup, and rewritten-scanner changes;
-hardware/HIL re-validation of this version remains outstanding.
+Source/package version `1.1.0` is prepared for the next release; `v1.0.1`
+remains the published tag until the release branch is merged and tagged.
+[CHANGELOG.md](CHANGELOG.md) covers migration, stricter startup/recovery,
+ordinary STOP timing, and the opt-in control-NACK retries.
 
-Recorded evidence:
+Software verification on 2026-09-11 passed 71 native tests, 58 Python tests,
+the timing/CLI/IDF contracts, synchronized version metadata, and all three
+Arduino builds (ESP32-S3, ESP32-S2, and the older TunnelMonitor compatibility
+stack). Native ESP-IDF S2/S3 builds are separate CI jobs.
 
-- Native tests: 58 passing; Python tooling/contract/parser tests: 58 passing
-  (including compiled native checks of both scanner error-retention blocks).
-- The current example/HIL platform is exact-pinned to pioarduino
-  `platform-espressif32` `55.03.311`, Arduino-ESP32 `3.3.11`, and ESP-IDF
-  `5.5.5`. The earlier TunnelMonitor-node parity work on pioarduino
-  `54.03.20` / Arduino-ESP32 `3.2.0` remains recorded as historical evidence.
-- Current ESP32-S3 COM20 `55.03.311` HIL: 184/184 PASS from clean firmware
-  commit `3bce89e`, covering safe, extended, identity/capability, range guards,
-  GPIO/E2 diagnostics, trace/sniffer, repeated reads, and mixed stress. It
-  finished READY with 3,109 tracked successes, zero transport failures, clean
-  persistent state, `stress 500` at 500/500, and `stress_mix 500` at 500/500.
-  The self-test reported 26 PASS / 0 FAIL / 1 unsupported-mode SKIP.
-- Native-USB reattachment on the current COM20 stack is verified. The former
-  timeout was a host-tool framing bug: it sent only a blank line, while the CLI
-  intentionally ignores blank lines and therefore emitted no new prompt. The
-  shared explicit `\ndirty\n` synchronization passed 10,000/10,000 replies
-  from a new process immediately after the full HIL closed COM20,
-  100/100 separate process open/close/reopen sessions, and an immediate
-  184/184 full HIL rerun without a reset or physical replug.
-- The current COM20 target was detected as ESP32-S3 revision 0.2 with 4 MB
-  embedded flash and 2 MB embedded QSPI PSRAM; the S3 PlatformIO environment
-  configures that QSPI PSRAM explicitly. The prior `55.03.39` firmware reported
-  4,194,304 bytes flash and PSRAM ready with 2,097,152 bytes.
-- Prior ESP32-S3 COM20 targeted `55.03.39` HIL: 144/144 PASS, including final READY
-  state, zero transport failures, clean persistent state, and `stress 500`
-  at 500/500. The flashed library identified itself as `1.0.1`.
-- Prior ESP32-S3 COM20 serial-only discriminator on `55.03.39`: 10,000/10,000
-  `dirty` command round trips passed, and every reply was the same 201 bytes.
-  `dirty` does not touch the E2 bus, so this result qualifies CLI framing only.
-- Prior ESP32-S3 COM20 accelerated scheduled-read regression on `55.03.39`: PASS
-  over 108 sample cycles and 543.594 s, with 564 ordinary command passes, two
-  fully framed control-byte NACK attempts recovered by one harness retry after
-  1,500 ms, and zero hard failures, reviews, skips, reconnects, or counter
-  regressions. Final state was READY and persistent state was clean. This is a
-  targeted timing/policy regression, not a completed long soak.
-- Prior ESP32-S3 COM20 unsupported operating-mode guard: PASS. `mode` returned
-  `NOT_SUPPORTED`, did not decode the stale `0x55` memory value, and left
-  tracked transport counters unchanged at 3,908 successes / 2 failures.
-- Historical ESP32-S3 COM20 safe plus extended HIL on `54.03.20`: 33/33 PASS,
-  including `selftest`
-  27/27, repeated reads/recovery, `stress 50` 50/50, and `stress 500` 500/500.
-- Historical ESP32-S3 COM20 same-value persistent write/readback HIL: 25/25
-  PASS for interval `150 ds`, CO2 offset `0 ppm`, and CO2 gain `32768`; dirty
-  state remained clean.
-- Historical ESP32-S3 COM20 niche diagnostics: capability/range guards 11/11 PASS,
-  trace/sniffer/`stress_mix 500` 11/11 PASS, address 0 found by the full scan,
-  and all six in-spec timing points plus two out-of-spec characterization
-  points responded.
-- Historical `54.03.20` ESP32-S3 COM20 operator-assisted physical HIL:
-  absent-sensor boot, hot
-  unplug/OFFLINE/replug recovery, SDA stuck-low, SCL stuck-low timeout, and
-  a complete sensor/MCU power cycle with measurement-interval persistence all
-  PASS. The temporary measurement interval was restored from `160 ds` to its
-  `150 ds` baseline.
-- Historical `54.03.20` ESP32-S3 COM20 immediate warm-up HIL: PASS. Sampling
-  began 0.250 s after COM20 reappeared; MV3/MV4 were `0 ppm` with status `0x08`
-  through 4 s, then `678 ppm` with status `0x00` at 5 s. All 33 scheduled CLI
-  commands were framed correctly; final health was READY with 65 transport
-  successes, zero failures, clean persistent state, and interval `150 ds`. A
-  separate delayed-start attempt recorded one bounded fast-read `NACK` at
-  20.094 s and recovered immediately; it remains in the attempt ledger.
-- The historical `54.03.20` strict 10-minute post-power-cycle stability
-  capture recorded one bounded
-  `NACK` at t=330 s and therefore remains FAIL under its zero-error criterion;
-  the other 62 scheduled CLI commands succeeded. Manually normalized
-  interactive output from immediate `stress_mix 1000` and `stress 1000`
-  follow-ups recorded 1000/1000 for each, so the transient was not reproduced.
-- The historical eight-hour `54.03.20` soak is also a strict FAIL: 2,376
-  commands passed, 29 replies stalled mid-line in Arduino-ESP32 3.2.0 HWCDC,
-  and 11 scheduled MV3 reads received a real NACK on the `0xC1` control byte.
-  Those NACKs clustered at the same measurement phase; the mixed stress blocks
-  otherwise passed. The old runner labeled the 11 NACKs as review-required
-  because it checked for the success-value token before the parsed status.
-  They are retained as NACK failures, not reclassified as passes.
-- The HWCDC truncations match the upstream lost-wakeup defect fixed by
-  [Arduino-ESP32 PR #12606](https://github.com/espressif/arduino-esp32/pull/12606)
-  in 3.3.9. The 10,000-round-trip discriminator validates that targeted fix on
-  this bench, but it is not a replacement for a completed long soak.
-- ESP32-S3 safe default HIL: PASS on `COM17`.
-- ESP32-S3 extended safe HIL: PASS on `COM17`.
-- ESP32-S3 persistent measurement interval write/readback/restore: PASS on
-  `COM17`.
-- Historical COM17 physical unplug/replug recovery: PASS, operator-confirmed
-  manual test; no automated transcript is recorded for that historical run.
+Recorded CO2Control ESP32-S3 hardware testing used the exact library commit
+`a358f92`: a ten-minute stress run completed 562 successful owner operations;
+a thirty-minute normal-acquisition run completed 120 successful readings,
+including one real control-byte NACK recovered by its first retry without a
+sensor fault or qualification loss. The subsequent five-minute sensor checks
+also passed, but the overall follow-up harness verdict remains incomplete
+because Web-session cleanup returned HTTP 403.
 
-The compact HIL evidence ledger in `hil_results/README.md` identifies the exact
-firmware/build metadata. Results from different platform stacks are not
-combined into one platform claim. The new
-`55.03.311` pin has passed S2/S3 builds and the post-commit COM20 run above.
-No completed long-soak result is currently claimed for this pin.
+These observations establish one hardware retry recovery. They do not establish
+a long-term fault rate or the physical cause of the NACK. Retry exhaustion and
+non-NACK fault behavior have native fake coverage; they were not physically
+forced in that campaign. ESP32-S2 and native ESP-IDF hardware remain untested,
+and no completed long soak is claimed for the current candidate. The
+[validation matrix](docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md) records exact
+images, evidence sources, historical results, and remaining coverage gaps.
 
 ## E2 Bus, Not Hardware I2C
 
@@ -231,8 +159,9 @@ capability, and a complete feature-cache read. `readCo2Fast()` and
 freshness, or the product-specific valid ppm range. A sampling application
 should wait for its warm-up policy, read the selected measured value first,
 read `readStatus()` second, reject status bit 3 via `hasCo2Error()`, and apply
-its own range/staleness policy. Reading status can itself trigger the next
-measurement and reset the sensor interval counter.
+its own range/staleness policy. Reading status can trigger the next measurement
+and reset the interval counter only when the global interval exceeds 15 s and
+the previous value is older than 10 s (AN1611-1 sections 4 and 10).
 
 ## Health Monitoring
 
@@ -287,23 +216,73 @@ occurs before a bit starts or while waiting on a slave-held clock; a completed
 byte stays within `byteTimeoutUs`. E2 transfer maxima are enforced at 25,000 us
 per bit and 35,000 us per byte.
 
-`Config::flashStretchTimeoutUs` separately bounds each SCL-release wait in STOP
-and bus reset. It defaults to 350,000 us and accepts 300,000..5,000,000 us,
-bounded by the write-delay safety limits. This handles the documented EE871
-deviation from generic E2's 25/35 ms rule: AN1611-1 section 5 permits CLK-low
-extension during flash writes for up to 150 ms per byte or 300 ms for the
-0xC6/0xC7 interval pair. The default adds 50 ms margin. START and byte transfers
-retain the generic budgets. Post-write waits remain `writeDelayMs` (default
+Ordinary read and volatile custom-pointer write STOPs use `bitTimeoutUs`
+(default 25,000 us). `Config::flashStretchTimeoutUs` separately bounds STOPs
+for direct custom-memory writes, and each SCL release during explicit bus
+reset, which may encounter a pending flash commit. It defaults to 350,000 us
+and accepts 300,000..5,000,000 us, bounded by the write-delay safety limits.
+[AN1611-1](https://www.epluse.com/fileadmin/data/product/application_note/E2-Interface-CO2.pdf)
+section 5/page 5 assigns the 150 ms single-byte or 300 ms interval-pair flash
+extension to direct writes (0x10 at device address 0). Sections 7.1-7.2/page 8
+identify 0x50 as a read-pointer update, which does not justify a flash wait.
+The default flash allowance adds 50 ms margin. START and byte transfers retain
+the generic budgets. Post-write waits remain `writeDelayMs` (default
 150 ms) or `intervalWriteDelayMs` (default 300 ms), each limited to 5000 ms,
 followed by readback verification. The new field is appended to `Config` so
 existing positional initializers retain their field order; rebuild consumers.
 
 A reset has nine clock releases plus STOP, so its maximum stretch allowance is
 `10 * flashStretchTimeoutUs` plus nominal phases. Transaction bounds include
-START, three read or four write byte budgets, and one STOP budget. These are
+START, three read or four write byte budgets, and the command's STOP budget.
+With default timing, an ordinary read's requested-delay bound is 155,610 us;
+a volatile pointer write's is 190,610 us. Fast/averaged value plus status uses
+three reads (466,830 us), or 813,050 us when followed by an error-code pointer
+write and read, with retries disabled. These are
 budgets for requested callback delays; callbacks must themselves remain bounded.
 
 The library never owns GPIO pins or an I2C/Wire instance. Applications provide `setScl`, `setSda`, `readScl`, `readSda`, and `delayUs` callbacks.
+
+## Optional Control-NACK Retries
+
+`Config::readNackRetries` defaults to 0. Set it to 1, 2, or 3 to permit that
+many additional attempts per MV3/MV4/status byte frame (main commands
+0xC/0xD/0xE/0xF/0x7, at any device address). Three means four total attempts.
+Only a control-byte NACK before data is eligible, after successful STOP and
+idle-line checks, separated by a fixed 1,000 us HAL pause. No bus reset is
+performed. Identity/custom reads, auto-increment pointers, all writes, PEC
+failures, timeouts, and stuck-line failures are not retried. A high-byte retry
+keeps the existing low-byte latch; it does not restart the value pair. A NACK
+does not establish the sensor's internal reason or a physical fault cause.
+
+The optional `Config::allowReadRetry(void* busUser)` callback can veto another
+attempt for an owner deadline, cancellation, or latched HAL callback error.
+It is called before and after the pause, and after the final idle read, before
+the next frame. It must be bounded, must not access the bus, and must not call
+the driver recursively. Null permits eligible retries. The line/delay callbacks
+do not return error statuses; without this guard, the library cannot observe
+their application-side error latches or enforce an external wall-clock deadline.
+
+Health records each tracked frame's final result once, so transient NACKs do
+not force OFFLINE during its retry sequence. `readRetryDiagnostics()` and
+`getSettings().readRetry` copy fixed-size cached session diagnostics without
+bus access: saturated `controlNacks`, actual `retries`, `recovered` frames, and
+`exhausted` frames. Eligible NACKs count even with retries disabled or failed
+STOP. `exhausted` counts only enabled retries ending in NACK with clean STOP
+after the configured attempts; disabled, vetoed, and cleanup-blocked cases do
+not increment it. Last-event fields stay tied to the latest eligible frame
+that encountered NACK, across later successes. `lastError` is its final result
+(OK if recovered); `lastCleanupError`, `cleanupBlocked`, `retryVetoed`, and
+`lastRecovered` preserve the decision. End/begin clear the session snapshot;
+explicit recovery preserves it.
+
+With default timing, a NACK frame requests at most 85,610 us
+(`START 25,300 + control byte 35,000 + STOP 25,310`). With three retries, a
+final full read has the bound `3 * (85,610 + 1,000) + 155,610 = 415,440 us`;
+four NACKs exhaust in at most 345,440 us. Fast/averaged value plus status can
+therefore request 1,246,320 us, or 1,592,540 us including the non-retried
+error-code pointer/read path. Custom/identity/reset bounds are unchanged.
+These conservative requested-delay sums exclude callback, guard, and scheduler
+overhead; applications must admit an adequate whole-operation time budget.
 
 ## Persistent Configuration Writes
 
@@ -402,6 +381,9 @@ TunnelMonitor-node commit `0f240ab` and its older `54.03.20` stack. The current
 TunnelMonitor-node's production console uses ESP-IDF USB Serial/JTAG APIs
 directly, so the Arduino HWCDC bug does not apply to that console path.
 
+On Windows, use `.\scripts\pio.cmd` in place of `pio`; it selects the existing
+VS Code-managed PlatformIO installation.
+
 ```bash
 pio test -e native
 pio run -e ex_bringup_s3
@@ -411,13 +393,12 @@ python tools/check_core_timing_guard.py
 python tools/check_cli_contract.py
 python tools/check_idf_example_contract.py
 python scripts/generate_version.py check
-python -m unittest discover -s test -p "test_hil_runner_parser.py"
+python -m unittest discover -s test -p "test_*.py"
 doxygen Doxyfile
 ```
 
 GitHub Actions builds the native ESP-IDF example for ESP32-S3 and ESP32-S2 on
-ESP-IDF v6.0.1. To reproduce those builds locally from
-`examples/idf/basic_bringup`:
+ESP-IDF v6.0.1. To reproduce those builds locally from the repository root:
 
 ```bash
 idf.py -C examples/idf/basic_bringup set-target esp32s3 build
@@ -425,8 +406,9 @@ idf.py -C examples/idf/basic_bringup set-target esp32s2 build
 ```
 
 Use `docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md` for the current evidence
-ledger, safe CLI recipe, bench-only persistent-write warnings, and remaining
-per-board validation gaps.
+ledger and remaining per-board validation gaps. The
+[HIL runner guide](docs/EE871_E2_HIL_RUNNER.md) provides the safe CLI recipe
+and explicit opt-ins for persistent writes and physical fault tests.
 
 For repeatable serial HIL evidence, build and upload the diagnostic CLI, then
 run:
@@ -448,7 +430,8 @@ Dry-runs never report hardware `PASS`; acknowledging an operator prompt alone
 is review-required and is not automatically promoted to PASS. Separately
 reviewed manual fault evidence can be recorded in the hardware matrix.
 
-The core library does not retry a failed E2 transfer. The separate soak harness
+Core retries are disabled by default and can be explicitly enabled as described
+above. The example configuration retains that default. The separate soak harness
 may retry only a scheduled MV3/MV4 control-byte `NACK` once after a configurable
 delay (default 1,500 ms) and records the original attempt, retry, and
 `SCHEDULED_CONTROL_NACK_RECOVERED` outcome. This is application-level cadence
@@ -457,12 +440,12 @@ why the sensor NACKed.
 
 ## Documentation
 
-- `docs/README.md` - documentation index and status map
-- `CHANGELOG.md` - full release history
-- `docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md` - hardware validation plan and CLI recipe
-- `docs/EE871_E2_HIL_RUNNER.md` - automatic serial HIL runner usage and verdict rules
-- `docs/IDF_PORT.md` - ESP-IDF portability and validation guidance
-- `docs/IDF_PORT_IMPLEMENTATION.md` - ESP-IDF implementation notes
+- [Documentation index](docs/README.md) - maintained guides and vendor references.
+- [Changelog](CHANGELOG.md) - release history and migration notes.
+- [Validation matrix](docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md) - current and historical evidence, with coverage limits.
+- [HIL runner guide](docs/EE871_E2_HIL_RUNNER.md) - commands, framing, and verdict rules.
+- [ESP-IDF guide](docs/IDF_PORT.md) - native integration and build instructions.
+- [Protocol and register map](docs/EE871_E2_Protocol_and_Register_Map.md) - E2 timing, transactions, and EE871 registers.
 
 ## License
 

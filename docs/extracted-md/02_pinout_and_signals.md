@@ -19,7 +19,7 @@ Sources: EE871 digital interface user guide, p. 2; EE871 protocol/register refer
 ## Bus Implementation Notes
 
 - Use pull-ups on both clock and data; the pull-up rail defines bus-high voltage.
-- The CO2 E2 note gives a likely bus-high range of 3.6 V to 5.2 V and recommends 4.5 V to 5.0 V for lower supply current.
+- The CO2 E2 note specifies a bus-high range of 3.6 V to 5.2 V and recommends 4.5 V to 5.0 V for lower supply current.
 - Keep E2 cable length to 10 m or less for the EE871 guide.
 - If the host MCU is not 5 V tolerant, use an open-drain level shifter that preserves clock stretching.
 

@@ -21,6 +21,7 @@
 
 ## Implementation Consequences
 
-- Do not rely on hardware I2C peripherals unless they can run slowly enough, expose open-drain clock readback, and tolerate the E2 addressing/checksum format.
+- This library uses injected GPIO-style open-drain E2 callbacks. It does not own or use a hardware I2C peripheral.
 - The master must read back released clock before sampling data so clock stretching works.
+- Ordinary read and volatile pointer-write STOPs use `bitTimeoutUs` (default 25 ms). Direct custom-memory write STOPs and explicit bus reset use `flashStretchTimeoutUs` (default 350 ms, range 300 ms to 5 s) for a possible flash commit; START and byte transfer limits stay unchanged.
 - Avoid unnecessary bus traffic; AN1611-1 notes that communication can prevent the CO2 module from returning to sleep.

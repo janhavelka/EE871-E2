@@ -1,9 +1,9 @@
-﻿# EE871 E2 Protocol + Register Map (Implementation Reference)
+# EE871 E2 Protocol + Register Map (Implementation Reference)
 
 **Target device:** EE871 CO2 probe, E2 interface, **0...5% CO2 (0...50,000 ppm)**.  
 This document is a **curated implementation reference** for writing an E2 master library.
 
-Last reviewed: 2026-06-02.
+Last reviewed: 2026-09-11.
 
 This is the curated implementation reference. It condenses the vendor PDFs and
 the driver requirements into one working protocol document. For release or
@@ -97,6 +97,15 @@ Your master must therefore:
 - When releasing CLK to HIGH, **read back CLK** (or wait until it actually becomes HIGH)
 - Apply timeouts: per-bit stretch timeout <= 25 ms; per-byte timeout <= 35 ms
 
+In this library, ordinary read and volatile `0x50` pointer-write STOPs use
+`Config::bitTimeoutUs` (default 25 ms). Direct custom-memory write STOPs use
+`flashStretchTimeoutUs` at every supported device address; explicit bus reset
+also uses that longer budget because a flash commit may still be pending.
+The default flash budget is 350 ms and the accepted range is 300 ms to 5 s.
+START and byte transfers retain their ordinary bit/byte limits. The flash
+STOP allowance does not replace the bounded post-write delay and readback
+verification described in Section 10.
+
 ---
 
 ## 4) Layer 2: Byte framing, ACK/NACK, PEC
@@ -131,7 +140,7 @@ Formulas:
 
 ### 5.1 Read Byte from Slave (generic read)
 **Structure:**
-`START -> ControlByte(read) -> (slave DATA byte) -> (slave PEC) -> master NACK -> STOP`
+`START -> ControlByte(read) -> slave ACK -> DATA -> master ACK -> PEC -> master NACK -> STOP`
 
 Notes:
 - For READ commands, b0 (R/W) in ControlByte is always **1**
@@ -143,7 +152,7 @@ Notes:
 - `0x3?` Available physical measurements (base **0x31**)
 - `0x4?` Sensor type (group H-byte)  (base **0x41**)
 - `0x5?` Read from internal custom address (base **0x51**)  <- reads data at internal pointer
-- `0x7?` Status byte (base **0x71**) <- also triggers measurement (see Sec. 8)
+- `0x7?` Status byte (base **0x71**) <- can trigger measurement under the conditions in Sec. 8
 - `0x8?`...`0xF?` Measurement value bytes:
   - 0x81 / 0x91 = MV1 low/high
   - 0xA1 / 0xB1 = MV2 low/high
@@ -191,7 +200,12 @@ Status byte bit meanings match "Available physical measurements".
   - bit3 = 0 -> last CO2 measurement OK
   - bit3 = 1 -> error during last measurement; read error code from custom memory (see Sec. 7.4.5)
 
-**Important behavior:** reading the status byte **starts a new measurement** in the slave (see Sec. 8).
+Reading status can start a new measurement and reset the interval counter
+only when the global interval is **>15 s** and the previous measurement is
+**>10 s old** (AN1611-1 Sections 4 and 10; see Sec. 8).
+For a checked sample, read the required measured value first and status
+second, so status evaluates the last measured value. Raw MV3/MV4 APIs do not
+read status or impose warm-up/freshness policy.
 
 ### 6.4 Measurement values for EE871 CO2
 From CO2 E2 addendum:
@@ -296,10 +310,9 @@ measurement-priority window, but AN0105 names EE871 among the devices that can
 process enquiries while measuring. In addition, runtime mode `0xD8` is not
 meaningful when neither capability bit is advertised. Therefore, an observed
 NACK is a precise result for that request but does not, by itself, prove sensor
-absence or measurement activity. The EE871 core performs no hidden retry and
-returns the NACK to the caller. Product or test-harness policy may make a
-bounded later attempt when appropriate, but must preserve the original failure
-and own the delay/backoff explicitly.
+absence or measurement activity. The driver defaults to one attempt. An
+application can explicitly enable the narrow control-byte NACK retry policy
+in Section 13.4; it still owns sample cadence and recovery.
 
 #### 7.4.9 Special features register
 - `0xD9` Auto adjustment control/status:
@@ -365,6 +378,12 @@ From CO2 E2 addendum (write timing):
 - Writing starts **after both bytes are sent**.
 - Total delay can be **<= 300 ms**.
 
+The `0x50` pointer update is volatile and does not use the flash delay or the
+flash STOP budget. Persistent maintenance APIs wait with bounded delays and
+verify the stored value by readback. A partial write or uncertain commit must
+remain visible through persistent dirty/resync diagnostics until a successful
+documented verification path clears it.
+
 ---
 
 ## 11) Required transaction recipes (exact steps)
@@ -380,7 +399,7 @@ Use this for:
 Steps:
 1) START
 2) Send ControlByte (read: b0=1) and expect ACK
-3) Read DataByte
+3) Read DataByte, then send master ACK
 4) Read PEC byte
 5) Send NACK
 6) STOP
@@ -399,6 +418,7 @@ Steps:
    - START
    - ControlByte = 0x51 with bus address (read)
    - Slave returns DataByte = mem[A]
+   - Master ACK
    - Slave returns PEC
    - Master NACK + STOP
 3) Verify PEC = (CB + Data) & 0xFF
@@ -417,191 +437,33 @@ For reading multi-byte blocks (like 0xA0..0xAF), do step (1) once, then repeat (
 
 ---
 
-## 12) Reference code from E+E Application Note AN0105 (verbatim)
+## 12) Vendor implementation examples
 
-These code snippets are provided by E+E as example implementations for an 8051 master.
-They demonstrate: start/stop, send/read byte, ACK/NACK, and read-with-checksum.
+[AN0105](E2_interface_utilising_AN0105.pdf) includes the original 8051 master
+examples for START/STOP, bytes, ACK/NACK, and checksum handling. The complete
+[searchable extract](https://github.com/janhavelka/EE871-E2/blob/main/docs/pdf-extracted-md/E2_interface_utilising_AN0105.md) is
+retained alongside the PDF.
 
-### 12.1 Control byte constants (`fl_E2bus.h`)
-```c
-#define CB_TYPELO 0x11 // ControlByte for reading Sensortype Low-Byte
-#define CB_TYPESUB 0x21 // ControlByte for reading Sensor-Subtype
-#define CB_AVPHMES 0x31 // ControlByte for reading Available physical measurements
-#define CB_TYPEHI 0x41 // ControlByte for reading Sensortype High-Byte
-#define CB_STATUS 0x71 // ControlByte for reading Statusbyte
-#define CB_MV1LO 0x81 // ControlByte for reading Measurement value 1 Low-Byte
-#define CB_MV1HI 0x91 // ControlByte for reading Measurement value 1 High-Byte
-#define CB_MV2LO 0xA1 // ControlByte for reading Measurement value 2 Low-Byte
-#define CB_MV2HI 0xB1 // ControlByte for reading Measurement value 2 High-Byte
-#define CB_MV3LO 0xC1 // ControlByte for reading Measurement value 3 Low-Byte
-#define CB_MV3HI 0xD1 // ControlByte for reading Measurement value 3 High-Byte
-#define CB_MV4LO 0xE1 // ControlByte for reading Measurement value 4 Low-Byte
-#define CB_MV4HI 0xF1 // ControlByte for reading Measurement value 4 High-Byte
-#define E2_DEVICE_ADR 0 // Address of E2-Slave-Device
-```
-
-### 12.2 Kernel interface (`knl_E2bus.h`)
-```c
-#define RETRYS 3 // number of read attempts
-#define DELAY_FACTOR 2 // delay factor for configuration of interface speed
-
-typedef struct st_E2_Return
-{
-  unsigned char DataByte;
-  unsigned char Status;
-} st_E2_Return;
-
-st_E2_Return knl_E2bus_readByteFromSlave(unsigned char ControlByte);
-void knl_E2bus_start(void);
-void knl_E2bus_stop(void);
-void knl_E2bus_sendByte(unsigned char);
-unsigned char knl_E2bus_readByte(void);
-void knl_E2bus_delay(unsigned int value);
-char knl_E2bus_check_ack(void);
-void knl_E2bus_send_ack(void);
-void knl_E2bus_send_nak(void);
-```
-
-### 12.3 Read-byte routine with PEC check (`knl_E2bus.c`)
-```c
-st_E2_Return knl_E2bus_readByteFromSlave( unsigned char ControlByte )
-{
-  unsigned char Checksum;
-  unsigned char counter=0;
-  st_E2_Return xdata E2_Return;
-  E2_Return.Status = 1;
-
-  while (E2_Return.Status && counter<RETRYS)
-  {
-    knl_E2bus_start();                // send E2 start condition
-    knl_E2bus_sendByte( ControlByte );// send control byte
-
-    if ( knl_E2bus_check_ack() == 1 ) // ACK received?
-    {
-      E2_Return.DataByte = knl_E2bus_readByte();
-      knl_E2bus_send_ack();
-      Checksum = knl_E2bus_readByte();
-      knl_E2bus_send_nak();
-
-      if ( ( ( ControlByte + E2_Return.DataByte ) % 0x100 ) == Checksum )
-        E2_Return.Status = 0;
-    }
-
-    knl_E2bus_stop();                 // stop condition
-    counter++;
-  }
-  return E2_Return;
-}
-```
-
-### 12.4 Start/stop primitives (AN0105)
-```c
-void knl_E2bus_start(void)
-{
-  knl_E2bus_set_SDA();
-  knl_E2bus_set_SCL();
-  knl_E2bus_delay(30);
-  knl_E2bus_clear_SDA();
-  knl_E2bus_delay(30);
-}
-
-void knl_E2bus_stop(void)
-{
-  knl_E2bus_clear_SCL();
-  knl_E2bus_delay(20);
-  knl_E2bus_clear_SDA();
-  knl_E2bus_delay(20);
-  knl_E2bus_set_SCL();
-  knl_E2bus_delay(20);
-  knl_E2bus_set_SDA();
-}
-```
-
-### 12.5 Send/read byte + ACK/NACK (AN0105)
-```c
-void knl_E2bus_sendByte(unsigned char value)
-{
-  unsigned char mask;
-  for ( mask = 0x80; mask > 0; mask >>= 1)
-  {
-    knl_E2bus_clear_SCL();
-    knl_E2bus_delay(10);
-
-    if ((value & mask) != 0) knl_E2bus_set_SDA();
-    else knl_E2bus_clear_SDA();
-
-    knl_E2bus_delay(20);
-    knl_E2bus_set_SCL();
-    knl_E2bus_delay(30);
-    knl_E2bus_clear_SCL();
-  }
-  knl_E2bus_set_SDA();
-}
-
-unsigned char knl_E2bus_readByte(void)
-{
-  unsigned char data_in = 0x00;
-  unsigned char mask = 0x80;
-  for (mask=0x80;mask>0;mask >>=1)
-  {
-    knl_E2bus_clear_SCL();
-    knl_E2bus_delay(30);
-    knl_E2bus_set_SCL();
-    knl_E2bus_delay(15);
-    if (knl_E2bus_read_SDA()) data_in |= mask;
-    knl_E2bus_delay(15);
-    knl_E2bus_clear_SCL();
-  }
-  return data_in;
-}
-
-char knl_E2bus_check_ack(void)
-{
-  bit input;
-  knl_E2bus_clear_SCL();
-  knl_E2bus_delay(30);
-  knl_E2bus_set_SCL();
-  knl_E2bus_delay(15);
-  input = knl_E2bus_read_SDA();
-  knl_E2bus_delay(15);
-  if(input == 1) return 0; // NAK
-  else return 1;           // ACK
-}
-
-void knl_E2bus_send_ack(void)
-{
-  knl_E2bus_clear_SCL();
-  knl_E2bus_delay(15);
-  knl_E2bus_clear_SDA();
-  knl_E2bus_delay(15);
-  knl_E2bus_set_SCL();
-  knl_E2bus_delay(28);
-  knl_E2bus_clear_SCL();
-  knl_E2bus_delay(2);
-  knl_E2bus_set_SDA();
-}
-
-void knl_E2bus_send_nak(void)
-{
-  knl_E2bus_clear_SCL();
-  knl_E2bus_delay(15);
-  knl_E2bus_set_SDA();
-  knl_E2bus_delay(15);
-  knl_E2bus_set_SCL();
-  knl_E2bus_delay(30);
-  knl_E2bus_set_SCL();
-}
-```
+Those examples demonstrate framing; their broad retry loop and
+processor-dependent delays do not define this library's timing, diagnostics,
+or retry contract. Use the bounded callback-based implementation and the
+current requirements in Section 13 when integrating this driver.
 
 ---
 
 ## 13) Library design requirements (so it composes in a larger project)
 
 ### 13.1 Required HAL (platform abstraction)
-Implement the driver using a tiny hardware abstraction with:
-- `set_scl(level)` / `set_sda(level)` where **level=1 means release line** (open-drain high), level=0 means pull low
-- `read_scl()` / `read_sda()` to support clock stretching checks
-- `delay_us(t)` (or equivalent) to control bit timing
+The driver accepts callbacks through `Config`:
+
+- `setScl(level)` / `setSda(level)` where **level=1 means release line** (open-drain high), level=0 means pull low
+- `readScl()` / `readSda()` to support clock stretching checks
+- `delayUs(t)` to control bit timing and bounded waits
+
+All callbacks also receive `busUser`. The application owns GPIO setup,
+pull-ups, timebase, and serialization of all driver/shared-bus access.
+Callbacks must be bounded and must not recursively call the driver. Bus
+operations are synchronous, bounded, and task-context operations.
 
 ### 13.2 Current C++ API mapping
 
@@ -625,15 +487,54 @@ API compatibility requirement.
 - Timeouts for clock stretching:
   - <= 25 ms per bit, <= 35 ms per byte
 - Always verify PEC for every read/write transaction
-- After any write (0x10/0x50), read back to verify
+- After persistent custom-memory writes (0x10), read back to verify; 0x50 only
+  updates the volatile read pointer and does not need a flash delay.
 - After 0x10 writes, allow up to 150 ms (up to 300 ms for the 0xC6/0xC7 pair)
+
+### 13.4 Bounded read retries and health
+
+`Config::readNackRetries` accepts **0..3 additional attempts per tracked
+frame**, with zero as the default. Only MV3 low/high, MV4 low/high, and status
+are eligible, and only when the slave NACKs the control byte before any data.
+Identity reads, custom-memory reads (including their pointer updates), all
+writes, PEC failures, timeouts, and other transfer failures are never retried.
+
+Before each retry, the failed frame must complete STOP successfully, both
+lines must be idle, and the HAL performs a fixed **1 ms** pause. The driver
+checks idle again after the pause. Optional `allowReadRetry(busUser)` guards
+before and after the pause and after the final idle check let the application
+veto further traffic for cancellation, deadlines, or latched HAL errors. The
+callback must be bounded and perform no bus I/O or recursive driver calls.
+No retry performs a reset. A high-byte retry retains the low-byte latch; a
+failed low byte prevents a high-byte read.
+
+Health updates once for the final result of each tracked frame. A NACK that
+recovers through an enabled retry therefore contributes one tracked success.
+`ReadRetryDiagnostics`, available without bus traffic through
+`readRetryDiagnostics()` or `getSettings()`, separately preserves:
+
+- Saturating counts of eligible control NACKs, actual extra attempts, recovered
+  frames, and exhausted enabled retries. NACKs count even with retries disabled
+  or when cleanup fails.
+- The latest frame that encountered a NACK: control byte, retries used, final
+  result, cleanup failure, application veto, and recovery outcome. Later
+  ordinary successes retain that event. `end()`/`begin()` reset these session
+  diagnostics; `recover()` preserves them.
+
+STOP/idle failure or an application veto stops further attempts while retaining
+the original control-byte NACK; cleanup status remains separately observable
+through `lastCleanupError` and `cleanupBlocked`. OFFLINE remains latched for
+ordinary operations until explicit `recover()` succeeds. CO2 status errors
+and validated out-of-range values remain sensor-domain failures when the
+underlying transport succeeded.
 
 ---
 
 ## 14) Source documents used
-- **E2_interface_specification_v4_1.pdf** (E2 Interface Specification v4.1)
-- **E2_interface_utilising_AN0105.pdf** (E+E Application Note: E2 software examples)
-- **EE871_E2_interface_addendum.pdf** (EE871-specific E2 parameters, timing, and write delays)
-- **EE871_E2_CO2_interface_AN1611-1.pdf** (CO2 module addendum: timing, MV3/MV4 meaning, write delays, power modes)
-- **EE871_EE240_wireless_user_guide.pdf** (EE871 for EE240 wireless network: 10,000 ppm E2 range, pinout, measurement interval)
-- **EE871_digital_interface_user_guide.pdf** (EE871 user guide: 50,000 ppm E2 range, pinout, measurement interval)
+
+- [E2 Interface Specification v4.1](E2_interface_specification_v4_1.pdf): physical layer, framing, commands, and generic custom memory.
+- [AN0105](E2_interface_utilising_AN0105.pdf): vendor master software examples.
+- [EE871 E2 addendum](EE871_E2_interface_addendum.pdf): device parameters and timing.
+- [AN1611-1](EE871_E2_CO2_interface_AN1611-1.pdf): CO2 timing, MV3/MV4 meaning, flash writes, and power modes. Sections 4 and 10 qualify status-trigger behavior; Section 5 specifies flash timing; Sections 7.1-7.2 describe the volatile pointer.
+- [EE240 wireless guide](EE871_EE240_wireless_user_guide.pdf): wireless-network context, 10,000 ppm range, pinout, and interval.
+- [EE871 digital interface guide](EE871_digital_interface_user_guide.pdf): wired device, 50,000 ppm range, pinout, and interval.
