@@ -32,7 +32,105 @@ ESP-IDF 6.0.1 builds for both ESP32-S3 and ESP32-S2. Each workflow run identifie
 the tested commit. Local `idf.py` builds were not run; an earlier green run
 does not establish success for a later candidate.
 
-## September Library Hardware Evidence
+## September 11 Current-Main Targeted HIL
+
+The COM11 campaign starting at **14:18:21 UTC** exercised exact library source
+[`32dfb0665ac3628a25578ab7a03e1ebc285040d2`](https://github.com/janhavelka/EE871-E2/commit/32dfb0665ac3628a25578ab7a03e1ebc285040d2),
+version `1.1.0`. The temporary Arduino harness copied the core and public
+headers byte-for-byte from clean `main`; fault injection lived in its external
+HAL. Its application image SHA-256 was
+`10fdeeb0a2513285758c0239c285fa53214985ee8bb0de32109d86987d63a270`,
+built September 11 at 16:17:15 local time (Europe/Prague). Platform versions
+were pioarduino `55.03.311`, Arduino `3.3.11`, and IDF libraries `5.5.5`.
+
+The fixture was CO2Control HW2.0.0, ESP32-S3 N16R8 (16 MB flash, 8 MB PSRAM),
+COM11 USB `303a:1001`, serial `3C:0F:02:CD:6B:3C`, DATA GPIO4 / CLOCK GPIO5.
+EE871 serial `1920935602368A` reported firmware `1.4`, E2 specification `4`,
+metadata `0x00..0x09 = 01 04 04 08 08 01 08 93 00 00`, address `0`, and
+interval `150 ds`. Calibration support bytes `0x03/0x04` both advertised CO2.
+The fixture's existing level shifting, pull-ups, cable and supply were not
+independently measured.
+
+| Group | Recorded result | Scope |
+| --- | --- | --- |
+| Real sensor and API assertions | **407 PASS / 0 FAIL / 3 SKIP** | Identity, capabilities, typed reads, parameter guards, probe/reset/recovery, coherent resync, lifecycle and diagnostics. Offset `0`, gain `32768`, calibration points `0/50000` read successfully through the new support guards. Unsupported mode/auto-adjust and other unadvertised writes were rejected. |
+| Address and timing sweep | PASS | Address 0 initialized; addresses 1..7 returned NACK during identity probing. Initialization/status passed with clock high/low phases `995`, `500`, `250`, `200`, `150`, and `100 us`, each with `10 us` setup. This tests the corrected library timing configurations, not standalone CLI decoding or external waveforms. |
+| Repeated reads and acquisition | PASS | 100/100 alternating MV3/MV4 stress reads; then 61 MV3/MV4/status cycles in 60.939 s. Fast readings `572..588 ppm`, averaged readings `580..588 ppm`, all status bytes `0x00`. Both captured real-operation sessions had zero transport failures, eligible NACKs or retries and remained READY/clean. Repeated reads are not distinct sensor conversions. |
+| Injected error assertions | **15 PASS / 1 FAIL** | Low/high-byte read-NACK recovery, three retries per exhausted frame, three exhausted frames latching OFFLINE, no traffic while OFFLINE, explicit recovery, callback veto, default retries disabled, PEC rejection without retry, SCL timeout without retry (32 ms), STOP failure blocking retry, stuck-SDA readback, and identity NACK exclusion passed. The custom-read NACK expectation failed with `PEC_MISMATCH` detail `255`; retained below. |
+| Existing native fake suite on ESP32 | **93/93 PASS** | Emulated callbacks, separate from real sensor I/O. Includes uncertain persistent writes, reserved/absent capability data, auto-adjust preflight, dirty retention and resync. Running on the MCU does not turn these cases into physical sensor fault tests. |
+| Configuration and cleanup | PASS | All 30 captured configuration/calibration/part-name bytes matched afterward; zero direct persistent-write attempts; E2 lines released. The original production application was restored and hash-verified, with healthy EE871, aggregate health `ok`, watchdog `quorum_ok`, and saved-settings metadata unchanged. |
+
+The first harness total was **515 PASS / 1 FAIL / 3 SKIP**, so its overall
+verdict remains **REVIEW_REQUIRED**. Its address-7 absence check used identity
+control `0x1F`; redirecting a logical custom read `0x51` to physical `0x5F`
+unexpectedly reached PEC verification instead of returning NACK. This alone
+does not establish address aliasing or a library defect.
+
+A targeted follow-up beginning **14:25:25 UTC** retained **81 PASS / 3 FAIL**
+and `REVIEW_REQUIRED`. Its image SHA-256 was
+`3810f1d9378fd1dd57017a951d1534ac1869218f846eeaa43bdb5587f1c1d686`.
+Three custom-read address rewrites to `0x5F` and three full control rewrites
+to `0x1F` all sampled ACK, data `0xFF`, and PEC `0xFF`. Each returned
+`PEC_MISMATCH` in 7 ms, with one frame, one tracked failure and no retry.
+The latter three cases failed their NACK expectation. Capture recorded the
+commanded control bits and GPIO ACK/data/PEC samples; it was not an external
+logic-analyzer trace. Every case immediately followed `setCustomPointer(0)`.
+Normal reads and explicit recovery succeeded afterward, all 30 registers
+remained unchanged, and healthy production restoration succeeded again.
+The follow-up transcript SHA-256 is
+`b4fe37615fb9c1ed5ea7227e588c3a241d04b9775847b936aa58c82a2defd21d`.
+
+The final pointer-context comparison beginning **14:31:00 UTC** passed
+**303/303 assertions**. It made 27 observations: three repetitions in each
+of three pointer contexts, through each of three control paths. These paths
+were logical custom read `0x51` rewritten to `0x5F`, rewritten to `0x1F`, and
+an ordinary `begin()` at configured address 7 with **no control rewriting**.
+The last path independently reproduced the same context dependence.
+
+| Context before the wrong-address frame | Result across all three paths |
+| --- | --- |
+| Recovery completed; no pending pointer update | 9/9 NACK, 3 ms each. |
+| Immediately after `setCustomPointer(0)` | 9/9 sampled ACK, data `0xFF`, PEC `0xFF`; `PEC_MISMATCH`, 7 ms each. |
+| Pointer set, then consumed by one successful normal custom read | 9/9 NACK, 3 ms each. |
+
+All 12 captured NACKs in the two logical-custom-read paths passed strict
+no-retry and single-health-failure checks. No invalid frame was accepted as a
+successful read. Every case recovered successfully; all 30 captured registers
+again matched. The image SHA-256 was
+`36389598bc60d9c8c8267986bc3e3ed309d6baf663de78df54aec237664cff73`;
+the transcript SHA-256 is
+`67d53f95ee2b3d47cf855dc8198c4ae6ec337918b80e2d558e130c21a70aa4bd`.
+
+This isolates an observed response to a wrong-address frame while a pointer
+read is pending on this fixture. It explains why the first two harnesses'
+NACK expectations did not hold; their failed verdicts remain intact. It does
+not establish a documented addressing exception, a physical cause, or behavior
+of other sensor firmware. The driver already fails closed with the precise
+observed status, so no library change was made. For future NACK injection,
+complete any pending custom-pointer read before assuming identity-scan absence
+predicts a NACK from another frame.
+
+The harness held board outputs low during testing and prevented direct
+persistent-write controls from reaching the sensor. Supported calibration
+writes, physical partial-write interruption, unplug/power faults, extended
+interval status-trigger timing, electrical waveform measurements and a long
+soak were not run. Native ESP-IDF runtime and ESP32-S2 hardware remain untested.
+
+The original application's SHA-256 was
+`bae394d6f962e161cb5af292f1c5f356c81654588765976a90d19b0630c0c2a8`,
+clean CO2Control `b77ecf02`, library
+`1.0.1@9481b0f569eb4096c2204d30b79ac25f8d16898a`. Before testing, esptool
+verified the retained bootloader, partition table and application against
+flash. Only the application at `0x10000` was replaced and restored; the test
+did not deploy the new library to production.
+
+Local captures and temporary harness sources are retained under the ignored
+`hil_logs/20260911T140235Z_co2_targeted/` directory. The first serial transcript
+SHA-256 is `7c5abcc7105168a3879bb4615dcfa584ad3c0989435a0906020d334001a36722`.
+This ledger preserves the compact result; raw artifacts are local, not a
+published download.
+
+## Earlier September Library Hardware Evidence
 
 The September 11 CO2Control comparison exercised clean EE871-E2
 [`a358f92a6882e00810c775a61f5499d5cff60885`](https://github.com/janhavelka/EE871-E2/commit/a358f92a6882e00810c775a61f5499d5cff60885),
@@ -74,7 +172,7 @@ records 71 library native tests and 58 Python tests at the tested revision.
 Limits of this evidence:
 
 - The later calibration/capability guards, auto-adjust preflight, and expanded
-  write-uncertainty/resync behavior have native fake coverage only. This
+  write-uncertainty/resync behavior were not exercised by this earlier run. This
   campaign did not record calibration support bytes `0x03/0x04` and does not
   qualify those changes on hardware.
 - One recovered ACK miss does not establish a fault-rate improvement, a
@@ -128,7 +226,7 @@ in the earlier cleanup remain recoverable from
 | USB framing discrimination | H-39: 10,000/10,000 identical 201-byte state-only `dirty` replies in 14.078 s. H-311: 100/100 separate process sessions and 10,000/10,000 identical replies in 10.094 s after full HIL closed COM20, without reset/replug. Blank-line probes had been ignored by the CLI; explicit `\ndirty\n` synchronization worked. This qualifies host/CLI framing only. |
 | NACK cause | Historical NACKs recurred near the same measurement phase; the H-39 application retries succeeded. This is an observed ACK-boundary symptom, not proof of sensor busy state, supply trouble or an electrical cause. The hardware reports distinguish it from the separate old HWCDC reply-truncation problem. |
 | Scanner and library diagnostics | H-311 found only address 0 with valid PEC; `libtest` passed 9/9 using production driver reads. The later scanner's full `begin()` identity/capability/feature validation and status check still lack standalone CLI hardware revalidation. |
-| Timing sweep | H-54's old candidate set responded at six nominal in-spec and two out-of-spec points (6667/10000 Hz). Its 1000/1000 us point omitted setup time from the 500 Hz label. The current six-candidate sweep, slowest 995/995 us plus 10 us setup, has not been rerun on hardware; out-of-spec responses are not supported operating claims. |
+| Timing sweep | H-54's old candidate set responded at six nominal in-spec and two out-of-spec points (6667/10000 Hz). Its 1000/1000 us point omitted setup time from the 500 Hz label. The September 11 targeted harness passed all six corrected configurations, slowest 995/995 us plus 10 us setup; the standalone CLI remains unqualified. Out-of-spec historical responses are not supported operating claims. |
 
 ## Repeatable Scenario Matrix
 
@@ -142,7 +240,7 @@ capture or cleanup prevents an overall verdict.
 
 | ID | Scenario and sequence | Expected behavior / retained hardware result |
 | --- | --- | --- |
-| F-01 | Sensor-present boot: `version`, `drv`, `dirty` | Successful initialization yields READY and clean persistent state; failures remain precise and bounded. Historical CLI PASS; September CO2Control startup and acquisition exercised `a358f92`. Later capability validation has native coverage. |
+| F-01 | Sensor-present boot: `version`, `drv`, `dirty` | Successful initialization yields READY and clean persistent state; failures remain precise and bounded. Historical CLI PASS; current-main targeted harness initialization/capability reads PASS. |
 | F-02 | Diagnostic probe: `drv`, `probe`, `drv` | Probe must not change health counters/state. Historical CLI PASS. |
 | F-03 | Status: `status`, `drv` | Bounded result with tracked health; reading status can trigger a new measurement under the documented interval/age conditions. Historical `0x00` reads and trace PASS. |
 | F-04/F-05/F-06 | MV4/MV3 and PEC: `read`, `co2avg`, `co2fast`, `id`, `features` | Low-before-high paired reads; valid PEC or precise bounded error. Historical CLI PASS; September normal acquisition had one recovered MV3 NACK and no public sensor error. |
@@ -155,7 +253,7 @@ capture or cleanup prevents an overall verdict.
 | F-16/F-17/F-18 | Platform regression / state-only USB / scheduled application retry | H-39 results above are historical PASS within their selected commands and exposure. The 1.5 s application retry is separate from current library retries. |
 | F-20/F-21 | Full standalone CLI / process reattachment | H-311 184/184 HIL and 100/100 process sessions PASS; current standalone CLI HIL NOT RUN. |
 | F-22 | Explicit read retries during normal acquisition | September `a358f92` observation: one `0xC1` NACK recovered on first retry, complete measurement OK, qualification retained. |
-| F-23 | Retry budget exhaustion, veto, STOP/idle failure and non-NACK exclusion | Current native fake coverage; physical fault injection NOT RUN for the retry candidate. Preserve final transport status, health and retry diagnostics. |
+| F-23 | Retry budget exhaustion, veto, STOP/idle failure and non-NACK exclusion | Current-main targeted HAL injections passed exhaustion, veto, PEC/timeout and cleanup exclusions; 12 captured custom-read NACKs also passed no-retry checks. Retain the pending-pointer response and initial failed expectations above. Electrical fault-jig testing NOT RUN. Preserve final transport status, health and retry diagnostics. |
 
 ### Persistent Configuration
 
@@ -191,7 +289,7 @@ retry settings, deadlines and recovery cadence.
 | R-03 | Pull SDA low through 470 ohms: `buscheck`, `probe`, read, `libreset`; release and recover | PASS: bus check/reset `BUS_STUCK`, raw and tracked reads `PEC_MISMATCH`, tracked read bounded at 16 ms; recovery restored READY after release. These are observed historical statuses, not a contract requiring PEC mismatch for stuck SDA. |
 | R-04 | Pull SCL low through 470 ohms: `buscheck`, `probe`, read, `libreset`; release and recover | PASS: raw probe TIMEOUT in 31 ms/detail 25000 without health change; tracked read TIMEOUT in 32 ms; reset `BUS_STUCK` in 31 ms; release/recovery restored READY. |
 | R-06 | Idle-bus `busreset`, `buscheck` | PASS: nine recovery clocks, final SCL/SDA high. Physically held-low lines were not falsely reported clear. |
-| R-07 | `timing` | Historical characterization only; corrected sweep awaits hardware revalidation as explained above. |
+| R-07 | `timing` | All six corrected library timing configurations passed the current-main targeted harness. Standalone CLI and external waveform timing remain unqualified. |
 | R-08 | `verbose 1`, `status`, `trace stats`, `verbose 0`, `stress_mix 500` | PASS: bounded status trace decoded; pending/dropped zero; following mixed stress 500/500. |
 
 ## Safe Bring-Up Recipe And Recording

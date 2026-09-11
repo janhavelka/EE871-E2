@@ -29,7 +29,20 @@ version metadata, Doxygen, and all three local Arduino builds (ESP32-S3,
 ESP32-S2, and the older TunnelMonitor compatibility stack).
 [All six CI jobs passed](https://github.com/janhavelka/EE871-E2/actions/runs/34605633301),
 including native ESP-IDF 6.0.1 builds for S2 and S3. These are software checks;
-the hardware evidence below belongs to the earlier recorded firmware.
+hardware results apply only to the revisions and scenarios recorded below.
+
+A September 11 targeted COM11 run tested current library source `32dfb06`:
+407 real sensor/API assertions passed, including calibration-support discovery,
+typed reads, six timing configurations, 100 stress reads, and 61 scheduled
+MV3/MV4/status cycles. There were no natural NACKs or transport failures in
+those real-operation sessions. Retry recovery/exhaustion, OFFLINE behavior,
+vetoes, PEC/timeout rejection and cleanup exclusions passed controlled HAL
+tests. Follow-ups isolated an unexpected response after a custom-pointer
+update: wrong-address frames produced an invalid PEC instead of NACK, which
+the driver safely rejected. The final context comparison passed 303/303
+assertions, including 12 custom-read NACKs without retries. The original failed
+harness expectations remain recorded. All 93 fake-transport regressions also
+passed on the ESP32, separately from real sensor I/O.
 
 Recorded CO2Control ESP32-S3 hardware testing used the exact library commit
 `a358f92`: a ten-minute stress run completed 562 successful owner operations;
@@ -41,9 +54,11 @@ because Web-session cleanup returned HTTP 403.
 
 These observations establish one hardware retry recovery. They do not establish
 a long-term fault rate or the physical cause of the NACK. Retry exhaustion and
-non-NACK fault behavior have native fake coverage; they were not physically
-forced in that campaign. The later calibration/metadata guards, auto-adjust
-preflight, and expanded dirty/resync behavior have native fake coverage only.
+non-NACK fault behavior were not forced in that earlier campaign; the newer
+targeted run adds controlled HAL-injection evidence. Persistent write failures
+and supported auto-adjust operations still have fake-transport coverage only.
+The targeted run made no persistent sensor writes, verified 30 unchanged
+registers, and restored the original healthy production firmware.
 ESP32-S2 and native ESP-IDF hardware remain untested, and no completed long soak
 is claimed for the current candidate. The
 [validation matrix](docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md) records exact

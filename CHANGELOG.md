@@ -129,8 +129,15 @@ Release changes are merged into `main`; `1.1.0` remains unreleased and no
 
 Implementation `3d32ac3` passed 93 native tests, 58 Python tests, three local
 Arduino builds, and [all six CI jobs](https://github.com/janhavelka/EE871-E2/actions/runs/34605633301),
-including native ESP-IDF 6.0.1 on S2/S3. The new maintenance guards and uncertainty
-paths have not been exercised on hardware. Commands, exact firmware evidence
+including native ESP-IDF 6.0.1 on S2/S3. Targeted COM11 HIL at `32dfb06` passed
+407 real sensor/API assertions and 15 injected-error assertions. Follow-ups
+isolated a wrong-address response dependent on a pending custom pointer;
+the final 303/303 comparison passed, including 12 custom NACKs without retry.
+Initial failed NACK expectations remain recorded; the driver correctly
+rejected the observed invalid PEC, requiring no code change. All 93 fake tests
+also passed on the MCU. Calibration discovery and typed
+reads passed on the sensor; persistent-write failure and supported auto-adjust
+paths remain emulated-only evidence. Commands, exact firmware evidence
 and unrun scenarios are maintained in the
 [validation matrix](docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md).
 

@@ -12,6 +12,15 @@ Completed campaigns, tested versions, and outstanding hardware validation are
 maintained in the
 [hardware validation matrix](EE871_E2_HARDWARE_VALIDATION_MATRIX.md).
 
+When injecting control NACKs, record the preceding transaction context. The
+September 11 EE871 fixture returned ACK plus invalid data/PEC for a
+wrong-address frame immediately after an unconsumed custom-pointer update;
+the same frame NACKed after a normal custom read consumed that pointer.
+Identity-scan absence alone therefore did not guarantee the injection's
+expected NACK. This is a recorded fixture observation, not an alternate
+addressing contract; the driver rejected both errors without retrying custom
+reads. Keep such unexpected observations separate from a harness PASS.
+
 ## Setup and Default Run
 
 Build and flash the intended example before attaching the runner. On Windows,
