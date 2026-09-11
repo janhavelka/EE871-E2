@@ -35,7 +35,6 @@ inline void printHelpItem(const char* command, const char* description) {
 
 inline void printPrompt() {
   LOG_SERIAL.println("> ");
-  LOG_SERIAL.flush();
 }
 
 }  // namespace cli

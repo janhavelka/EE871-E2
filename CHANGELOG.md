@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when retries are disabled.
 - Host serial commands reject short writes and wait for their bounded response
   instead of calling the serial driver's potentially unbounded drain.
+- The Arduino CLI prompt no longer flushes the USB output queue. Arduino's
+  transient disconnected indication can make that flush discard pending text.
 
 ## [1.1.0] - 2026-09-11
 
