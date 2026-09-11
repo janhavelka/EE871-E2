@@ -17,8 +17,7 @@ examples, and HIL validation evidence.
 
 ## Release And Validation Status
 
-Source/package version `1.1.0` is merged into `main` and remains unreleased;
-`v1.0.1` is the published tag. No `v1.1.0` tag has been created.
+Source/package version `1.1.0` is available from the `v1.1.0` Git tag.
 [CHANGELOG.md](CHANGELOG.md) covers migration, stricter startup/recovery,
 ordinary STOP timing, opt-in control-NACK retries, calibration guards, and
 persistent-write uncertainty.
@@ -82,13 +81,11 @@ control byte. It is not an ESP-IDF or Arduino I2C device address.
 
 ### PlatformIO (recommended)
 
-The installation example pins the published `v1.0.1` tag. The `1.1.0` source
-changes in this tree still need a release tag before updating that pin.
-Add to `platformio.ini`:
+Pin version `1.1.0` in `platformio.ini`:
 
 ```ini
 lib_deps =
-  https://github.com/janhavelka/EE871-E2.git#v1.0.1
+  https://github.com/janhavelka/EE871-E2.git#v1.1.0
 ```
 
 ### Manual

@@ -5,10 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 1.1.0 - Unreleased
-
-Release changes are merged into `main`; `1.1.0` remains unreleased and no
-`v1.1.0` tag has been created.
+## [1.1.0] - 2026-09-11
 
 ### Migration from 1.0.1
 
@@ -346,6 +343,7 @@ and unrun scenarios are maintained in the
 - Initial release with template structure
 - ESP32-S2 and ESP32-S3 support
 
+[1.1.0]: https://github.com/janhavelka/EE871-E2/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/janhavelka/EE871-E2/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/janhavelka/EE871-E2/compare/v0.3.0...v1.0.0
 [0.3.0]: https://github.com/janhavelka/EE871-E2/compare/v0.2.1...v0.3.0
