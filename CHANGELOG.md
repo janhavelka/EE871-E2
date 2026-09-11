@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in `Config::readNackRetries` (default 0, maximum 3 additional attempts)
+  for MV3/MV4/status control-byte NACKs only, with clean STOP/idle checks and a
+  fixed 1 ms pause. An optional `allowReadRetry(busUser)` veto supports owner
+  deadlines, cancellation, and latched callback errors. No reset, custom
+  read/write replay, or retry of PEC/timeout failures is introduced.
+- Cached saturated `ReadRetryDiagnostics` count eligible NACKs even when
+  retries are disabled, actual retries, recovered frames, and exhaustion;
+  sticky last-event fields retain final/cleanup errors and veto decisions.
+  Health records the final result once per tracked frame. Config fields are
+  appended for source compatibility; consumers must rebuild.
+
 ### Fixed
 
 - Ordinary read and volatile custom-pointer write STOPs now use

@@ -47,7 +47,7 @@ public:
     _corruptNextCustomReadAddress = 0;
     _failNextWriteEnabled = false;
     _failNextWriteAddress = 0;
-    _failNextReadEnabled = false;
+    _readNacksRemaining = 0;
     _failNextReadMain = 0;
     _dropWriteEnabled = false;
     _dropWriteAddress = 0;
@@ -56,6 +56,12 @@ public:
     _statusByte = 0;
     _mv3 = 600;
     _mv4 = 650;
+    _mv3Latched = _mv3;
+    _mv4Latched = _mv4;
+    _controlAcked = false;
+    _retryGuardCalls = 0;
+    _retryGuardVetoCall = 0;
+    for (auto& count : _controlCounts) count = 0;
     _group = EE871::cmd::SENSOR_GROUP_ID;
     _subgroup = EE871::cmd::SENSOR_SUBGROUP_ID;
     _availableMeasurements = EE871::cmd::AVAILABLE_MEAS_MASK;
@@ -148,9 +154,17 @@ public:
   void setMv3(uint16_t value) { _mv3 = value; }
   void setMv4(uint16_t value) { _mv4 = value; }
 
-  void nackNextReadMainCommand(uint8_t mainCommand) {
+  void nackNextReadMainCommand(uint8_t mainCommand, uint8_t count = 1) {
     _failNextReadMain = mainCommand;
-    _failNextReadEnabled = true;
+    _readNacksRemaining = count;
+  }
+
+  uint32_t controlCount(uint8_t controlByte) const { return _controlCounts[controlByte]; }
+  void vetoReadRetryOnCall(uint8_t call) { _retryGuardVetoCall = call; }
+  uint8_t retryGuardCalls() const { return _retryGuardCalls; }
+  bool allowReadRetry() {
+    ++_retryGuardCalls;
+    return _retryGuardVetoCall == 0 || _retryGuardCalls < _retryGuardVetoCall;
   }
 
   void failNextWriteToAddress(uint8_t address) {
@@ -284,6 +298,7 @@ private:
     _responseData = 0;
     _responsePec = 0;
     _slaveSda = true;
+    _controlAcked = false;
   }
 
   void onSclRising() {
@@ -306,6 +321,7 @@ private:
       case Phase::ACK_DATA:
       case Phase::ACK_PEC:
         _slaveSda = !ackForCurrentPhase();
+        if (_phase == Phase::ACK_CONTROL) _controlAcked = !_slaveSda;
         break;
       case Phase::READ_DATA:
         _slaveSda = readBitFromByte(_responseData);
@@ -328,7 +344,7 @@ private:
 
     switch (_phase) {
       case Phase::ACK_CONTROL:
-        if (!_devicePresent) {
+        if (!_controlAcked) {
           _phase = Phase::IDLE;
         } else if (controlIsRead()) {
           prepareReadResponse();
@@ -386,6 +402,7 @@ private:
     switch (_phase) {
       case Phase::WRITE_CONTROL:
         _control = _byte;
+        ++_controlCounts[_control];
         _phase = Phase::ACK_CONTROL;
         _skipNextFalling = true;
         break;
@@ -416,8 +433,8 @@ private:
       return false;
     }
     if (_phase == Phase::ACK_CONTROL && controlIsRead() &&
-        _failNextReadEnabled && mainCommand() == _failNextReadMain) {
-      _failNextReadEnabled = false;
+        _readNacksRemaining != 0U && mainCommand() == _failNextReadMain) {
+      --_readNacksRemaining;
       return false;
     }
     if (_phase == Phase::ACK_ADDRESS &&
@@ -471,13 +488,15 @@ private:
       case EE871::cmd::MAIN_STATUS:
         return _statusByte;
       case EE871::cmd::MAIN_MV3_LO:
+        _mv3Latched = _mv3;
         return static_cast<uint8_t>(_mv3 & 0xFF);
       case EE871::cmd::MAIN_MV3_HI:
-        return static_cast<uint8_t>(_mv3 >> 8);
+        return static_cast<uint8_t>(_mv3Latched >> 8);
       case EE871::cmd::MAIN_MV4_LO:
+        _mv4Latched = _mv4;
         return static_cast<uint8_t>(_mv4 & 0xFF);
       case EE871::cmd::MAIN_MV4_HI:
-        return static_cast<uint8_t>(_mv4 >> 8);
+        return static_cast<uint8_t>(_mv4Latched >> 8);
       case EE871::cmd::MAIN_CUSTOM_PTR: {
         const uint8_t value = _memory[_customPointer];
         ++_customPointer;
@@ -565,7 +584,7 @@ private:
   uint8_t _corruptNextCustomReadAddress = 0;
   bool _failNextWriteEnabled = false;
   uint8_t _failNextWriteAddress = 0;
-  bool _failNextReadEnabled = false;
+  uint8_t _readNacksRemaining = 0;
   uint8_t _failNextReadMain = 0;
   bool _dropWriteEnabled = false;
   uint8_t _dropWriteAddress = 0;
@@ -574,6 +593,12 @@ private:
   uint8_t _statusByte = 0;
   uint16_t _mv3 = 0;
   uint16_t _mv4 = 0;
+  uint16_t _mv3Latched = 0;
+  uint16_t _mv4Latched = 0;
+  bool _controlAcked = false;
+  uint32_t _controlCounts[256] = {};
+  uint8_t _retryGuardCalls = 0;
+  uint8_t _retryGuardVetoCall = 0;
   uint16_t _group = 0;
   uint8_t _subgroup = 0;
   uint8_t _availableMeasurements = 0;

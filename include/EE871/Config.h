@@ -35,6 +35,13 @@ using E2ReadLineFn = bool (*)(void* user);
 /// @param user User context pointer passed through from Config.
 using E2DelayUsFn = void (*)(uint32_t us, void* user);
 
+/// Optional bounded application veto for an otherwise safe read retry.
+/// Called with busUser before and after the retry pause, and once more after
+/// the final idle-line check, before another frame. Return false after
+/// deadline expiry, cancellation or a latched callback error. No recursive
+/// driver calls or bus I/O are allowed from this callback.
+using E2AllowReadRetryFn = bool (*)(void* user);
+
 /// @brief Configuration for EE871 driver.
 ///
 /// The transport callbacks implement GPIO-style open-drain E2 line control.
@@ -81,6 +88,12 @@ struct Config {
   /// This does not relax bitTimeoutUs/byteTimeoutUs or replace write delays.
   /// Appended to preserve existing positional aggregate initialization.
   uint32_t flashStretchTimeoutUs = 350000;
+
+  /// Additional control-NACK attempts for MV3/MV4/status only: 0..3, default off.
+  /// Each retry requires successful STOP/idle and a fixed 1000 us HAL pause.
+  /// Appended fields preserve existing positional Config initializers.
+  uint8_t readNackRetries = 0;
+  E2AllowReadRetryFn allowReadRetry = nullptr; ///< Null permits eligible retries.
 };
 
 } // namespace EE871

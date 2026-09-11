@@ -91,8 +91,14 @@ Rules:
   result is invalid or unsupported.
 - Do not hide bus or sensor side effects inside convenience APIs unless the API
   name, docs, examples, and tests make the side effect explicit.
-- Prefer explicit recovery over background magic. The application owns retry
-  cadence, power policy, and aggregate health decisions.
+- Prefer explicit recovery over background magic. The application owns sample
+  cadence, power policy, and aggregate health decisions. Its explicit opt-in
+  `readNackRetries` may permit at most three additional MV3/MV4/status frame
+  attempts after a control-byte NACK, successful STOP, and idle-line checks.
+  Each retry has a fixed 1 ms HAL pause. Defaults remain one attempt; identity,
+  custom reads, all writes, PEC failures, and timeouts are never retried.
+  The optional bounded `allowReadRetry` callback can veto further attempts for
+  application cancellation, deadlines, or latched HAL errors. No hidden reset.
 - Once the driver is `OFFLINE`, normal bus operations should fail quickly with a
   precise status until explicit recovery succeeds. Diagnostics and recovery
   paths may still touch the bus.
@@ -280,7 +286,8 @@ The driver follows a managed synchronous model with health tracking:
   call into public methods on the same driver instance.
 - `tick()` may be used for periodic polling, measurement scheduling, or recovery policies.
 - Health is tracked via tracked transport wrappers; public API never calls `_updateHealth()` directly.
-- Recovery is manual via `recover()`; the application controls retry strategy.
+- Recovery is manual via `recover()`; the application controls sample retries
+  and may explicitly enable the narrow bounded control-NACK retries above.
 
 ### DriverState (4 states only)
 
@@ -321,6 +328,11 @@ Transport callbacks (Config::setScl/setSda/readScl/readSda/delayUs)
 **Rules:**
 - Public API methods NEVER call `_updateHealth()` directly.
 - Protocol helpers use TRACKED wrappers -> health updated automatically.
+- The read tracked wrapper applies the opt-in retry bound and updates health
+  once for the final frame result. Fixed-size saturated retry counters remain
+  separate from health; eligible NACKs are counted even when retry is disabled.
+  The latest NACK-bearing frame's outcome stays cached through later ordinary
+  successes. Session retry diagnostics reset on end/begin, not recover.
 - The ordinary-operation OFFLINE guard lives only at the two tracked transfer
   wrappers, `_readControlByteTracked` and `_writeCommandTracked`. Both use
   `_offlineStatus()` to retain the last code/detail and mark a latched reply.

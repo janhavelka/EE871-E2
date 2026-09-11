@@ -309,10 +309,52 @@ START, three read or four write byte budgets, and the command's STOP budget.
 With default timing, an ordinary read's requested-delay bound is 155,610 us;
 a volatile pointer write's is 190,610 us. Fast/averaged value plus status uses
 three reads (466,830 us), or 813,050 us when followed by an error-code pointer
-write and read. These are
+write and read, with retries disabled. These are
 budgets for requested callback delays; callbacks must themselves remain bounded.
 
 The library never owns GPIO pins or an I2C/Wire instance. Applications provide `setScl`, `setSda`, `readScl`, `readSda`, and `delayUs` callbacks.
+
+## Optional Control-NACK Retries
+
+`Config::readNackRetries` defaults to 0. Set it to 1, 2, or 3 to permit that
+many additional attempts per MV3/MV4/status byte frame (main commands
+0xC/0xD/0xE/0xF/0x7, at any device address). Three means four total attempts.
+Only a control-byte NACK before data is eligible, after successful STOP and
+idle-line checks, separated by a fixed 1,000 us HAL pause. No bus reset is
+performed. Identity/custom reads, auto-increment pointers, all writes, PEC
+failures, timeouts, and stuck-line failures are not retried. A high-byte retry
+keeps the existing low-byte latch; it does not restart the value pair. A NACK
+does not establish the sensor's internal reason or a physical fault cause.
+
+The optional `Config::allowReadRetry(void* busUser)` callback can veto another
+attempt for an owner deadline, cancellation, or latched HAL callback error.
+It is called before and after the pause, and after the final idle read, before
+the next frame. It must be bounded, must not access the bus, and must not call
+the driver recursively. Null permits eligible retries. The line/delay callbacks
+do not return error statuses; without this guard, the library cannot observe
+their application-side error latches or enforce an external wall-clock deadline.
+
+Health records each tracked frame's final result once, so transient NACKs do
+not force OFFLINE during its retry sequence. `readRetryDiagnostics()` and
+`getSettings().readRetry` copy fixed-size cached session diagnostics without
+bus access: saturated `controlNacks`, actual `retries`, `recovered` frames, and
+`exhausted` frames. Eligible NACKs count even with retries disabled or failed
+STOP. `exhausted` counts only enabled retries ending in NACK with clean STOP
+after the configured attempts; disabled, vetoed, and cleanup-blocked cases do
+not increment it. Last-event fields stay tied to the latest eligible frame
+that encountered NACK, across later successes. `lastError` is its final result
+(OK if recovered); `lastCleanupError`, `cleanupBlocked`, `retryVetoed`, and
+`lastRecovered` preserve the decision. End/begin clear the session snapshot;
+explicit recovery preserves it.
+
+With default timing, a NACK frame requests at most 85,610 us
+(`START 25,300 + control byte 35,000 + STOP 25,310`). With three retries, a
+final full read has the bound `3 * (85,610 + 1,000) + 155,610 = 415,440 us`;
+four NACKs exhaust in at most 345,440 us. Fast/averaged value plus status can
+therefore request 1,246,320 us, or 1,592,540 us including the non-retried
+error-code pointer/read path. Custom/identity/reset bounds are unchanged.
+These conservative requested-delay sums exclude callback, guard, and scheduler
+overhead; applications must admit an adequate whole-operation time budget.
 
 ## Persistent Configuration Writes
 
@@ -457,7 +499,8 @@ Dry-runs never report hardware `PASS`; acknowledging an operator prompt alone
 is review-required and is not automatically promoted to PASS. Separately
 reviewed manual fault evidence can be recorded in the hardware matrix.
 
-The core library does not retry a failed E2 transfer. The separate soak harness
+Core retries are disabled by default and can be explicitly enabled as described
+above. The example configuration retains that default. The separate soak harness
 may retry only a scheduled MV3/MV4 control-byte `NACK` once after a configurable
 delay (default 1,500 ms) and records the original attempt, retry, and
 `SCHEDULED_CONTROL_NACK_RECOVERED` outcome. This is application-level cadence

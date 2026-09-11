@@ -20,6 +20,24 @@ enum class DriverState : uint8_t {
   OFFLINE    ///< Latched; ordinary operations fail fast without bus traffic. Only recover() restores READY.
 };
 
+/// Session counters for eligible tracked MV3/MV4/status control-byte NACKs.
+/// Counters saturate; end()/begin() reset them, recover() preserves them.
+/// Last-event fields describe the latest eligible frame that encountered a
+/// NACK and remain unchanged by ordinary successes or ineligible commands.
+struct ReadRetryDiagnostics {
+  uint32_t controlNacks = 0; ///< Includes disabled retries and failed cleanup.
+  uint32_t retries = 0; ///< Additional frames actually attempted.
+  uint32_t recovered = 0; ///< Frames succeeding after at least one retry.
+  uint32_t exhausted = 0; ///< Clean final NACK after all configured nonzero retries.
+  uint8_t lastControlByte = 0;
+  uint8_t lastRetriesUsed = 0;
+  Status lastError = Status::Ok(); ///< Final frame result; OK after recovery.
+  Status lastCleanupError = Status::Ok(); ///< STOP/idle failure blocking retry.
+  bool cleanupBlocked = false;
+  bool retryVetoed = false; ///< Application guard denied another attempt.
+  bool lastRecovered = false;
+};
+
 /// @brief Snapshot of current configuration, cached feature flags, and driver health.
 ///
 /// Snapshot access does not touch the E2 bus. The persistent dirty fields mirror
@@ -41,6 +59,7 @@ struct SettingsSnapshot {
   uint32_t totalSuccess = 0;      ///< Total tracked successes.
   bool persistentConfigDirty = false; ///< True when persistent config may be partially applied.
   Status persistentConfigDirtyError = Status::Ok(); ///< First error that marked persistent config dirty.
+  ReadRetryDiagnostics readRetry; ///< Cached diagnostics; no bus access.
 };
 
 /// @brief Transport-agnostic EE871 CO2 sensor driver for the E2 bus.
@@ -61,12 +80,16 @@ struct SettingsSnapshot {
 /// callback. Transport callbacks must be bounded and deterministic, and must
 /// not call public methods on the same EE871 instance recursively.
 ///
-/// A failed E2 transfer is not retried internally. The driver preserves a
-/// control-byte NACK and updates health for that attempt; the application owns
-/// any later retry, delay/backoff, and sampling-cadence policy. A NACK alone
-/// does not identify the sensor's internal reason. Health counts tracked bus
-/// transfers, not high-level sampling cycles; a 16-bit read stops after a
-/// failed low-byte transfer and does not attempt its high byte.
+/// Retries default to disabled. Config::readNackRetries opts into at most three
+/// additional attempts for MV3/MV4/status control-byte NACKs before any data,
+/// after successful STOP and idle checks, with a fixed 1 ms pause. Other
+/// failures, identity/custom reads, and all writes are never retried. The
+/// optional allowReadRetry callback can veto for application deadlines or HAL
+/// errors. Health counts each tracked frame's final result once; separate
+/// diagnostics retain NACK/retry counts. A NACK alone does not identify its
+/// physical cause. The application still owns sampling cadence and recovery.
+/// A 16-bit read stops after a failed low-byte frame; a retried high byte does
+/// not re-read the low byte or disturb its sensor-side latch.
 class EE871 {
 public:
   /// @brief Construct an uninitialized driver instance.
@@ -217,6 +240,9 @@ public:
   /// @return Lifetime tracked success count.
   uint32_t totalSuccess() const { return _totalSuccess; }
 
+  /// Copy cached session retry counters and the latest NACK-bearing frame.
+  ReadRetryDiagnostics readRetryDiagnostics() const { return _readRetry; }
+
   /// Consecutive failures required before OFFLINE.
   /// @return Normalized threshold currently in use.
   uint8_t offlineThreshold() const { return _config.offlineThreshold; }
@@ -244,7 +270,8 @@ public:
   /// @param mainCommandNibble EE871-supported main-command nibble.
   /// @param[out] data Returned data byte.
   /// @return Status::Ok() on success; NOT_SUPPORTED for EE871-unsupported
-  /// measurement commands. A slave NACK is returned without retry.
+  /// measurement commands. Only MV3/MV4/status control-byte NACKs are eligible
+  /// for the explicitly configured read retries; defaults perform one attempt.
   Status readControlByte(uint8_t mainCommandNibble, uint8_t& data);
 
   /// Read a 16-bit value using low/high control bytes.
@@ -554,8 +581,8 @@ public:
   /// (AN1611-1 sections 4 and 10). For checked sampling, read MV3/MV4 first
   /// and status second so status describes the last measured value.
   /// @param[out] status Status byte.
-  /// @return Status::Ok() when the status byte and PEC verify. A slave NACK is
-  /// returned without retry.
+  /// @return Status::Ok() when the status byte and PEC verify. Control-byte
+  /// NACK retries follow Config::readNackRetries (disabled by default).
   Status readStatus(uint8_t& status);
 
   /// Check if CO2 error bit is set in a status byte
@@ -575,8 +602,8 @@ public:
   /// This is a raw value API. It does not read status, reject the CO2 error
   /// bit, validate warm-up/freshness, or enforce a product-specific ppm range.
   /// Reading MV3 low first captures the associated high byte in the sensor.
-  /// A control-byte NACK is returned without retry and without inferring the
-  /// sensor's internal reason.
+  /// Control-byte NACK retries follow Config::readNackRetries (default off),
+  /// without inferring the sensor's internal reason.
   /// @param[out] ppm CO2 concentration in ppm.
   /// @return Status::Ok() when MV3 low/high reads succeed.
   Status readCo2Fast(uint16_t& ppm);
@@ -586,8 +613,8 @@ public:
   /// This is a raw value API. It does not read status, reject the CO2 error
   /// bit, validate warm-up/freshness, or enforce a product-specific ppm range.
   /// Reading MV4 low first captures the associated high byte in the sensor.
-  /// A control-byte NACK is returned without retry and without inferring the
-  /// sensor's internal reason.
+  /// Control-byte NACK retries follow Config::readNackRetries (default off),
+  /// without inferring the sensor's internal reason.
   /// @param[out] ppm CO2 concentration in ppm.
   /// @return Status::Ok() when MV4 low/high reads succeed.
   Status readCo2Average(uint16_t& ppm);
@@ -617,7 +644,12 @@ private:
   // Tracked/Raw Transport Wrappers
   // =========================================================================
 
-  Status _readControlByteRaw(uint8_t controlByte, uint8_t& data);
+  struct ReadAttemptInfo {
+    bool controlNack = false;
+    Status stopStatus = Status::Ok();
+  };
+  Status _readControlByteRaw(uint8_t controlByte, uint8_t& data,
+                             ReadAttemptInfo* attempt = nullptr);
   Status _readControlByteTracked(uint8_t controlByte, uint8_t& data);
 
   Status _writeCommandRaw(uint8_t controlByte, uint8_t addressByte, uint8_t dataByte,
@@ -666,6 +698,7 @@ private:
   uint8_t _consecutiveFailures = 0;
   uint32_t _totalFailures = 0;
   uint32_t _totalSuccess = 0;
+  ReadRetryDiagnostics _readRetry;
   bool _persistentConfigDirty = false;
   Status _persistentConfigDirtyError = Status::Ok();
 };
