@@ -25,8 +25,13 @@ valid timing or protocol-stability evidence.
 - Pull-ups: external pull-ups are expected; internal weak pull-ups are disabled
   by default in `ee871_idf::init()`.
 
-Change the GPIO constants in `main/main.cpp` for your board. Build and monitor
-with ESP-IDF:
+Use a bidirectional open-drain level shifter between the 3.3 V ESP32 GPIOs and
+the sensor-side E2 bus. The sensor-side pull-ups are 4.7 kOhm to 100 kOhm and bus
+high must be 3.6-5.2 V (recommended 4.5-5.0 V). The cable-length guideline is
+10 m maximum. Change the GPIO constants in `main/main.cpp` for your board.
+
+Build and monitor from the repository root in an initialized ESP-IDF 6.0.1 or
+later environment:
 
 The example discovers the root library through `EXTRA_COMPONENT_DIRS` and its
 `REQUIRES "EE871-E2"` entry uses the checkout directory as the ESP-IDF component
@@ -41,3 +46,13 @@ idf.py -C examples/idf/basic_bringup flash monitor
 Use `idf.py -C examples/idf/basic_bringup set-target esp32s2 build` for
 ESP32-S2 validation. The driver core does not configure GPIO, own the bus, or
 log.
+
+The example leaves `readNackRetries` at its default of zero. Its command loop
+owns the driver and calls `tick()` between commands; it does not implement a
+production sampling or automatic recovery policy. Public bus operations and
+persistent-write verification block for their documented bounded durations.
+
+See the [ESP-IDF integration guide](../../../docs/IDF_PORT.md) for component
+dependencies, callback contracts, timing, and application integration. Build
+and hardware qualification results are recorded in the
+[validation matrix](../../../docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md).

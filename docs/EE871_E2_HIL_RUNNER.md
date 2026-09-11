@@ -1,58 +1,34 @@
-# EE871-E2 Python HIL Runner
+# EE871-E2 HIL and Soak Tools
 
-Last updated: 2026-07-31
+Last updated: 2026-09-11
 
-`tools/ee871_hil_runner.py` drives the EE871 example serial CLI and records
-repeatable HIL evidence. The default plan is non-persistent. A runner `PASS`
-means the selected serial CLI transcript matched parser expectations; it is not
-a CO2 accuracy, calibration, long-soak, fault-tolerance, or production-readiness
-claim without the matching bench record.
+`tools/ee871_hil_runner.py` drives the example serial CLI and records
+repeatable hardware-in-the-loop evidence. Its default plan avoids persistent
+writes. A runner PASS means the selected CLI responses matched parser
+expectations; CO2 accuracy, calibration, fault tolerance, and long-run claims
+need the corresponding bench evidence.
 
-Recorded bench evidence is summarized in
-[EE871_E2_HARDWARE_VALIDATION_MATRIX.md](EE871_E2_HARDWARE_VALIDATION_MATRIX.md).
-The current example/HIL build pin is pioarduino `55.03.311`,
-Arduino-ESP32 `3.3.11`, and ESP-IDF `5.5.5`. Its clean-commit COM20 run passed
-184/184 safe, extended, and niche commands with final READY state, zero
-transport failures, and clean persistent state. The prior `55.03.39`
-firmware's targeted HIL passed 144/144, and a serial-only discriminator passed
-10,000/10,000 identical 201-byte `dirty` replies. Because `dirty` performs no
-E2 operation, that discriminator qualifies CLI framing only.
+Completed campaigns, tested versions, and outstanding hardware validation are
+maintained in the
+[hardware validation matrix](EE871_E2_HARDWARE_VALIDATION_MATRIX.md).
 
-An accelerated 543.594-second scheduled-read regression then completed 108
-sample cycles with 564 ordinary passes, two recorded first-attempt
-`SCHEDULED_CONTROL_NACK_RECOVERED` outcomes, and zero hard failures, reviews,
-skips, reconnects, or transport-counter regressions. This validates the narrow
-harness policy over that interval; it is not a completed long soak.
+## Setup and Default Run
 
-The historical eight-hour soak used pioarduino `54.03.20` and
-Arduino-ESP32 `3.2.0`. It remains a strict FAIL: 29 responses stalled
-mid-line in HWCDC and 11 scheduled MV3 reads received a real NACK on the
-`0xC1` control byte. The old runner incorrectly labeled those complete NACK
-responses as review-required because it looked for the successful value line
-before evaluating the parsed status. Arduino-ESP32
-[PR #12606](https://github.com/espressif/arduino-esp32/pull/12606) documents
-the matching HWCDC TX lost-wakeup/data-loss defect and fixes it in 3.3.9.
-No completed long-soak result is claimed for the current platform.
+Build and flash the intended example before attaching the runner. On Windows,
+use the repository PlatformIO wrapper, for example
+`.\scripts\pio.cmd run -e ex_bringup_s3`; build environments and platform pins
+are defined in [platformio.ini](../platformio.ini). Close other serial monitors
+so the runner owns the port.
 
-## Default Safe Run
+Live serial tools require `pyserial` in the active Python environment. Dry
+runs and parser tests use the Python standard library.
 
 ```powershell
+python -m pip install pyserial
 python tools/ee871_hil_runner.py --port COM7 --output-dir hil_logs
 ```
 
-Common serial arguments:
-
-- `--port` serial port, for example `COM7` or `/dev/ttyUSB0`.
-- `--baud` defaults to `115200`.
-- `--timeout` defaults to `8` seconds for initial serial drain.
-- `--command-timeout` defaults to `20` seconds for ordinary commands.
-- `--idle` defaults to `0.35` seconds after a complete CLI prompt, allowing
-  native USB CDC output to settle before the next command.
-- `--output-dir` defaults to `hil_logs`.
-- `--address` / `--device-address` records expected E2 address metadata only.
-- `--dry-run` writes artifacts without opening serial.
-
-The default safe sequence is:
+The default sequence is:
 
 ```text
 version
@@ -67,237 +43,162 @@ drv
 dirty
 ```
 
-This sequence avoids persistent configuration writes. `probe` is diagnostic-only
-by driver contract, while `read`, `selftest`, and `stress` are tracked operations
-and can update driver health counters. `dirty` must remain clean for a normal
-safe run.
+`probe` is health-neutral. `read`, `selftest`, and `stress` contain tracked E2
+operations and can change health counters. A normal safe run requires clean
+persistent state.
 
-Live command completion requires the CLI prompt and, for value reads, the
-command-specific value line. If command framing times out, the runner stops the
-remaining plan so later commands cannot be credited with shifted responses.
-The serial port is opened with DTR and RTS already deasserted so attaching the
-runner does not intentionally reset native-USB ESP32 targets.
+| Argument | Purpose / default |
+|---|---|
+| `--port` | Serial port, such as `COM7` or `/dev/ttyUSB0`. |
+| `--baud` | 115200. |
+| `--timeout` | Initial CLI synchronization timeout, 8 s. |
+| `--command-timeout` | Ordinary command timeout, 20 s; long built-in commands have their own bounds. |
+| `--idle` | Settle time after a complete prompt, 0.35 s. |
+| `--output-dir` | Parent artifact directory, `hil_logs`. |
+| `--address` / `--device-address` | Expected E2 address metadata; does not retarget the firmware. |
+| `--board`, `--target-name`, `--operator` | Bench metadata. |
+| `--dry-run` | Writes the planned artifacts without opening serial; verdict is INCOMPLETE. |
 
-Each live attachment begins with `\ndirty\n`. A blank line alone is not a
-valid handshake because the bounded CLI line reader intentionally ignores
-empty lines and emits no prompt for them. The leading newline terminates any
-partial command left by an interrupted host session; `dirty` then guarantees a
-known response without E2 traffic. Synchronization accepts a prompt only after
-the `persistentConfigDirty` marker, so a queued boot prompt cannot shift the
-first real command response.
+Each attachment opens the port with DTR/RTS deasserted and synchronizes using
+`\ndirty\n`, which terminates any partial command and requests a response
+without E2 traffic. The runner requires the `persistentConfigDirty` marker
+before accepting a prompt. Successful value reads must include their value
+line; a fully parsed error takes precedence over a missing success value.
+A framing timeout stops the remaining plan to prevent shifted responses.
 
-Live serial runs require `pyserial`; install it in the active Python
-environment:
-
-```powershell
-python -m pip install pyserial
-```
-
-Dry-run and parser tests use only the Python standard library.
-
-## Extended Safe Plan
-
-Append extended safe operations:
+## Extended and Niche Plans
 
 ```powershell
-python tools/ee871_hil_runner.py --port COM7 --include-extended
+python tools/ee871_hil_runner.py --port COM7 --include-extended --include-niche
 ```
 
-`--extended-safe` is accepted as an alias for `--include-extended`.
+`--include-extended` (alias `--extended-safe`) adds `stress 500`, repeated reads,
+probe/read/selftest cycles, and recovery/health/dirty checks. Use
+`--read-loop-count N` and `--cycle-loop-count N` to control repetition.
 
-Extended options:
+`--include-niche` adds identity/configuration reads, parameter guards,
+GPIO/E2 diagnostics, trace/sniffer checks, and `stress_mix 500`. Guard commands
+fail before writing. Neither plan writes calibration, address, interval,
+filter, factor, part name, or operating mode. Timing points below the supported
+100 us half-cycle minimum are characterization only.
 
-- `--read-loop-count N` controls repeated safe `read` commands.
-- `--cycle-loop-count N` controls repeated `probe` / `read` / `selftest` cycles.
-
-The extended plan also includes a bounded `stress 500`, `recover`, `drv`, and
-`dirty`. These commands still avoid persistent writes.
-
-## Niche Safe Plan
-
-Append the fixed identity, guard, GPIO/E2 diagnostic, trace/sniffer, and mixed
-stress plan:
-
-```powershell
-python tools/ee871_hil_runner.py --port COM20 --include-niche
-```
-
-This plan reads identity, firmware, capabilities, serial, part name, address,
-interval, factor, filter, and operating mode; checks out-of-range address,
-interval, and mode requests; runs idle-level, clock, address-scan, timing,
-library-command, and full diagnostics; verifies the fixed trace buffer has no
-drops; exercises the protocol sniffer; and finishes with
-`stress_mix 500`, READY health, and clean persistent state.
-
-The selected guard commands fail before a persistent write. The niche plan
-does not write calibration, address, interval, filter, factor, part name, or
-operating mode. Timing points below the documented 100 us half-cycle minimum
-are explicitly reported as characterization, not supported settings.
-
-## Serial-Only Framing Discriminator
+## Serial Framing Discriminator
 
 `tools/ee871_serial_discriminator.py` repeats the state-only `dirty` command
-without E2 traffic, verifies the exact runtime framework versions, and writes
-only compact aggregate evidence:
+without E2 traffic. It checks clean responses and records response-length and
+SHA-256 histograms, isolating CLI/native-USB framing from sensor transport.
 
 ```powershell
-python tools/ee871_serial_discriminator.py --port COM20 `
-  --count 10000 `
-  --run-dir hil_logs/serial_discriminator_10000 `
-  --expected-arduino-version 3.3.11 `
-  --expected-idf-version v5.5.5 `
-  --expected-library-version 1.0.1
+python tools/ee871_serial_discriminator.py --port COM7 `
+  --count 10000 --run-dir hil_logs/serial_discriminator_10000 `
+  --expected-library-version 1.1.0
 ```
 
-It requires every round trip to parse as clean and records response-length and
-SHA-256 histograms. This isolates native-USB/CLI framing; it is not sensor
-transport or long-soak evidence.
+Set `--expected-library-version`, `--expected-arduino-version`, and
+`--expected-idf-version` to the versions actually flashed when exact version
+checks are required. This run does not qualify E2 signaling or sensor behavior.
 
-## Read-Only Soak And Scheduled-NACK Retry
+## Soak and Scheduled NACK Policy
 
-`tools/ee871_soak_runner.py` runs a checkpointed, non-persistent soak with
-scheduled MV3/MV4/status samples, health/dirty checks, and periodic
-`stress_mix` blocks:
+`tools/ee871_soak_runner.py` runs a non-persistent soak with scheduled
+MV3/MV4/status reads, health/dirty checks, and periodic `stress_mix` blocks:
 
 ```powershell
-python tools/ee871_soak_runner.py --port COM20 `
-  --duration-hours 8 `
-  --board ESP32-S3-PSRAM `
-  --target-name ex_bringup_s3
+python tools/ee871_soak_runner.py --port COM7 `
+  --duration-hours 8 --board ESP32-S3-PSRAM --target-name ex_bringup_s3
 ```
 
-The bench EE871 returned complete control-byte NACK replies on a small number
-of scheduled MV3 reads. Their phase clustering is consistent with an internal
-sensor activity window, but a NACK does not expose its sensor-internal cause.
-The generic E2 operating-mode specification allows measurement-priority NACKs,
-while the EE871 application note lists EE871 as an exception that can process
-enquiries while measuring. The core therefore returns the NACK without retry
-or diagnosis; retry cadence belongs to the application.
+Defaults are one sample cycle per 60 s and `stress_mix 500` every 30 minutes.
+Use `--sample-interval-seconds`, `--stress-period-minutes`, and `--stress-count`
+to change these. Status reads can trigger another measurement only when the
+global interval is >15 s and the previous measurement is >10 s old.
 
-The soak harness applies a narrower policy:
+The harness has a separate, narrowly scoped retry policy:
 
-- Only a scheduled `co2fast` or `co2avg` sample is eligible.
-- The first result must be a parsed `NACK` with the `Control byte NACK`
-  diagnostic.
-- The command is retried at most once after
-  `--scheduled-nack-retry-ms`; the default is 1,500 ms and zero disables it.
-- Both the original attempt and retry remain in the transcript.
-- A successful retry records `SCHEDULED_CONTROL_NACK_RECOVERED`; a failed retry
-  remains a hard failure.
-- Preflight, status, health, dirty, maintenance, and `stress_mix` operations
-  are never covered by this exception.
+- Only scheduled `co2fast` or `co2avg` commands are eligible.
+- The first result must be a complete parsed `NACK` with the `Control byte NACK`
+  diagnostic. A NACK alone does not identify its sensor-internal cause.
+- One extra command is allowed after `--scheduled-nack-retry-ms` (default
+  1500 ms; zero disables it). Both attempts stay in the transcript.
+- A successful retry records `SCHEDULED_CONTROL_NACK_RECOVERED`; failure
+  remains a hard failure. Preflight, status, health, dirty, maintenance,
+  `stress_mix`, and serial framing failures are outside this exception.
 
-While a run is active, `checkpoint.json` is atomically replaced after every
-record. On normal finalization, `summary.json` receives the same final payload
-and the now-redundant checkpoint is removed.
+The driver also supports opt-in `Config::readNackRetries`: 0..3 additional
+MV3/MV4/status frame attempts after a control-byte NACK, clean STOP/idle checks,
+and a fixed 1 ms HAL pause. Its optional application guard can veto retries.
+The driver counts each final frame result once in health and retains separate
+NACK/retry diagnostics; see the
+[protocol retry contract](EE871_E2_Protocol_and_Register_Map.md#134-bounded-read-retries-and-health).
+Default example configurations leave driver retries disabled.
 
-This bounded harness policy does not alter the driver's per-attempt health
-accounting; the original attempt and retry are tracked normally. It must not be
-described as a core-library retry, and it does not turn a serial framing
-timeout, another NACK context, or an exhausted retry into PASS.
+Record both policies with the firmware configuration when reporting results.
+A harness retry sends another full CLI command and is tracked normally; a
+recovered harness result does not demonstrate an internal driver retry. To
+isolate driver retry behavior, disable the harness policy with
+`--scheduled-nack-retry-ms 0` and capture the driver diagnostics in the target
+application.
 
-## Persistent Writes
+The soak atomically replaces `checkpoint.json` after every record. Normal
+finalization writes `summary.json` and removes the redundant checkpoint.
 
-Persistent writes are disabled by default. They require both the persistent plan
-flag and an explicit confirmation flag:
+## Persistent Maintenance
+
+Persistent plans require explicit flags and a live confirmation:
 
 ```powershell
 python tools/ee871_hil_runner.py --port COM7 `
-  --include-persistent-writes `
-  --confirm-persistent-writes
+  --include-persistent-writes --confirm-persistent-writes
 ```
 
-For scripted wrappers, `--confirm-persistent-writes` may also be passed the exact
-text `I UNDERSTAND EE871 PERSISTENT WRITES`. For live serial runs, the runner
-also prompts for:
+The live prompt requires `RUN EE871 PERSISTENT WRITES`.
+`--confirm-persistent-writes` also accepts the exact argument
+`I UNDERSTAND EE871 PERSISTENT WRITES` for scripted wrappers; this does not
+bypass the live prompt.
 
-```text
-RUN EE871 PERSISTENT WRITES
-```
+| Option | Persistent change |
+|---|---|
+| `--maintenance-interval <150..36000>` | Interval in deciseconds; omitted means read and rewrite the current value. |
+| `--write-co2-offset <-32768..32767>` | CO2 offset. |
+| `--write-co2-gain <0..65535>` | CO2 gain. |
 
-Persistent-write options:
+Use a bench sensor with recorded original settings. The plan checks `dirty`
+and `resync` around writes and blocks maintenance writes when clean state has
+not been established.
 
-- `--maintenance-interval <150..36000>` writes the measurement interval in
-  deciseconds. If omitted, the plan reads and rewrites the parsed current value.
-- `--write-co2-offset <-32768..32767>` writes persistent CO2 offset.
-- `--write-co2-gain <0..65535>` writes persistent CO2 gain.
+## Operator Fault Steps
 
-Only run these on a bench sensor where configuration changes are acceptable and
-original values have been recorded. The plan records `dirty` and `resync` output
-around persistent operations.
+`--include-unplug-replug`, `--include-stuck-line`, and `--include-power-cycle`
+insert operator prompts. At each prompt, enter `done` after applying/restoring
+the requested fault, `skip` to skip, or `abort` to stop. The tools do not induce
+faults themselves. Operator steps require review unless a detected failure
+takes precedence.
 
-## Operator Fault Prompts
+## Artifacts and Verdicts
 
-Operator fault flags insert prompt steps and therefore require human review:
+Each HIL invocation creates a timestamped directory containing:
 
-```powershell
-python tools/ee871_hil_runner.py --port COM7 --include-unplug-replug
-python tools/ee871_hil_runner.py --port COM7 --include-stuck-line
-python tools/ee871_hil_runner.py --port COM7 --include-power-cycle
-```
+- `serial_transcript.txt`: serial responses and command results.
+- `summary.json`: metadata, parsed state, counts, verdict, and compact command
+  ledger; abnormal rows retain bounded excerpts.
+- `summary.md`: readable summary and artifact index.
 
-At each prompt, type:
+Record the exact firmware/library commits, retry settings, board, sensor
+serial/part, wiring, supply, pull-ups, level shifter, and conditions with the
+artifacts. Retain concise evidence that supports the validation matrix; raw
+serial is particularly useful for unique NACK, timeout, truncation, corruption,
+or timing failures. Keep build binaries and redundant successful transcripts
+out of maintained documentation.
 
-- `done` after applying or restoring the requested fault.
-- `skip` to mark the step skipped.
-- `abort` to stop the run.
+| Verdict | Meaning | Exit code |
+|---|---|---:|
+| PASS | Every selected automated command met parser expectations. | 0 |
+| FAIL | Timeout or detected status, selftest, stress, health, or dirty-state failure. | 1 |
+| OPERATOR_REVIEW_REQUIRED | Operator evidence needed or expected token missing. | 2 |
+| INCOMPLETE | Dry run, skipped steps, no results, or remaining incomplete outcomes. | 3 |
 
-Fault prompts do not induce hardware faults by themselves. The resulting verdict
-is `OPERATOR_REVIEW_REQUIRED` unless a parser-detected failure takes precedence.
-
-## Artifacts
-
-Each invocation creates a timestamped directory under `--output-dir`, for
-example `hil_logs/ee871_20260601T094218Z/`, containing:
-
-- `serial_transcript.txt` - raw serial transcript plus per-command result lines.
-- `summary.json` - metadata, parsed state, result counts, final verdict, and a
-  compact command ledger. Ordinary PASS payloads are omitted; abnormal rows
-  retain a bounded response excerpt.
-- `summary.md` - operator-friendly summary and artifact index.
-
-The JSON and markdown summaries include the claim boundary. Record board model,
-target firmware, sensor serial/part, wiring, supply, pull-ups, level shifter,
-ambient conditions, and operator notes alongside these artifacts when converting
-a run into a formal validation record.
-
-Keep failed or review-required runs only when they are useful evidence. For a
-formal PASS record, retain `summary.md` plus compact `summary.json` when
-machine-readable rows add value. The raw transcript may be removed after
-checking that the summaries contain the full command ledger and final state.
-Retain raw serial for unique negative evidence such as truncation, timeout,
-NACK, protocol corruption, or timing evolution. Do not commit binary monitor
-captures or firmware build artifacts.
-
-## Verdicts
-
-- `PASS` - every selected automated command passed parser expectations.
-- `FAIL` - a command timed out or a parser detected a failure such as non-OK
-  status, selftest failures, stress errors, offline health, or dirty persistent
-  state where clean state was required.
-- `OPERATOR_REVIEW_REQUIRED` - operator evidence is required or an expected token
-  was missing even though serial output was captured.
-- `INCOMPLETE` - dry run, skipped steps, no results, or mixed non-pass outcomes
-  that did not produce a hard failure.
-
-The process exits `0` only for `PASS`; `FAIL` exits `1`,
-`OPERATOR_REVIEW_REQUIRED` exits `2`, and `INCOMPLETE` exits `3`.
-
-## Parser Tests
-
-Host-only parser tests live under `test/` and cover:
-
-- ANSI-colored `selftest` output.
-- `stress` and `stress_mix` summaries.
-- `drv` health output.
-- `dirty` persistent-configuration output.
-- Dirty/stress validator failures.
-- Fully terminated prompt framing, including split prompt/newline chunks.
-- Parsed non-OK status taking precedence over a missing success-value token.
-- The soak harness's narrowly scoped scheduled control-byte NACK retry result.
-- Exact persistent-write confirmation parsing.
-
-Run them with:
+Host parser tests cover status precedence, split prompt framing, health/dirty
+and stress parsing, scheduled control-NACK policy, and persistent confirmation:
 
 ```powershell
 python -m unittest discover -s test -p "*hil_runner_parser.py"

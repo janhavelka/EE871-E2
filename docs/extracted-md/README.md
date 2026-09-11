@@ -1,6 +1,6 @@
 # Curated Extracted Notes
 
-Last updated: 2026-06-02
+Last updated: 2026-09-11
 
 This directory contains compact notes distilled from the vendor PDFs and from
 the curated protocol reference. These files are for quick review and search, not

@@ -1,195 +1,51 @@
-# EE871-E2 ESP-IDF v6.0.1 Port Guide
+# ESP-IDF integration guide
 
-Last audited: 2026-07-31
+The library is a C++17 ESP-IDF component for ESP32-S2 and ESP32-S3. The
+[component manifest](../idf_component.yml) requires ESP-IDF 6.0.1 or later;
+[CI](../.github/workflows/ci.yml) builds the native diagnostic example for both
+targets using ESP-IDF 6.0.1. Build and hardware results belong in the
+[validation matrix](EE871_E2_HARDWARE_VALIDATION_MATRIX.md); support metadata and
+a configured CI job do not establish hardware qualification for an application.
 
-Scope: first-class ESP-IDF support while keeping the Arduino/PlatformIO example
-and public driver core usable. The framework-neutral driver core is shared; the
-Arduino and ESP-IDF applications provide their own E2 GPIO adapters and CLIs.
+## Component and application boundary
 
-Official ESP-IDF references used for the port guidance, verified on
-2026-05-17 when the stable docs identify as v6.0.1:
-- GPIO: https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/peripherals/gpio.html
-- High resolution timer: https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/esp_timer.html
-- Build system: https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-guides/build-system.html
-- ESP-IDF 6.0 migration guide: https://docs.espressif.com/projects/esp-idf/en/stable/esp32/migration-guides/release-6.x/6.0/index.html
+The root [CMakeLists.txt](../CMakeLists.txt) registers `src/EE871.cpp` and the
+public `include/` directory and requires C++17. The core has no Arduino or
+ESP-IDF dependencies. It implements E2 framing, PEC validation, bounded timing,
+identity and feature checks, persistent-write verification, and driver health.
 
-## Current State
+An application supplies open-drain GPIO callbacks through `EE871::Config`.
+The driver never configures pins, pull-ups, peripheral handles, tasks, or locks.
+EE871 E2 uses GPIO-style signaling; it cannot use the hardware I2C peripheral.
 
-- Core library files are `include/EE871/*.h` and `src/EE871.cpp`.
-- The reusable driver is already transport-callback based. `EE871::Config`
-  accepts `setScl`, `setSda`, `readScl`, `readSda`, `delayUs`, and `busUser`.
-- The core does not include `Arduino.h`, `Wire.h`, ESP-IDF headers, or own GPIO
-  pins. It performs bit-banged E2 bus transactions through callbacks.
-- Public lifecycle is `begin(const Config&)`, `tick(uint32_t nowMs)`, `end()`,
-  `probe()`, and `recover()`.
-- The current implementation is still managed synchronous: public E2 reads and
-  writes block inside bounded callback-driven operations.
-- Timing is callback owned. The driver validates E2 timing fields and caps flash
-  write delays with `WRITE_DELAY_MAX_MS`.
-- Arduino dependencies are isolated in examples:
-  - `examples/common/E2Transport.h` uses `pinMode`, `digitalWrite`,
-    `digitalRead`, and `delayMicroseconds`.
-  - `examples/01_basic_bringup_cli/main.cpp` and `examples/common/*.h` use
-    `Serial`, `String`, `millis()`, and Arduino command helpers.
-- Native tests compile the framework-neutral core directly and require no
-  Arduino or Wire stubs.
-- `library.json` advertises Arduino and ESP-IDF framework support.
-- `platformio.ini` owns Arduino example and native-test builds; ESP-IDF builds
-  use the root `CMakeLists.txt`, `idf_component.yml`, and the
-  `examples/idf/basic_bringup` CMake project.
-- `.github/workflows/ci.yml` includes an `idf-build` matrix job for `esp32s3`
-  and `esp32s2` and runs `tools/check_idf_example_contract.py` before the IDF
-  action build.
-- Local pure `idf.py` builds were not run because `idf.py` was unavailable.
-  The release-candidate GitHub Actions `idf-build` matrix passes for both
-  `esp32s3` and `esp32s2` on ESP-IDF v6.0.1.
+The supplied framework adapters remain example code:
 
-## ESP-IDF Readiness Verdict
+| File | Purpose |
+| --- | --- |
+| [examples/idf/common/E2GpioTransport.h](../examples/idf/common/E2GpioTransport.h) | Native ESP-IDF GPIO and microsecond delay callbacks. |
+| [examples/idf/basic_bringup/main/main.cpp](../examples/idf/basic_bringup/main/main.cpp) | Native `app_main` diagnostic CLI with fixed command buffers and `stdio`. |
+| [examples/common/E2Transport.h](../examples/common/E2Transport.h) | Arduino GPIO adapter used by the Arduino examples. |
 
-The core remains framework-neutral. ESP-IDF packaging, the GPIO E2 adapter,
-and an interactive native IDF bring-up CLI are present. The release-candidate
-CI matrix builds that example successfully for ESP32-S3 and ESP32-S2 using
-ESP-IDF v6.0.1.
+The IDF CLI maintains command parity with the Arduino CLI through the
+[IDF contract checker](../tools/check_idf_example_contract.py). Its implementation
+uses native IDF APIs and does not depend on Arduino compatibility wrappers.
 
-The driver should not be rewritten to call ESP-IDF GPIO or I2C APIs directly
-from the core. EE871 E2 is represented by bit-level open-drain callbacks in
-`Config`; IDF platform code lives in examples or application glue.
+## Build and flash the diagnostic example
 
-## Portability Qualification Boundaries
+Use an initialized ESP-IDF environment and run these commands from the
+repository root:
 
-1. ESP-IDF v6.0.1 warnings-as-errors:
-   - Keep unused parameters explicitly cast to void.
-   - Avoid signed/unsigned mismatches in adapters.
-   - Avoid implicit narrowing in GPIO numbers and timing conversions.
-2. Write-delay scheduling:
-   - Current public writes can block in bounded millisecond loops.
-   - Accept this explicitly for the first IDF port or convert write completion
-     into a `tick()`-driven state before claiming the driver is suitable for
-     high-priority tasks.
-3. Pure ESP-IDF build proof:
-   - Component metadata and the native IDF example are present.
-   - The GitHub Actions `esp32s3` and `esp32s2` matrix passes on ESP-IDF
-     v6.0.1.
-   - Local `idf.py` reproduction remains optional rather than a release gate.
-4. Hardware validation:
-   - Recorded bench evidence is maintained in
-     `docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md`.
-
-## Relevant Files
-
-Core files to keep framework-neutral:
-- `include/EE871/Config.h`
-- `include/EE871/EE871.h`
-- `include/EE871/Status.h`
-- `include/EE871/CommandTable.h`
-- `src/EE871.cpp`
-
-ESP-IDF support files:
-- `CMakeLists.txt`
-- `idf_component.yml` optional but recommended
-- `examples/idf/basic_bringup/CMakeLists.txt`
-- `examples/idf/basic_bringup/main/CMakeLists.txt`
-- `examples/idf/basic_bringup/main/main.cpp`
-- `examples/idf/common/E2GpioTransport.h` or component-local
-  `examples/idf/basic_bringup/main/E2GpioTransport.h`
-
-Files that should remain Arduino-only:
-- `examples/01_basic_bringup_cli/main.cpp`
-- `examples/common/E2Transport.h`
-- `examples/common/Log.h`
-- `examples/common/CliShell.h`
-- `examples/common/E2Diagnostics.h`
-
-## Recommended Architecture
-
-Keep one core driver and two framework adapters:
-
-```text
-include/EE871/*.h + src/EE871.cpp
-  framework-neutral, callback-driven E2 protocol and health state
-
-examples/common/E2Transport.h
-  Arduino GPIO adapter for existing examples
-
-examples/idf/common/E2GpioTransport.h
-  ESP-IDF GPIO adapter for IDF examples
+```sh
+idf.py -C examples/idf/basic_bringup set-target esp32s3 build
+idf.py -C examples/idf/basic_bringup flash monitor
 ```
 
-The IDF adapter should own only application glue:
-- GPIO initialization.
-- Open-drain SCL/SDA drive/release.
-- Line reads.
-- Microsecond delay.
-- Optional mutex when multiple tasks can call the driver.
+For ESP32-S2, replace `esp32s3` with `esp32s2` in the first command. Select the
+serial port with `-p PORT` when necessary. Changing targets reconfigures the
+example build; retain any application-specific configuration before doing so.
 
-The library core should continue to own:
-- E2 command sequencing.
-- Bounded clock-stretch waits.
-- PEC calculation and validation.
-- Feature-cache and health tracking.
-- Validation of timing and device address.
-
-## IDF Transport Adapter Contract
-
-Suggested adapter state:
-
-```cpp
-struct Ee871IdfBus {
-  gpio_num_t scl;
-  gpio_num_t sda;
-};
-```
-
-Suggested callback behavior:
-
-```cpp
-static void set_scl(bool level, void* user);
-static void set_sda(bool level, void* user);
-static bool read_scl(void* user);
-static bool read_sda(void* user);
-static void delay_us(uint32_t us, void* user);
-```
-
-Implementation notes:
-- Configure SCL/SDA as open-drain GPIO with pull-ups disabled unless the board
-  intentionally uses internal weak pull-ups for bench testing.
-- Driving low: set output level 0.
-- Releasing high: set output level 1 on open-drain output.
-- Reads: call `gpio_get_level()` and return true for high.
-- Delays: use `esp_rom_delay_us()` for sub-millisecond bit timing. For
-  multi-millisecond write delays, the current core calls `delayUs(1000)` in a
-  loop; the IDF callback may still use `esp_rom_delay_us(1000)`, but a later
-  nonblocking write-delay state machine would be better if field usage exposes
-  watchdog pressure.
-- If the adapter is shared across tasks, wrap public driver calls with an
-  application mutex. Do not put a mutex inside the core unless the API contract
-  is explicitly changed.
-
-Status mapping:
-- Callback layer has no `esp_err_t` return path today. GPIO configuration errors
-  should be caught before `begin()` and reported by the example before calling
-  the driver.
-- If future callbacks gain status returns, map invalid GPIO config to
-  `INVALID_CONFIG`, stuck lines to `BUS_STUCK`, and timeout-like waits to
-  `TIMEOUT`.
-
-## Component Layout
-
-Minimal root `CMakeLists.txt`:
-
-```cmake
-idf_component_register(
-  SRCS "src/EE871.cpp"
-  INCLUDE_DIRS "include"
-  REQUIRES
-)
-
-target_compile_features(${COMPONENT_LIB} PUBLIC cxx_std_17)
-```
-
-The core component itself should not require `esp_driver_gpio` because it does
-not include ESP-IDF headers. IDF examples that include the GPIO adapter should
-declare:
+The example project locates the library through
+`EXTRA_COMPONENT_DIRS "../../.."`. Its main component declares:
 
 ```cmake
 idf_component_register(
@@ -197,108 +53,101 @@ idf_component_register(
   INCLUDE_DIRS "." "../../common"
   REQUIRES "EE871-E2" esp_driver_gpio esp_rom esp_timer freertos
 )
+
+target_compile_features(${COMPONENT_LIB} PUBLIC cxx_std_17)
 ```
 
-If the IDF adapter is promoted into the component rather than example code,
-place it in a separate optional source file and add `PRIV_REQUIRES
-esp_driver_gpio esp_rom esp_timer`.
+Keep the checkout directory named `EE871-E2`, or update the `REQUIRES` entry to
+match its component name. When integrating into another IDF project, add the
+library directory to that project's `EXTRA_COMPONENT_DIRS` or place it under
+`components/`. Declare GPIO, ROM delay, timer, and FreeRTOS dependencies in the
+application component that uses them; the core component needs none of those
+framework dependencies.
 
-## ESP-IDF Example Behavior
+See the [example README](../examples/idf/basic_bringup/README.md) for wiring and
+CLI behavior.
 
-`examples/idf/basic_bringup` provides a diagnostic/basic bring-up interactive
-serial CLI equivalent to `examples/01_basic_bringup_cli`. It owns the E2 GPIO
-lines for demonstration; production applications should integrate the callbacks
-into their own GPIO or bus manager and externally serialize access if multiple
-tasks can touch the same `EE871` instance or E2 lines. EE871-E2 uses GPIO-style
-E2 signaling, not ESP-IDF `driver/i2c_master` or hardware I2C.
+## GPIO adapter contract
 
-1. Configure target in code constants:
-   - SCL GPIO.
-   - SDA GPIO.
-   - E2 address 0-7.
-   - E2 timing fields using the same example defaults as Arduino.
-2. Initialize GPIO open-drain pins through `examples/idf/common/E2GpioTransport.h`.
-3. Build `EE871::Config` with IDF callbacks and `busUser`.
-4. Call `device.begin(cfg)` and keep the CLI available even when the device is
-   absent, so diagnostics can still run.
-5. Call `device.tick(esp_timer_get_time() / 1000ULL)` in the command loop.
-6. Provide the same help sections, command names and aliases, colors, prompt,
-   status formatting, diagnostics, health/error reporting, probe/recover/reset,
-   self-test/stress workflows, capabilities, and register/raw access as the
-   Arduino CLI.
+The supplied adapter uses `ee871_idf::E2GpioBus` to retain the two GPIO numbers.
+Call `ee871_idf::init()` and check its `esp_err_t` result before calling
+`device.begin()`. `ee871_idf::makeConfig(bus, address)` creates a configuration
+with the adapter callbacks; the diagnostic CLI instead wraps them for tracing.
+Keep the bus context alive throughout the driver session.
 
-Keep the example deterministic:
-- No infinite retry loops.
-- Use bounded command attempts.
-- Avoid heap-backed command parsing in first IDF example.
+- Configure both lines as `GPIO_MODE_INPUT_OUTPUT_OD`. The input buffer must
+  stay enabled so `gpio_get_level()` can observe idle levels and clock stretching.
+- A callback level of `false` pulls the line low; `true` releases it for the
+  external pull-up. Read callbacks return the physical line level.
+- Use `esp_rom_delay_us()` for the supplied `delayUs` callback. It also handles
+  the core's repeated 1 ms write-wait and optional retry pauses.
+- External pull-ups are required for the documented electrical interface.
+  `init()` disables internal pull-ups by default; its optional
+  `enableInternalPullups` argument is for bench use.
+- Callbacks are bounded and must not recursively call the driver. GPIO setup
+  failures are reported before `begin()`; the line callbacks themselves have no
+  `esp_err_t` return channel.
 
-## Arduino Compatibility Plan
+Use a bidirectional open-drain level shifter between 3.3 V ESP32 GPIOs and the
+sensor-side E2 bus. The sensor-side pull-ups are 4.7 kOhm to 100 kOhm, with bus
+high at 3.6-5.2 V (recommended 4.5-5.0 V). Keep cable length within the 10 m
+guideline. Consult the [protocol reference](EE871_E2_Protocol_and_Register_Map.md) and
+retained vendor documentation for the full electrical requirements.
 
-- Do not remove the existing Arduino example.
-- Keep `examples/common/E2Transport.h` as the Arduino GPIO adapter.
-- Do not add ESP-IDF includes to public headers.
-- If adding helper adapter headers, keep framework-specific names explicit:
-  `E2TransportArduino.h` and `E2TransportIdf.h`.
-- Keep native tests using stubs, but add an IDF compile test separately.
+## Timing, ownership, and recovery
 
-## Test And Validation Plan
+Public bus operations are synchronous, bounded, and task-context only.
+Use one owner task or externally serialize every driver operation and all
+other users of the physical E2 lines. The adapter does not provide a mutex.
+Persistent writes can occupy the caller through flash stretching, commit waits,
+and verification; include that duration in application scheduling and watchdog
+budgets.
 
-Host/native:
-- `python -m platformio test -e native`
-- Keep native tests for validation order, status helpers, and unsupported
-  command prevalidation.
+The diagnostic example uses 100 us clock-low/high times, a 25 ms per-bit
+stretch limit, a 35 ms byte deadline, a 150 ms custom-write wait, and a 300 ms
+interval-pair wait. It inherits `Config::flashStretchTimeoutUs = 350000` for
+flash-write STOP and explicit bus reset. Ordinary reads and volatile custom-read
+pointer writes use `bitTimeoutUs` for STOP. The flash allowance does not extend
+ordinary bit or byte transfer limits.
 
-Arduino:
-- `python -m platformio run -e ex_bringup_s3`
-- `python -m platformio run -e ex_bringup_s2`
+`readNackRetries` defaults to zero, including in this example. An application
+may explicitly allow up to three additional MV3/MV4/status attempts after a
+control-byte NACK, successful STOP, idle-line checks, and a fixed 1 ms HAL pause.
+Identity reads, custom reads, writes, PEC failures, and timeouts are never
+retried. The optional `allowReadRetry` callback can veto attempts for a deadline,
+cancellation, or a latched adapter error. See
+[Config.h](../include/EE871/Config.h) for the callback contract.
 
-ESP-IDF:
-- `idf.py -C examples/idf/basic_bringup set-target esp32s3 build`
-- `idf.py -C examples/idf/basic_bringup set-target esp32s2 build`
-- If local `idf.py` is unavailable, record the latest GitHub Actions
-  `idf-build` matrix result instead.
-- Hardware smoke:
-  - Bus idle SCL/SDA high before begin.
-  - `begin()` succeeds against a known EE871 device.
-  - `probe()` succeeds without changing health counters.
-  - Deliberate missing-device test returns a non-OK `Status` and does not hang.
+The CLI calls `device.tick(nowMs())` using `esp_timer_get_time()` and yields
+between command-loop iterations with `vTaskDelay()`. The application owns
+sampling cadence, warm-up and freshness policy, and explicit recovery. An
+OFFLINE session stays latched until `recover()` succeeds; ordinary bus
+operations return the latched error. `probe()` is health-neutral diagnostics.
+Status reads can trigger a measurement under the sensor's documented timing
+conditions, so account for that side effect in a sampling design.
 
-Static checks:
-- Build with default ESP-IDF v6.0.1 warnings-as-errors.
-- Search core for accidental framework use:
-  - `Arduino.h`
-  - `Serial`
-  - `String`
-  - `Wire`
-  - `gpio_`
-  - `esp_`
+## Verification
 
-## ESP-IDF v6.0.1 Hazards
+Run the framework and CLI checks from the repository root:
 
-- Deprecated legacy peripheral APIs have been removed in ESP-IDF 6. Use current
-  GPIO APIs and avoid legacy RMT/timer APIs in examples.
-- Default compiler warnings are treated as errors. Write adapter code with clean
-  casts and no unused parameters.
-- Do not use `ets_delay_us()` directly in new code; prefer the supported ROM
-  delay include used by current IDF examples if microsecond busy waits are
-  unavoidable.
-- IDF logging format checks are stricter than Arduino `Serial.printf`; cast
-  `uint32_t`/`size_t` values deliberately.
-- GPIO open-drain behavior depends on external pull-ups. Document board-level
-  pull-up requirements in the IDF example README.
-- Long synchronous flash-write waits can still block the caller. The current
-  design allows it, but do not call write-heavy operations from high-priority
-  timing tasks.
+```sh
+python tools/check_core_timing_guard.py
+python tools/check_cli_contract.py
+python tools/check_idf_example_contract.py
+```
 
-## Ordered Validation Checklist
+On Windows, use the repository's VS Code-managed PlatformIO wrapper for host
+tests and Arduino builds:
 
-1. Run `python tools/check_core_timing_guard.py`.
-2. Run `python tools/check_cli_contract.py`.
-3. Run `python tools/check_idf_example_contract.py`.
-4. Run `python -m platformio test -e native`.
-5. Run `python -m platformio run -e ex_bringup_s3`.
-6. Run `python -m platformio run -e ex_bringup_s2`.
-7. Build the IDF example for ESP32-S3 and ESP32-S2 with `idf.py` when ESP-IDF
-   is available, or record the passing GitHub Actions `idf-build` matrix.
-8. Hardware-test `begin()`, `probe()`, status read, CO2 reads, bus diagnostics,
-   self-test/stress workflows, missing-device timeout, and stuck-bus recovery.
+```powershell
+.\scripts\pio.cmd test -e native
+.\scripts\pio.cmd run -e ex_bringup_s3
+.\scripts\pio.cmd run -e ex_bringup_s2
+```
+
+Native IDF builds use the `idf.py` commands above or the CI matrix. Record the
+commit and actual target results when qualifying a candidate. Arduino hardware
+evidence does not establish that the native IDF adapter was hardware-tested.
+The [validation matrix](EE871_E2_HARDWARE_VALIDATION_MATRIX.md) records completed
+scenarios and the remaining gaps; the [HIL guide](EE871_E2_HIL_RUNNER.md) describes
+repeatable diagnostic capture.

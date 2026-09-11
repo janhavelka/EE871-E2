@@ -222,7 +222,6 @@ def main() -> int:
         ROOT / "README.md",
         ROOT / "CHANGELOG.md",
         ROOT / "docs" / "IDF_PORT.md",
-        ROOT / "docs" / "IDF_PORT_IMPLEMENTATION.md",
         ROOT / "examples" / "idf" / "basic_bringup" / "README.md",
     ]
     for path in docs_to_scan:

@@ -32,6 +32,26 @@ Source: E2 interface specification v4.1, pp. 5-7.
 
 - Measurement value 3 is fast-response CO2, unsigned 16-bit ppm, not averaged.
 - Measurement value 4 is the standard averaged CO2 value, unsigned 16-bit ppm, calculated from the last 11 measurements.
+- MV1 and MV2 are undefined for EE871 and unsupported by this driver.
+- Read the low byte before the high byte to capture the paired value. Each read verifies `PEC = (ControlByte + DataByte) & 0xFF`; acknowledge the data byte, then NACK the PEC and send STOP.
 - At 15 s measuring interval, AN1611-1 gives about tau90 = 60 s for value 3 and tau90 = 105 s for value 4.
 
 Sources: EE871 E2 CO2 interface AN1611-1, pp. 3, 9-10; E2 specification v4.1, pp. 7-11.
+
+## Driver Retry Contract
+
+`Config::readNackRetries` defaults to zero and permits 0..3 additional attempts
+only for MV3/MV4/status control-byte NACKs before data transfer. Every retry
+requires successful STOP, idle-line checks around a fixed 1 ms HAL pause, and
+approval from the optional bounded `allowReadRetry` application callback.
+Identity/custom reads, all writes, PEC mismatches, and timeouts are never
+retried. A high-byte retry preserves the low-byte latch.
+
+The final frame result updates health once. Separate saturating session
+diagnostics retain NACKs (including when retries are disabled), attempts,
+recovery/exhaustion, cleanup errors, and vetoes. Ordinary successes do not
+erase the latest NACK-bearing frame; `end()`/`begin()` reset diagnostics and
+`recover()` preserves them. A NACK alone does not establish its physical cause.
+
+Current implementation contract:
+[protocol reference, Section 13.4](../EE871_E2_Protocol_and_Register_Map.md#134-bounded-read-retries-and-health).

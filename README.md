@@ -17,103 +17,31 @@ examples, and HIL validation evidence.
 
 ## Release And Validation Status
 
-The current source/package version is `1.1.0`. See `CHANGELOG.md` for behavior
-changes and migration guidance. Recorded ESP32-S3/EE871 hardware results below
-predate the latched-OFFLINE, fail-closed startup, and rewritten-scanner changes;
-hardware/HIL re-validation of this version remains outstanding.
+Source/package version `1.1.0` is prepared for the next release; `v1.0.1`
+remains the published tag until the release branch is merged and tagged.
+[CHANGELOG.md](CHANGELOG.md) covers migration, stricter startup/recovery,
+ordinary STOP timing, and the opt-in control-NACK retries.
 
-Recorded evidence:
+Software verification on 2026-09-11 passed 71 native tests, 58 Python tests,
+the timing/CLI/IDF contracts, synchronized version metadata, and all three
+Arduino builds (ESP32-S3, ESP32-S2, and the older TunnelMonitor compatibility
+stack). Native ESP-IDF S2/S3 builds are separate CI jobs.
 
-- Native tests: 60 passing; Python tooling/contract/parser tests: 58 passing
-  (including compiled native checks of both scanner error-retention blocks).
-- The current example/HIL platform is exact-pinned to pioarduino
-  `platform-espressif32` `55.03.311`, Arduino-ESP32 `3.3.11`, and ESP-IDF
-  `5.5.5`. The earlier TunnelMonitor-node parity work on pioarduino
-  `54.03.20` / Arduino-ESP32 `3.2.0` remains recorded as historical evidence.
-- Current ESP32-S3 COM20 `55.03.311` HIL: 184/184 PASS from clean firmware
-  commit `3bce89e`, covering safe, extended, identity/capability, range guards,
-  GPIO/E2 diagnostics, trace/sniffer, repeated reads, and mixed stress. It
-  finished READY with 3,109 tracked successes, zero transport failures, clean
-  persistent state, `stress 500` at 500/500, and `stress_mix 500` at 500/500.
-  The self-test reported 26 PASS / 0 FAIL / 1 unsupported-mode SKIP.
-- Native-USB reattachment on the current COM20 stack is verified. The former
-  timeout was a host-tool framing bug: it sent only a blank line, while the CLI
-  intentionally ignores blank lines and therefore emitted no new prompt. The
-  shared explicit `\ndirty\n` synchronization passed 10,000/10,000 replies
-  from a new process immediately after the full HIL closed COM20,
-  100/100 separate process open/close/reopen sessions, and an immediate
-  184/184 full HIL rerun without a reset or physical replug.
-- The current COM20 target was detected as ESP32-S3 revision 0.2 with 4 MB
-  embedded flash and 2 MB embedded QSPI PSRAM; the S3 PlatformIO environment
-  configures that QSPI PSRAM explicitly. The prior `55.03.39` firmware reported
-  4,194,304 bytes flash and PSRAM ready with 2,097,152 bytes.
-- Prior ESP32-S3 COM20 targeted `55.03.39` HIL: 144/144 PASS, including final READY
-  state, zero transport failures, clean persistent state, and `stress 500`
-  at 500/500. The flashed library identified itself as `1.0.1`.
-- Prior ESP32-S3 COM20 serial-only discriminator on `55.03.39`: 10,000/10,000
-  `dirty` command round trips passed, and every reply was the same 201 bytes.
-  `dirty` does not touch the E2 bus, so this result qualifies CLI framing only.
-- Prior ESP32-S3 COM20 accelerated scheduled-read regression on `55.03.39`: PASS
-  over 108 sample cycles and 543.594 s, with 564 ordinary command passes, two
-  fully framed control-byte NACK attempts recovered by one harness retry after
-  1,500 ms, and zero hard failures, reviews, skips, reconnects, or counter
-  regressions. Final state was READY and persistent state was clean. This is a
-  targeted timing/policy regression, not a completed long soak.
-- Prior ESP32-S3 COM20 unsupported operating-mode guard: PASS. `mode` returned
-  `NOT_SUPPORTED`, did not decode the stale `0x55` memory value, and left
-  tracked transport counters unchanged at 3,908 successes / 2 failures.
-- Historical ESP32-S3 COM20 safe plus extended HIL on `54.03.20`: 33/33 PASS,
-  including `selftest`
-  27/27, repeated reads/recovery, `stress 50` 50/50, and `stress 500` 500/500.
-- Historical ESP32-S3 COM20 same-value persistent write/readback HIL: 25/25
-  PASS for interval `150 ds`, CO2 offset `0 ppm`, and CO2 gain `32768`; dirty
-  state remained clean.
-- Historical ESP32-S3 COM20 niche diagnostics: capability/range guards 11/11 PASS,
-  trace/sniffer/`stress_mix 500` 11/11 PASS, address 0 found by the full scan,
-  and all six in-spec timing points plus two out-of-spec characterization
-  points responded.
-- Historical `54.03.20` ESP32-S3 COM20 operator-assisted physical HIL:
-  absent-sensor boot, hot
-  unplug/OFFLINE/replug recovery, SDA stuck-low, SCL stuck-low timeout, and
-  a complete sensor/MCU power cycle with measurement-interval persistence all
-  PASS. The temporary measurement interval was restored from `160 ds` to its
-  `150 ds` baseline.
-- Historical `54.03.20` ESP32-S3 COM20 immediate warm-up HIL: PASS. Sampling
-  began 0.250 s after COM20 reappeared; MV3/MV4 were `0 ppm` with status `0x08`
-  through 4 s, then `678 ppm` with status `0x00` at 5 s. All 33 scheduled CLI
-  commands were framed correctly; final health was READY with 65 transport
-  successes, zero failures, clean persistent state, and interval `150 ds`. A
-  separate delayed-start attempt recorded one bounded fast-read `NACK` at
-  20.094 s and recovered immediately; it remains in the attempt ledger.
-- The historical `54.03.20` strict 10-minute post-power-cycle stability
-  capture recorded one bounded
-  `NACK` at t=330 s and therefore remains FAIL under its zero-error criterion;
-  the other 62 scheduled CLI commands succeeded. Manually normalized
-  interactive output from immediate `stress_mix 1000` and `stress 1000`
-  follow-ups recorded 1000/1000 for each, so the transient was not reproduced.
-- The historical eight-hour `54.03.20` soak is also a strict FAIL: 2,376
-  commands passed, 29 replies stalled mid-line in Arduino-ESP32 3.2.0 HWCDC,
-  and 11 scheduled MV3 reads received a real NACK on the `0xC1` control byte.
-  Those NACKs clustered at the same measurement phase; the mixed stress blocks
-  otherwise passed. The old runner labeled the 11 NACKs as review-required
-  because it checked for the success-value token before the parsed status.
-  They are retained as NACK failures, not reclassified as passes.
-- The HWCDC truncations match the upstream lost-wakeup defect fixed by
-  [Arduino-ESP32 PR #12606](https://github.com/espressif/arduino-esp32/pull/12606)
-  in 3.3.9. The 10,000-round-trip discriminator validates that targeted fix on
-  this bench, but it is not a replacement for a completed long soak.
-- ESP32-S3 safe default HIL: PASS on `COM17`.
-- ESP32-S3 extended safe HIL: PASS on `COM17`.
-- ESP32-S3 persistent measurement interval write/readback/restore: PASS on
-  `COM17`.
-- Historical COM17 physical unplug/replug recovery: PASS, operator-confirmed
-  manual test; no automated transcript is recorded for that historical run.
+Recorded CO2Control ESP32-S3 hardware testing used the exact library commit
+`a358f92`: a ten-minute stress run completed 562 successful owner operations;
+a thirty-minute normal-acquisition run completed 120 successful readings,
+including one real control-byte NACK recovered by its first retry without a
+sensor fault or qualification loss. The subsequent five-minute sensor checks
+also passed, but the overall follow-up harness verdict remains incomplete
+because Web-session cleanup returned HTTP 403.
 
-The compact HIL evidence ledger in `hil_results/README.md` identifies the exact
-firmware/build metadata. Results from different platform stacks are not
-combined into one platform claim. The new
-`55.03.311` pin has passed S2/S3 builds and the post-commit COM20 run above.
-No completed long-soak result is currently claimed for this pin.
+These observations establish one hardware retry recovery. They do not establish
+a long-term fault rate or the physical cause of the NACK. Retry exhaustion and
+non-NACK fault behavior have native fake coverage; they were not physically
+forced in that campaign. ESP32-S2 and native ESP-IDF hardware remain untested,
+and no completed long soak is claimed for the current candidate. The
+[validation matrix](docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md) records exact
+images, evidence sources, historical results, and remaining coverage gaps.
 
 ## E2 Bus, Not Hardware I2C
 
@@ -453,6 +381,9 @@ TunnelMonitor-node commit `0f240ab` and its older `54.03.20` stack. The current
 TunnelMonitor-node's production console uses ESP-IDF USB Serial/JTAG APIs
 directly, so the Arduino HWCDC bug does not apply to that console path.
 
+On Windows, use `.\scripts\pio.cmd` in place of `pio`; it selects the existing
+VS Code-managed PlatformIO installation.
+
 ```bash
 pio test -e native
 pio run -e ex_bringup_s3
@@ -462,13 +393,12 @@ python tools/check_core_timing_guard.py
 python tools/check_cli_contract.py
 python tools/check_idf_example_contract.py
 python scripts/generate_version.py check
-python -m unittest discover -s test -p "test_hil_runner_parser.py"
+python -m unittest discover -s test -p "test_*.py"
 doxygen Doxyfile
 ```
 
 GitHub Actions builds the native ESP-IDF example for ESP32-S3 and ESP32-S2 on
-ESP-IDF v6.0.1. To reproduce those builds locally from
-`examples/idf/basic_bringup`:
+ESP-IDF v6.0.1. To reproduce those builds locally from the repository root:
 
 ```bash
 idf.py -C examples/idf/basic_bringup set-target esp32s3 build
@@ -476,8 +406,9 @@ idf.py -C examples/idf/basic_bringup set-target esp32s2 build
 ```
 
 Use `docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md` for the current evidence
-ledger, safe CLI recipe, bench-only persistent-write warnings, and remaining
-per-board validation gaps.
+ledger and remaining per-board validation gaps. The
+[HIL runner guide](docs/EE871_E2_HIL_RUNNER.md) provides the safe CLI recipe
+and explicit opt-ins for persistent writes and physical fault tests.
 
 For repeatable serial HIL evidence, build and upload the diagnostic CLI, then
 run:
@@ -509,12 +440,12 @@ why the sensor NACKed.
 
 ## Documentation
 
-- `docs/README.md` - documentation index and status map
-- `CHANGELOG.md` - full release history
-- `docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md` - hardware validation plan and CLI recipe
-- `docs/EE871_E2_HIL_RUNNER.md` - automatic serial HIL runner usage and verdict rules
-- `docs/IDF_PORT.md` - ESP-IDF portability and validation guidance
-- `docs/IDF_PORT_IMPLEMENTATION.md` - ESP-IDF implementation notes
+- [Documentation index](docs/README.md) - maintained guides and vendor references.
+- [Changelog](CHANGELOG.md) - release history and migration notes.
+- [Validation matrix](docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md) - current and historical evidence, with coverage limits.
+- [HIL runner guide](docs/EE871_E2_HIL_RUNNER.md) - commands, framing, and verdict rules.
+- [ESP-IDF guide](docs/IDF_PORT.md) - native integration and build instructions.
+- [Protocol and register map](docs/EE871_E2_Protocol_and_Register_Map.md) - E2 timing, transactions, and EE871 registers.
 
 ## License
 

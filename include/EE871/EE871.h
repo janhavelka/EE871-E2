@@ -29,13 +29,13 @@ struct ReadRetryDiagnostics {
   uint32_t retries = 0; ///< Additional frames actually attempted.
   uint32_t recovered = 0; ///< Frames succeeding after at least one retry.
   uint32_t exhausted = 0; ///< Clean final NACK after all configured nonzero retries.
-  uint8_t lastControlByte = 0;
-  uint8_t lastRetriesUsed = 0;
+  uint8_t lastControlByte = 0; ///< Latest eligible NACK-bearing frame; zero before any event.
+  uint8_t lastRetriesUsed = 0; ///< Additional attempts used by that frame.
   Status lastError = Status::Ok(); ///< Final frame result; OK after recovery.
   Status lastCleanupError = Status::Ok(); ///< STOP/idle failure blocking retry.
-  bool cleanupBlocked = false;
+  bool cleanupBlocked = false; ///< STOP or idle check prevented another attempt.
   bool retryVetoed = false; ///< Application guard denied another attempt.
-  bool lastRecovered = false;
+  bool lastRecovered = false; ///< Latest NACK-bearing frame succeeded after a retry.
 };
 
 /// @brief Snapshot of current configuration, cached feature flags, and driver health.
@@ -241,6 +241,7 @@ public:
   uint32_t totalSuccess() const { return _totalSuccess; }
 
   /// Copy cached session retry counters and the latest NACK-bearing frame.
+  /// @return Retry diagnostics snapshot; no bus access.
   ReadRetryDiagnostics readRetryDiagnostics() const { return _readRetry; }
 
   /// Consecutive failures required before OFFLINE.
