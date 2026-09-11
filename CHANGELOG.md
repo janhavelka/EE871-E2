@@ -12,9 +12,14 @@ Prepared for release after merge; no `v1.1.0` tag has been created.
 ### Migration from 1.0.1
 
 - Rebuild consumers: `Config` and `SettingsSnapshot` have appended fields.
-  Existing positional configuration initializers retain their field order.
+  Driver storage also includes fixed pending-write state. Existing positional
+  configuration initializers retain their field order.
 - Check `begin()` failures before sampling. Incompatible identity, missing CO2
-  capability, or an incomplete feature-cache read now fail initialization.
+  capability, or an incomplete or malformed feature-cache read now fail
+  initialization.
+- Calibration helpers now check support on demand before accessing calibration
+  registers. Budget one additional pointer update and byte read per call;
+  missing or malformed support flags return `NOT_SUPPORTED`.
 - Treat OFFLINE as latched until explicit `recover()` succeeds. Ordinary
   operations fail immediately with the retained error code/detail and the
   message `Driver offline; call recover()`; original health diagnostics remain
@@ -62,6 +67,23 @@ Prepared for release after merge; no `v1.1.0` tag has been created.
 
 ### Fixed
 
+- Uncertain single-byte and raw persistent writes now mark configuration dirty,
+  including PEC/ACK, STOP and verification failures. Definite PEC NACKs retain
+  their precise error without claiming a possible write. A fixed pending-address
+  bitmap keeps every affected target until complete resync, across recovery and
+  end/begin; unrelated readback cannot clear the uncertainty.
+- Auto adjustment checks validated status before issuing a start and returns
+  `BUSY` if already running. Resync of an uncertain start requires idle status
+  before calibration readback; it does not certify calibration success.
+- Offset/gain reads and writes require CO2 support in custom-memory `0x03`;
+  calibration-point reads require support in `0x04`. Malformed support bytes
+  cannot authorize calibration writes; transport errors remain distinguishable.
+- Startup and recovery reject reserved bits in cached feature bytes `0x07..0x09`
+  before installing capabilities.
+- Auto-adjust status reads require advertised support and reject reserved
+  result bits. Operating-mode reads reject active unadvertised mode bits.
+  Failed reads preserve caller outputs; raw `customRead()` remains available
+  for diagnostics.
 - Ordinary read and volatile pointer-write STOPs use `bitTimeoutUs`; the
   flash allowance applies only to direct custom-memory writes at every
   supported device address and to explicit reset for a pending commit.

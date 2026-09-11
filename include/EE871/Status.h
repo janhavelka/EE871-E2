@@ -21,7 +21,7 @@ enum class Err : uint8_t {
   DEVICE_NOT_FOUND,          ///< Reserved for compatibility; not returned by the current driver
   PEC_MISMATCH,              ///< PEC validation failed
   NACK,                      ///< Expected slave ACK was not received
-  BUSY,                      ///< Reserved for compatibility; not returned by the current synchronous driver
+  BUSY,                      ///< Auto adjustment is already running; operation requires it to be idle
   IN_PROGRESS,               ///< Reserved for future asynchronous operations; not returned by the current driver
   BUS_STUCK,                 ///< Bus line cannot reach a commanded/idle level
   ALREADY_INITIALIZED,       ///< begin() called without end()

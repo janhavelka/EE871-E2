@@ -47,6 +47,10 @@ public:
     _corruptNextCustomReadAddress = 0;
     _failNextWriteEnabled = false;
     _failNextWriteAddress = 0;
+    _nackNextWritePec = false;
+    _pecAcked = false;
+    _corruptWriteVerifyEnabled = false;
+    _corruptWriteVerifyAddress = 0;
     _readNacksRemaining = 0;
     _failNextReadMain = 0;
     _dropWriteEnabled = false;
@@ -69,6 +73,8 @@ public:
     for (size_t i = 0; i < EE871::cmd::CUSTOM_MEMORY_SIZE; ++i) {
       _memory[i] = 0;
     }
+    _memory[EE871::cmd::CUSTOM_ADJUSTMENT_SUPPORT] = EE871::cmd::ADJUSTMENT_CO2_MASK;
+    _memory[EE871::cmd::CUSTOM_ADJUSTMENT_POINT_SUPPORT] = EE871::cmd::ADJUSTMENT_CO2_MASK;
     _memory[EE871::cmd::CUSTOM_OPERATING_FUNCTIONS] =
         EE871::cmd::FEATURE_SERIAL_NUMBER |
         EE871::cmd::FEATURE_PART_NAME |
@@ -170,6 +176,13 @@ public:
   void failNextWriteToAddress(uint8_t address) {
     _failNextWriteAddress = address;
     _failNextWriteEnabled = true;
+  }
+
+  void nackNextWritePec() { _nackNextWritePec = true; }
+
+  void corruptReadPecAfterNextWrite(uint8_t address) {
+    _corruptWriteVerifyAddress = address;
+    _corruptWriteVerifyEnabled = true;
   }
 
   void dropWritesToAddress(uint8_t address, bool enabled) {
@@ -299,6 +312,7 @@ private:
     _responsePec = 0;
     _slaveSda = true;
     _controlAcked = false;
+    _pecAcked = false;
   }
 
   void onSclRising() {
@@ -322,6 +336,7 @@ private:
       case Phase::ACK_PEC:
         _slaveSda = !ackForCurrentPhase();
         if (_phase == Phase::ACK_CONTROL) _controlAcked = !_slaveSda;
+        if (_phase == Phase::ACK_PEC) _pecAcked = !_slaveSda;
         break;
       case Phase::READ_DATA:
         _slaveSda = readBitFromByte(_responseData);
@@ -367,7 +382,7 @@ private:
         _byte = 0;
         break;
       case Phase::ACK_PEC:
-        applyWriteIfValid();
+        if (_pecAcked) applyWriteIfValid();
         _phase = Phase::IDLE;
         break;
       case Phase::READ_DATA:
@@ -430,6 +445,11 @@ private:
 
   bool ackForCurrentPhase() {
     if (!_devicePresent) {
+      return false;
+    }
+    if (_phase == Phase::ACK_PEC &&
+        mainCommand() == EE871::cmd::MAIN_CUSTOM_WRITE && _nackNextWritePec) {
+      _nackNextWritePec = false;
       return false;
     }
     if (_phase == Phase::ACK_CONTROL && controlIsRead() &&
@@ -540,6 +560,10 @@ private:
       if (!(_dropWriteEnabled && _address == _dropWriteAddress)) {
         _memory[_address] = _data;
       }
+      if (_corruptWriteVerifyEnabled && _address == _corruptWriteVerifyAddress) {
+        _corruptWriteVerifyEnabled = false;
+        corruptNextCustomReadPec(_address);
+      }
     }
   }
 
@@ -584,6 +608,10 @@ private:
   uint8_t _corruptNextCustomReadAddress = 0;
   bool _failNextWriteEnabled = false;
   uint8_t _failNextWriteAddress = 0;
+  bool _nackNextWritePec = false;
+  bool _pecAcked = false;
+  bool _corruptWriteVerifyEnabled = false;
+  uint8_t _corruptWriteVerifyAddress = 0;
   uint8_t _readNacksRemaining = 0;
   uint8_t _failNextReadMain = 0;
   bool _dropWriteEnabled = false;

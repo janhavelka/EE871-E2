@@ -109,10 +109,18 @@ static constexpr uint8_t STATUS_CO2_ERROR_MASK = 0x08; ///< CO2 error bit mask i
 static constexpr uint8_t CUSTOM_FW_VERSION_MAIN = 0x00; ///< Firmware main version custom-memory address.
 static constexpr uint8_t CUSTOM_FW_VERSION_SUB = 0x01;  ///< Firmware sub version custom-memory address.
 static constexpr uint8_t CUSTOM_E2_SPEC_VERSION = 0x02; ///< Device E2 specification version address.
+static constexpr uint8_t CUSTOM_ADJUSTMENT_SUPPORT = 0x03; ///< Offset/gain support flags address.
+static constexpr uint8_t CUSTOM_ADJUSTMENT_POINT_SUPPORT = 0x04; ///< Adjustment-point support flags address.
 
 static constexpr uint8_t CUSTOM_OPERATING_FUNCTIONS = 0x07;    ///< Feature-support flags address.
 static constexpr uint8_t CUSTOM_OPERATING_MODE_SUPPORT = 0x08; ///< Operating-mode support flags address.
 static constexpr uint8_t CUSTOM_SPECIAL_FEATURES = 0x09;       ///< Special-feature support flags address.
+
+static constexpr uint8_t ADJUSTMENT_CO2_MASK = 0x08; ///< CO2 support bit in 0x03 and 0x04.
+static constexpr uint8_t ADJUSTMENT_SUPPORT_RESERVED_MASK = 0xF0; ///< Reserved bits in 0x03 and 0x04.
+static constexpr uint8_t OPERATING_FUNCTIONS_RESERVED_MASK = 0x08; ///< Reserved bits in 0x07.
+static constexpr uint8_t MODE_SUPPORT_RESERVED_MASK = 0xFC; ///< Reserved bits in 0x08.
+static constexpr uint8_t SPECIAL_FEATURES_RESERVED_MASK = 0xFE; ///< Reserved bits in 0x09.
 
 static constexpr uint8_t CUSTOM_CO2_OFFSET_L = 0x58;   ///< CO2 offset low byte, signed ppm.
 static constexpr uint8_t CUSTOM_CO2_OFFSET_H = 0x59;   ///< CO2 offset high byte, signed ppm.
@@ -214,6 +222,7 @@ static constexpr uint8_t OPERATING_MODE_E2_PRIORITY_MASK = 0x02; ///< Runtime mo
 
 // CUSTOM_AUTO_ADJUST (0xD9)
 static constexpr uint8_t AUTO_ADJUST_RUNNING_MASK = 0x01; ///< Auto-adjust running bit in 0xD9.
+static constexpr uint8_t AUTO_ADJUST_RESERVED_MASK = 0xFE; ///< Reserved bits in 0xD9.
 
 } // namespace cmd
 } // namespace EE871

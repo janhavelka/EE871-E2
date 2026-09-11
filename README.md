@@ -11,8 +11,8 @@ examples, and HIL validation evidence.
 - **Health monitoring** - READY/DEGRADED/OFFLINE tracking
 - **Deterministic behavior** - bounded loops, explicit timeouts
 - **Managed synchronous** - blocking transfers with spec-compliant limits
-- **Feature guards** - optional EE871 registers are checked from cached capability flags
-- **Dirty/resync diagnostics** - persistent multi-byte write failures are visible
+- **Feature guards** - cached operating capabilities and on-demand calibration checks
+- **Dirty/resync diagnostics** - uncertain single- and multi-byte writes are visible
 - **HIL evidence tooling** - serial runner emits transcript, JSON, and Markdown reports
 
 ## Release And Validation Status
@@ -38,8 +38,9 @@ because Web-session cleanup returned HTTP 403.
 These observations establish one hardware retry recovery. They do not establish
 a long-term fault rate or the physical cause of the NACK. Retry exhaustion and
 non-NACK fault behavior have native fake coverage; they were not physically
-forced in that campaign. ESP32-S2 and native ESP-IDF hardware remain untested,
-and no completed long soak is claimed for the current candidate. The
+forced in that campaign. The added calibration and metadata guards were not
+covered by that hardware campaign. ESP32-S2 and native ESP-IDF hardware remain
+untested, and no completed long soak is claimed for the current candidate. The
 [validation matrix](docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md) records exact
 images, evidence sources, historical results, and remaining coverage gaps.
 
@@ -163,6 +164,19 @@ its own range/staleness policy. Reading status can trigger the next measurement
 and reset the interval counter only when the global interval exceeds 15 s and
 the previous value is older than 10 s (AN1611-1 sections 4 and 10).
 
+`begin()` and `recover()` reject reserved bits in feature bytes `0x07..0x09`
+before installing the cache. `readOperatingMode()` rejects active mode bits
+whose capability is absent. `readAutoAdjustStatus()` requires advertised
+auto-adjust support and rejects reserved result bits instead of decoding
+unsupported register replies as a running adjustment.
+
+Offset/gain helpers first check CO2 support in `0x03`; calibration-point reads
+check `0x04`. Each call adds one volatile pointer update and one byte read.
+Missing or malformed support returns `NOT_SUPPORTED` before calibration access;
+transfer failures retain their precise status. Raw `customRead()` remains
+available for register diagnostics. These checks leave normal sampling and
+startup/recovery transaction counts unchanged.
+
 ## Health Monitoring
 
 ```cpp
@@ -175,13 +189,14 @@ Serial.printf("Failures: %u consecutive, %lu total\n",
               static_cast<unsigned long>(sensor.totalFailures()));
 ```
 
-Validation and precondition errors return before E2 traffic and do not update
-health counters. `probe()` uses raw E2 reads and is diagnostic-only; normal
+Parameter and precondition errors return before E2 traffic. During ordinary
+reads, validating returned metadata adds no health event; preceding transfers
+remain tracked. `probe()` uses raw E2 reads and is diagnostic-only; normal
 reads/writes use tracked wrappers. Health counts tracked bus transfers rather
 than application sampling cycles: a failed low byte short-circuits a 16-bit
-read before its high byte is attempted. `BUSY` and `IN_PROGRESS` are reserved
-for compatibility and are not returned by the current synchronous driver;
-`IN_PROGRESS` remains neutral for health if a future operation uses it.
+read before its high byte is attempted. `BUSY` means auto adjustment is already
+running and must become idle before the requested operation. `IN_PROGRESS`
+remains reserved and neutral for health.
 `Config::offlineThreshold = 0` is normalized to one failed operation. Failed
 `begin()` and `end()` paths clear stale runtime/cached feature state so later
 diagnostics do not report old sensor capabilities.
@@ -286,17 +301,29 @@ overhead; applications must admit an adequate whole-operation time budget.
 
 ## Persistent Configuration Writes
 
-Multi-byte persistent writes are not bus-atomic on EE871-E2. A low byte can
-commit before a high byte fails, or a write can be accepted before a later
-readback verify fails. If this happens, persistent sensor configuration may be
-partially changed and should be treated as dirty until it is explicitly
-resynced or inspected.
+Persistent writes can change hardware before a final ACK, STOP, or readback
+fails. Multi-byte writes are also not bus-atomic: a low byte can commit before
+the high byte fails. These cases mark configuration dirty, including direct
+single-byte and raw custom-memory writes. Interrupted PEC transmission is
+conservatively uncertain; a definite final PEC NACK does not mark a previously
+clean single-byte write dirty.
 
 Use `persistentConfigDirty()` and `persistentConfigDirtyError()` to detect the
 condition and retrieve the original failing `Status`. `SettingsSnapshot`
-includes the same diagnostics. `resyncPersistentConfig()` re-reads the
-persistent fields and clears the dirty state only after the values are readable
-and coherent; unrelated successful reads do not clear it.
+includes the same diagnostics. A fixed 32-byte bitmap retains every uncertain
+target across further failures, recovery, and end/begin. `resyncPersistentConfig()`
+checks the global interval, advertised calibration and part-name fields, and
+all pending registers, including stored address/mode/status validation. Only
+a complete successful readback clears dirty state. Budget up to 256 additional
+pointer/read pairs when many raw targets are pending; this is a maintenance API.
+
+`startAutoAdjust()` validates status before writing and returns `BUSY` when
+adjustment is already running. Resync of an uncertain adjustment also requires
+idle status before reading calibration. Resync establishes readable/coherent
+current configuration; it cannot prove the requested change was applied or
+that a failed calibration request ran or succeeded. Applications must compare
+against their own expected baseline before trusting the outcome. Unrelated
+reads and later successful writes do not clear earlier uncertainty.
 
 The bring-up CLIs expose this through safe diagnostic commands:
 

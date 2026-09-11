@@ -158,12 +158,15 @@ public:
   /// Re-read persistent configuration and clear dirty diagnostics when coherent.
   ///
   /// This proves the persistent fields are readable and coherent by the
-  /// driver's rules. The current coherence check reads the global measurement
-  /// interval, CO2 offset, CO2 gain, and part name when the device advertises
-  /// part-name support, and verifies that the global interval is in range. It
-  /// cannot prove the values match operator/application intent unless the
-  /// application compares them with its own expected baseline. Dirty state
-  /// clears only after this API succeeds.
+  /// driver's rules: a valid global interval, advertised CO2 offset/gain and
+  /// part name, plus every register implicated in an uncertain write. Stored
+  /// address/mode/status values receive their domain checks. An uncertain
+  /// auto-adjust request requires idle status before reading calibration.
+  /// This cannot prove the requested values were applied or that an uncertain
+  /// calibration request ran or succeeded; compare with an application-owned
+  /// baseline. Dirty state clears only after the entire readback succeeds.
+  /// Up to 256 additional pointer/read pairs may be needed for pending targets;
+  /// allow a maintenance-time budget using the configured frame bounds.
   ///
   /// This API touches the E2 bus, is blocking within configured timing/write
   /// delay bounds, is not ISR-safe, and uses tracked operations that can update
@@ -248,9 +251,11 @@ public:
   /// @return Normalized threshold currently in use.
   uint8_t offlineThreshold() const { return _config.offlineThreshold; }
 
-  /// Check if a multi-byte persistent write may have partially applied.
+  /// Check if a persistent write may have applied without verified completion.
   ///
-  /// EE871 persistent multi-byte writes are not bus-atomic. Dirty means sensor
+  /// Single-byte writes can fail after acceptance; multi-byte writes are not
+  /// bus-atomic. An interrupted PEC transmission is conservatively uncertain.
+  /// Dirty means sensor
   /// persistent configuration may need operator inspection or a verified
   /// resyncPersistentConfig(); unrelated successful reads do not clear it.
   /// @return true when persistent configuration needs explicit resync/inspection.
@@ -313,6 +318,10 @@ public:
   /// assembles the complete interval, and routes the operation through
   /// writeMeasurementInterval(). This adds read traffic and uses the paired
   /// persistent-write timing/dirty-state rules.
+  /// Other addresses are raw maintenance access: the caller owns register
+  /// support and value validation. Any uncertain completion marks that address
+  /// dirty; unrelated operations cannot clear it. Successful resync proves raw
+  /// target readability, with domain checks only for registers documented there.
   /// @param address Custom-memory address.
   /// @param value Byte to write.
   /// @return Status::Ok() when readback matches, or a precise validation,
@@ -461,9 +470,10 @@ public:
   /// @return Status::Ok() when the byte is read.
   Status readBusAddress(uint8_t& address);
 
-  /// Write bus address (0xC0) - requires power cycle to take effect.
+  /// Write bus address (0xC0).
   /// This updates persistent sensor configuration and does not retarget the
-  /// current driver session.
+  /// current driver session. Do not assume when the device activates the new
+  /// address; a failed verification may require explicit retargeting and resync.
   /// @param address New address (0-7)
   /// @return OUT_OF_RANGE before capability checks or bus traffic if address
   /// is greater than 7; otherwise a capability or write/readback status.
@@ -506,7 +516,8 @@ public:
   /// Read operating mode (0xD8).
   ///
   /// Fails closed with NOT_SUPPORTED when neither operating-mode capability is
-  /// advertised. Reserved bits in a returned value produce OUT_OF_RANGE.
+  /// advertised. Reserved bits in a returned value produce OUT_OF_RANGE;
+  /// an active mode bit whose capability is absent produces NOT_SUPPORTED.
   /// @param[out] mode Operating-mode byte.
   /// @return Status::Ok() only when a supported, valid mode byte is read.
   /// @see cmd::OPERATING_MODE_* constants
@@ -527,16 +538,20 @@ public:
   // =========================================================================
 
   /// Check if auto adjustment is running (0xD9 bit0).
+  /// Requires advertised auto-adjust support; reserved result bits return
+  /// OUT_OF_RANGE. The output is unchanged on failure.
   /// @param[out] running true when auto adjustment is running.
   /// @return Status::Ok() when the byte is read.
   Status readAutoAdjustStatus(bool& running);
 
   /// Start auto adjustment (cannot be stopped once started).
   ///
-  /// Device will return 0x55 during adjustment (~5 min). This is a
-  /// configuration-changing operation and should be treated as bench/maintenance
-  /// unless the application explicitly owns calibration workflow.
-  /// @return Status::Ok() when the control byte verifies.
+  /// Reads and validates status first; BUSY prevents retriggering a running
+  /// adjustment. The sensor retains previous measured values during adjustment.
+  /// This is a bench/maintenance operation unless the application explicitly
+  /// owns the calibration workflow. A failed request may still have started it;
+  /// inspect dirty diagnostics and status before deciding what to do next.
+  /// @return Status::Ok() when the start register verifies, not when calibration completes.
   Status startAutoAdjust();
 
   // =========================================================================
@@ -544,28 +559,38 @@ public:
   // =========================================================================
 
   /// Read CO2 offset (signed, ppm).
+  /// First reads support byte 0x03 with a pointer update and one byte read;
+  /// unsupported or malformed capability flags return NOT_SUPPORTED.
   /// @param[out] offset Signed offset in ppm.
   /// @return Status::Ok() when both bytes are read.
   Status readCo2Offset(int16_t& offset);
 
   /// Write CO2 offset (signed, ppm).
+  /// Maintenance operation. First reads support byte 0x03 with a pointer
+  /// update and one byte read; unsupported or malformed flags prevent writes.
   /// @param offset Signed offset in ppm.
   /// @return Status::Ok() when both bytes verify. A high-byte failure after the
   /// low byte succeeds marks persistent configuration dirty.
   Status writeCo2Offset(int16_t offset);
 
   /// Read CO2 gain (gain = value / 32768).
+  /// First reads support byte 0x03 with a pointer update and one byte read;
+  /// unsupported or malformed capability flags return NOT_SUPPORTED.
   /// @param[out] gain Raw gain value.
   /// @return Status::Ok() when both bytes are read.
   Status readCo2Gain(uint16_t& gain);
 
   /// Write CO2 gain (gain = value / 32768).
+  /// Maintenance operation. First reads support byte 0x03 with a pointer
+  /// update and one byte read; unsupported or malformed flags prevent writes.
   /// @param gain Raw gain value.
   /// @return Status::Ok() when both bytes verify. A high-byte failure after the
   /// low byte succeeds marks persistent configuration dirty.
   Status writeCo2Gain(uint16_t gain);
 
   /// Read last calibration points.
+  /// First reads support byte 0x04 with a pointer update and one byte read;
+  /// unsupported or malformed capability flags return NOT_SUPPORTED.
   /// @param[out] lower Lower calibration point in ppm.
   /// @param[out] upper Upper calibration point in ppm.
   /// @return Status::Ok() when both 16-bit values are read.
@@ -654,12 +679,13 @@ private:
   Status _readControlByteTracked(uint8_t controlByte, uint8_t& data);
 
   Status _writeCommandRaw(uint8_t controlByte, uint8_t addressByte, uint8_t dataByte,
-                          bool* writeAccepted = nullptr);
+                          bool* writeMayHaveApplied = nullptr);
   Status _writeCommandTracked(uint8_t controlByte, uint8_t addressByte, uint8_t dataByte,
-                              bool* writeAccepted = nullptr);
-  Status _customWriteDirect(uint8_t address, uint8_t value, bool* writeAccepted = nullptr);
+                              bool* writeMayHaveApplied = nullptr);
+  Status _customWriteDirect(uint8_t address, uint8_t value, bool* writeMayHaveApplied = nullptr);
   Status _busResetRaw();
   Status _validateIdentityRaw();
+  Status _requireCo2AdjustmentSupport(uint8_t address);
   Status _readFeatureFlagsRaw(uint8_t& operatingFunctions,
                               uint8_t& operatingModeSupport,
                               uint8_t& specialFeatures);
@@ -675,7 +701,7 @@ private:
   Status _updateHealth(const Status& st);
 
   void _resetStoppedState();
-  void _markPersistentConfigDirty(const Status& st);
+  void _markPersistentConfigDirty(const Status& st, uint8_t address, uint8_t length = 1);
   void _clearPersistentConfigDirty();
 
   // =========================================================================
@@ -702,6 +728,8 @@ private:
   ReadRetryDiagnostics _readRetry;
   bool _persistentConfigDirty = false;
   Status _persistentConfigDirtyError = Status::Ok();
+  // One bit per custom address; retained with dirty diagnostics across sessions.
+  uint8_t _pendingPersistentReads[cmd::CUSTOM_MEMORY_SIZE / 8] = {};
 };
 
 } // namespace EE871

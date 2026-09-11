@@ -11,25 +11,27 @@ for capture commands.
 
 ## Software Validation
 
-Local release-preparation checks on 2026-09-11 used the library implementation
-at `a358f92`; the subsequent cleanup changes documentation and the IDF
-documentation contract, without changing driver behavior.
+Local safety-follow-up checks on 2026-09-11 used `main` at `7d57b1e` plus the
+calibration/capability guards, persistent-write uncertainty tracking, and
+auto-adjust preflight changes described in the unreleased changelog. The
+earlier `a358f92` release-preparation run passed 71 native tests; these changes
+add 22 regression cases.
 
 | Check | Result |
 | --- | --- |
-| `.\scripts\pio.cmd test -e native` | 71/71 native cases passed. |
+| `.\scripts\pio.cmd test -e native` | 93/93 native cases passed. |
 | `python -m unittest discover -s test -p "test_*.py"` | 58/58 Python cases passed. |
 | Timing, Arduino CLI, and native IDF example contract checkers | All passed. |
 | `python scripts/generate_version.py check` | Version.h, IDF manifest and Doxyfile match package version 1.1.0. |
 | `doxygen Doxyfile` and local Markdown target check | Documentation generated without warnings; local links resolve. |
 | `.\scripts\pio.cmd run -e ex_bringup_s3 -e ex_bringup_s2 -e compat_tunnelmonitor_s3` | All three Arduino builds passed; build-only evidence. |
 
-The final release PR must pass the CI workflow for its current head, including
-native ESP-IDF 6.0.1 builds for both ESP32-S3 and ESP32-S2. CI results attached
-to that PR identify the tested revision. Local `idf.py` builds were not run;
-an earlier green run does not establish success for a later candidate.
+The final release revision must pass the CI workflow, including native
+ESP-IDF 6.0.1 builds for both ESP32-S3 and ESP32-S2. Each workflow run identifies
+the tested commit. Local `idf.py` builds were not run; an earlier green run
+does not establish success for a later candidate.
 
-## Current Library Hardware Evidence
+## September Library Hardware Evidence
 
 The September 11 CO2Control comparison exercised clean EE871-E2
 [`a358f92a6882e00810c775a61f5499d5cff60885`](https://github.com/janhavelka/EE871-E2/commit/a358f92a6882e00810c775a61f5499d5cff60885),
@@ -70,6 +72,10 @@ records 71 library native tests and 58 Python tests at the tested revision.
 
 Limits of this evidence:
 
+- The later calibration/capability guards, auto-adjust preflight, and expanded
+  write-uncertainty/resync behavior have native fake coverage only. This
+  campaign did not record calibration support bytes `0x03/0x04` and does not
+  qualify those changes on hardware.
 - One recovered ACK miss does not establish a fault-rate improvement, a
   long-term reliability rate, or the physical cause of the NACK.
 - All three retries and exhaustion, callback vetoes and non-NACK fail-closed
@@ -135,7 +141,7 @@ capture or cleanup prevents an overall verdict.
 
 | ID | Scenario and sequence | Expected behavior / retained hardware result |
 | --- | --- | --- |
-| F-01 | Sensor-present boot: `version`, `drv`, `dirty` | Successful initialization yields READY and clean persistent state; failures remain precise and bounded. Historical CLI PASS; September CO2Control startup and acquisition exercised the current library. |
+| F-01 | Sensor-present boot: `version`, `drv`, `dirty` | Successful initialization yields READY and clean persistent state; failures remain precise and bounded. Historical CLI PASS; September CO2Control startup and acquisition exercised `a358f92`. Later capability validation has native coverage. |
 | F-02 | Diagnostic probe: `drv`, `probe`, `drv` | Probe must not change health counters/state. Historical CLI PASS. |
 | F-03 | Status: `status`, `drv` | Bounded result with tracked health; reading status can trigger a new measurement under the documented interval/age conditions. Historical `0x00` reads and trace PASS. |
 | F-04/F-05/F-06 | MV4/MV3 and PEC: `read`, `co2avg`, `co2fast`, `id`, `features` | Low-before-high paired reads; valid PEC or precise bounded error. Historical CLI PASS; September normal acquisition had one recovered MV3 NACK and no public sensor error. |
@@ -154,7 +160,8 @@ capture or cleanup prevents an overall verdict.
 
 Record original values and use a bench sensor approved for persistent changes.
 Restore and verify every changed value. Check `dirty` immediately after a
-failed write; clear it only through successful verified readback/resync/recovery.
+failed write; clear it only through successful `resyncPersistentConfig()`.
+Recovery restores communication but retains persistent uncertainty.
 
 | ID | Scenario and sequence | Retained result |
 | --- | --- | --- |
