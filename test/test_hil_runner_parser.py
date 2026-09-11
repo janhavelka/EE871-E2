@@ -5,6 +5,7 @@ import contextlib
 import io
 import pathlib
 import sys
+import tempfile
 import time
 import types
 import unittest
@@ -42,6 +43,137 @@ SERIAL_SPEC.loader.exec_module(serial_discriminator)
 
 
 class HilRunnerParserTest(unittest.TestCase):
+    def test_health_requires_each_complete_current_line(self) -> None:
+        lines = [
+            "=== Driver Health ===", "State: READY", "Online: yes",
+            "Consecutive failures: 0", "Total success: 42", "Total failures: 0",
+            "Success rate: 100.0%", "Last OK: 5 ms ago (at 1000 ms)",
+            "Last error: never", "persistentConfigDirty: no",
+            "persistentConfigDirtyError: OK (code=0, detail=0)",
+            "persistentConfigDirtyError message: <none>", "resyncNeeded: no",
+        ]
+        spec = soak.health_spec("test")
+        def result(rows):
+            text = "\n".join(rows) + "\n> \n"
+            return runner.classify_response(spec, text, False, runner.parse_response("drv", text))[0]
+        self.assertEqual(runner.RESULT_PASS, result(lines))
+        for index in range(1, len(lines)):
+            with self.subTest(missing=lines[index]):
+                self.assertNotEqual(runner.RESULT_PASS, result(lines[:index] + lines[index + 1:]))
+            with self.subTest(duplicate=lines[index]):
+                self.assertNotEqual(runner.RESULT_PASS, result(lines + [lines[index]]))
+
+    def test_stress_requires_complete_health_delta_and_operation_rows(self) -> None:
+        names = ("readStatus", "readCo2Fast", "readCo2Avg", "readGroup",
+                 "readSubgroup", "readAvail", "readFw", "readFeatures")
+        lines = ["=== stress_mix summary ===", "Total: ok=8 fail=0 (100.00%)",
+                 "Duration: 800 ms", "Rate: 10.00 ops/s"]
+        lines += [name + " ok=1 fail=0" for name in names]
+        lines += ["Health delta: success +8, failures +0"]
+        spec = soak.stress_spec(8, "test")
+        def result(rows):
+            text = "\n".join(rows) + "\n> \n"
+            return runner.classify_response(spec, text, False, runner.parse_response(spec.command, text))[0]
+        self.assertEqual(runner.RESULT_PASS, result(lines))
+        for index in range(2, len(lines)):
+            with self.subTest(missing=lines[index]):
+                self.assertNotEqual(runner.RESULT_PASS, result(lines[:index] + lines[index + 1:]))
+        mismatched = [line.replace("readStatus ok=1 fail=0", "readStatus ok=0 fail=1")
+                      for line in lines]
+        self.assertNotEqual(runner.RESULT_PASS, result(mismatched))
+        self.assertNotEqual(runner.RESULT_PASS, result(lines + lines[:1] + lines[2:]))
+
+    def test_incomplete_latest_summary_does_not_reuse_previous_result(self) -> None:
+        lines = ["=== Stress Summary ===", "Total: 8", "Success: 8", "Errors: 0",
+                 "Success rate: 100.00%", "Duration: 800 ms", "Rate: 10.00 ops/s",
+                 "Health delta: success +8, failures +0"]
+        for missing in (1, 2, 3):
+            with self.subTest(missing=lines[missing]):
+                text = "\n".join(lines + lines[:missing] + lines[missing + 1:]) + "\n> \n"
+                self.assertNotIn("stress", runner.parse_stress(text))
+        text = ("Selftest result: pass=12 fail=0 skip=0\n"
+                "=== EE871 selftest (safe commands) ===\n"
+                "Selftest result: pass=12 fail=\n> \n")
+        self.assertNotIn("selftest", runner.parse_selftest(text))
+        text = ("Selftest result: pass=12 fail=0 skip=0\n"
+                "=== EE871 selftest (safe commands) ===\n"
+                "  [PASS] probe responds\n> \n")
+        self.assertNotIn("selftest", runner.parse_selftest(text))
+
+    def test_historical_health_error_requires_code_and_detail(self) -> None:
+        lines = ["=== Driver Health ===", "State: READY", "Online: yes",
+                 "Consecutive failures: 0", "Total success: 42", "Total failures: 1",
+                 "Success rate: 97.7%", "Last OK: 5 ms ago (at 1000 ms)",
+                 "Last error: 10 ms ago (at 995 ms)", "Error code: NACK",
+                 "Error detail: 0", "persistentConfigDirty: no",
+                 "persistentConfigDirtyError: OK (code=0, detail=0)",
+                 "persistentConfigDirtyError message: <none>", "resyncNeeded: no"]
+        def errors(rows):
+            return runner.capture_integrity_errors("drv", "\n".join(rows) + "\n> \n")
+        # The CLI omits Error msg when the stored message pointer is null.
+        self.assertEqual([], errors(lines))
+        for prefix in ("Error code:", "Error detail:"):
+            with self.subTest(missing=prefix):
+                self.assertTrue(errors([line for line in lines if not line.startswith(prefix)]))
+
+    def test_initial_sync_requires_clean_complete_current_response(self) -> None:
+        lines = ["=== Persistent Config Dirty State ===", "persistentConfigDirty: no",
+                 "persistentConfigDirtyError: OK (code=0, detail=0)",
+                 "persistentConfigDirtyError message: <none>", "resyncNeeded: no"]
+        text = "\n".join(lines) + "\n> \n"
+        soak.check_initial_sync(text, False)
+        # Earlier startup state is allowed; only the new named response is current.
+        soak.check_initial_sync("persistentConfigDirty: no\nresyncNeeded: no\n" + text, False)
+        bad = [text.replace("persistentConfigDirty: no", "persistentConfigDirty: yes")]
+        bad += ["\n".join(lines[:i] + lines[i + 1:]) + "\n> \n"
+                for i in range(1, len(lines))]
+        bad += [marker + "\n" + text for marker in ("Guru Meditation", "assert failed", "abort()")]
+        bad += ["Status: NACK (code=8, detail=0)\n" + text.replace(
+            "persistentConfigDirtyError message: <none>\n", "")]
+        for capture in bad:
+            with self.subTest(capture=capture):
+                with self.assertRaises(RuntimeError):
+                    soak.check_initial_sync(capture, False)
+        with self.assertRaises(RuntimeError):
+            soak.check_initial_sync(text, True)
+
+    def test_rejected_initial_sync_keeps_original_capture_and_closes_port(self) -> None:
+        ser = mock.Mock()
+        args = soak.parse_args(["--port", "COM20"])
+        text = "Guru Meditation\n=== Persistent Config Dirty State ===\n> \n"
+        with tempfile.TemporaryDirectory() as folder:
+            transcript = pathlib.Path(folder) / "transcript.txt"
+            with mock.patch.object(soak.hil, "open_serial", return_value=ser), mock.patch.object(
+                soak.hil, "synchronize_cli", return_value=(text, "prompt", False),
+            ):
+                with self.assertRaises(RuntimeError):
+                    soak.open_serial(args, transcript)
+            self.assertIn(text, transcript.read_text(encoding="utf-8"))
+        ser.close.assert_called_once()
+
+    def test_partial_measurement_and_status_values_do_not_pass(self) -> None:
+        cases = (("co2fast", "CO2 fast:"), ("status", "hasCo2Error():"))
+        specs = {spec.command: spec for spec in soak.sample_specs()}
+        for command, payload in cases:
+            with self.subTest(command=command):
+                text = "Status: OK (code=0, detail=0)\n" + payload + "\n> \n"
+                result, _ = runner.classify_response(specs[command], text, False,
+                                                     runner.parse_response(command, text))
+                self.assertNotEqual(runner.RESULT_PASS, result)
+
+    def test_raw_status_requires_one_complete_consistent_value(self) -> None:
+        spec = next(spec for spec in soak.sample_specs() if spec.command == "status")
+        text = "Status: OK (code=0, detail=0)\nStatus: 0x00\nhasCo2Error(): NO\n> \n"
+        self.assertEqual(runner.RESULT_PASS, runner.classify_response(
+            spec, text, False, runner.parse_response("status", text),
+        )[0])
+        for bad in (text.replace("hasCo2Error", "Status: 0x0\nhasCo2Error"),
+                    text.replace("0x00", "0x0"), text.replace("0x00", "0x08")):
+            with self.subTest(capture=bad):
+                self.assertNotEqual(runner.RESULT_PASS, runner.classify_response(
+                    spec, bad, False, runner.parse_response("status", bad),
+                )[0])
+
     def test_open_serial_deasserts_control_lines_before_open(self) -> None:
         class FakeSerial:
             def __init__(self) -> None:
@@ -591,7 +723,7 @@ After:
         self.assertFalse(timed_out)
         self.assertEqual("prompt", reason)
         self.assertEqual(b"\ndirty\n", bytes(ser.written))
-        self.assertEqual(1, ser.flush_count)
+        self.assertEqual(0, ser.flush_count)
         self.assertIn("Unknown command: partial", text)
         self.assertIn("persistentConfigDirty: no", text)
 
@@ -622,6 +754,17 @@ After:
         self.assertTrue(timed_out)
         self.assertEqual("timeout", reason)
         self.assertEqual("> \r\n", text)
+
+    def test_short_serial_writes_stop_before_reading_or_draining(self) -> None:
+        ser = mock.Mock()
+        ser.write.side_effect = lambda data: len(data) - 1
+        args = types.SimpleNamespace(command_timeout=1, idle=0)
+        with self.assertRaises(OSError):
+            runner.synchronize_cli(ser, 1)
+        with self.assertRaises(OSError):
+            runner.run_serial_command(ser, soak.dirty_spec("test"), "dirty", args, {})
+        ser.read.assert_not_called()
+        ser.flush.assert_not_called()
 
     def test_command_prompt_requirement_prevents_response_shift(self) -> None:
         class FakeSerial:

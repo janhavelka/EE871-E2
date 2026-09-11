@@ -5,6 +5,23 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Example health percentages use a 64-bit sum of lifetime counters, preventing
+  the display from wrapping when the combined count exceeds `UINT32_MAX`.
+- HIL capture checks reject missing, truncated or duplicate health records,
+  missing stress operation/health totals, and partial measurement/status values
+  even when the final CLI prompt arrives. Expected negative responses retain
+  their existing status validation. Incomplete latest summaries cannot reuse
+  previous results, and initial soak synchronization rejects crashes or an
+  incomplete or dirty configuration response.
+- Soak evidence reports the selected scheduled-host-retry policy accurately
+  when retries are disabled.
+- Host serial commands reject short writes and wait for their bounded response
+  instead of calling the serial driver's potentially unbounded drain.
+
 ## [1.1.0] - 2026-09-11
 
 ### Migration from 1.0.1

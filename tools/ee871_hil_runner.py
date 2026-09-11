@@ -173,10 +173,14 @@ def parse_version(text: str) -> dict[str, Any]:
 
 
 def parse_selftest(text: str) -> dict[str, Any]:
-    clean = strip_ansi(text)
-    match = last_match(
-        r"Selftest result:\s*pass=(\d+)\s+fail=(\d+)\s+skip=(\d+)",
-        clean,
+    clean = last_header_section(strip_ansi(text), "=== EE871 selftest (safe commands) ===")
+    headers = list(re.finditer(r"Selftest result:", clean, re.IGNORECASE))
+    if not headers:
+        return {}
+    latest_line = clean[headers[-1].start():].splitlines()[0].strip()
+    match = re.fullmatch(
+        r"Selftest result:[ \t]*pass=(\d+)[ \t]+fail=(\d+)[ \t]+skip=(\d+)",
+        latest_line,
         re.IGNORECASE,
     )
     if not match:
@@ -193,36 +197,41 @@ def parse_selftest(text: str) -> dict[str, Any]:
 def parse_stress(text: str) -> dict[str, Any]:
     clean = strip_ansi(text)
     parsed: dict[str, Any] = {}
-    candidates: list[tuple[int, str, dict[str, int | str]]] = []
-    for pos, section in header_sections(clean, "=== Stress Summary ==="):
+    sections = [(pos, kind, section)
+                for kind, header in (("stress", "=== Stress Summary ==="),
+                                     ("stress_mix", "=== stress_mix summary ==="))
+                for pos, section in header_sections(clean, header)]
+    if not sections:
+        return parsed
+    _, kind, section = max(sections, key=lambda item: item[0])
+    # Select the newest block before parsing; an incomplete new result must
+    # never inherit counters from an older complete response.
+    if kind == "stress":
         total = last_match(r"\bTotal:\s*(\d+)", section)
         success = last_match(r"\bSuccess:\s*(\d+)", section)
         errors = last_match(r"\bErrors:\s*(\d+)", section)
         if total and success and errors:
-            candidates.append((pos, section, {
+            parsed["stress"] = {
                 "kind": "stress",
                 "total": int(total.group(1)),
                 "success": int(success.group(1)),
                 "errors": int(errors.group(1)),
-            }))
-    for pos, section in header_sections(clean, "=== stress_mix summary ==="):
+            }
+    else:
         total = last_match(r"\bTotal:\s*ok=(\d+)\s+fail=(\d+)", section, re.IGNORECASE)
         if total:
             ok = int(total.group(1))
             fail = int(total.group(2))
-            candidates.append((pos, section, {
+            parsed["stress"] = {
                 "kind": "stress_mix",
                 "total": ok + fail,
                 "success": ok,
                 "errors": fail,
-            }))
-    if candidates:
-        _, section, stress = max(candidates, key=lambda item: item[0])
-        parsed["stress"] = stress
-        match = last_match(r"Health delta:\s*success\s*\+(\d+),\s*failures\s*\+(\d+)", section, re.IGNORECASE)
-        if match:
-            parsed["health_delta_success"] = int(match.group(1))
-            parsed["health_delta_failures"] = int(match.group(2))
+            }
+    match = last_match(r"Health delta:\s*success\s*\+(\d+),\s*failures\s*\+(\d+)", section, re.IGNORECASE)
+    if match:
+        parsed["health_delta_success"] = int(match.group(1))
+        parsed["health_delta_failures"] = int(match.group(2))
     return parsed
 
 
@@ -467,6 +476,87 @@ def validate_parsed(
     return failures, reviews
 
 
+def capture_integrity_errors(command: str, text: str) -> list[str]:
+    """Require complete diagnostic records, even when the final prompt survived."""
+    clean = strip_ansi(text)
+    fields: dict[str, str] = {}
+    dirty_fields = {
+        "persistentConfigDirty:": r"(?:yes|no|true|false|0|1)",
+        "persistentConfigDirtyError:": r"[A-Z_]+ \(code=\d+, detail=-?\d+\)",
+        "persistentConfigDirtyError message:": r".+",
+        "resyncNeeded:": r"(?:yes|no|true|false|0|1)",
+    }
+    if command == "drv":
+        clean = last_header_section(clean, "=== Driver Health ===")
+        fields = {
+            "State:": r"(?:UNINIT|READY|DEGRADED|OFFLINE)",
+            "Online:": r"(?:yes|no|true|false|0|1)",
+            "Consecutive failures:": r"\d+", "Total success:": r"\d+",
+            "Total failures:": r"\d+", "Success rate:": r"\d+(?:\.\d+)?%",
+            "Last OK:": r"(?:never|\d+ ms ago \(at \d+ ms\))",
+            "Last error:": r"(?:never|\d+ ms ago \(at \d+ ms\))",
+            **dirty_fields,
+        }
+        historical_failures = parse_health(clean).get("total_failures", 0)
+        if historical_failures or re.search(r"Last error:[ \t]+\d", clean):
+            fields.update({"Error code:": r"[A-Z_]+", "Error detail:": r"-?\d+"})
+        # The example emits message text only when the Status contains it.
+        if re.search(r"^[ \t]*Error msg:", clean, re.MULTILINE):
+            fields["Error msg:"] = r".+"
+    elif command == "dirty":
+        clean = last_header_section(clean, "=== Persistent Config Dirty State ===")
+        fields = dirty_fields
+    elif command in ("co2fast", "co2avg", "read"):
+        fields = {"CO2 fast:" if command == "co2fast" else "CO2 avg:": r"\d+ ppm"}
+    elif command == "status":
+        fields = {"hasCo2Error():": r"(?:YES|NO)"}
+    elif re.fullmatch(r"stress(?:_mix)?(?: \d+)?", command):
+        mixed = command.startswith("stress_mix")
+        clean = last_header_section(clean, "=== stress_mix summary ===" if mixed else "=== Stress Summary ===")
+        fields = {"Duration:": r"\d+ ms", "Health delta:": r"success \+\d+, failures \+\d+"}
+        if mixed:
+            fields["Total:"] = r"ok=\d+[ \t]+fail=\d+ \(\d+(?:\.\d+)?%\)"
+        else:
+            fields.update({"Total:": r"\d+", "Success:": r"\d+", "Errors:": r"\d+",
+                           "Success rate:": r"\d+(?:\.\d+)?%"})
+        duration = re.search(r"Duration:[ \t]*(\d+) ms", clean)
+        if duration and int(duration.group(1)) > 0:
+            fields["Rate:"] = r"\d+(?:\.\d+)? ops/s"
+        if mixed:
+            for name in ("readStatus", "readCo2Fast", "readCo2Avg", "readGroup",
+                         "readSubgroup", "readAvail", "readFw", "readFeatures"):
+                fields[name + " "] = r"ok=\d+[ \t]+fail=\d+"
+
+    lines = [line.strip() for line in clean.splitlines()]
+    errors = []
+    for prefix, value_pattern in fields.items():
+        candidates = [line for line in lines if line.startswith(prefix)]
+        separator = r"[ \t]*" if prefix.endswith(":") else r"[ \t]+"
+        pattern = re.escape(prefix.rstrip()) + separator + value_pattern
+        if len(candidates) != 1 or not re.fullmatch(pattern, candidates[0], re.IGNORECASE):
+            errors.append("incomplete or duplicate " + prefix.rstrip())
+    if command == "status":
+        raw_status = [line for line in lines
+                      if re.match(r"Status:[ \t]+0x", line, re.IGNORECASE)]
+        if len(raw_status) != 1 or not re.fullmatch(
+            r"Status:[ \t]+0x[0-9a-f]{2}(?: \(CO2 error\))?", raw_status[0], re.IGNORECASE,
+        ):
+            errors.append("incomplete or duplicate raw status byte")
+        elif not errors:
+            status_byte = int(re.search(r"0x([0-9a-f]{2})", raw_status[0], re.IGNORECASE).group(1), 16)
+            has_error = next(line for line in lines if line.startswith("hasCo2Error():")).endswith("YES")
+            if bool(status_byte & 0x08) != has_error:
+                errors.append("raw CO2 status disagrees with decoded flag")
+    if command.startswith("stress_mix") and not errors:
+        rows = [re.fullmatch(r"read\w+[ \t]+ok=(\d+)[ \t]+fail=(\d+)", line)
+                for line in lines]
+        totals = tuple(sum(int(row.group(index)) for row in rows if row) for index in (1, 2))
+        aggregate = parse_stress(clean).get("stress", {})
+        if totals != (aggregate.get("success"), aggregate.get("errors")):
+            errors.append("mixed operation counts disagree with summary")
+    return errors
+
+
 def classify_response(
     spec: CommandSpec,
     text: str,
@@ -490,6 +580,16 @@ def classify_response(
         return RESULT_OPERATOR, "expected output token missing"
     if reviews:
         return RESULT_OPERATOR, "; ".join(reviews)
+    # Expected negative commands have no successful measurement payload.
+    status = parsed.get("status")
+    expected_negative = status and status.get("name") != "OK" and (
+        "expected_failure" in spec.validators
+        or ("status_expected" in spec.validators and spec.expected_status == status.get("name"))
+    )
+    if not expected_negative:
+        integrity = capture_integrity_errors(spec.command, clean)
+        if integrity:
+            return RESULT_OPERATOR, "; ".join(integrity)
     return RESULT_PASS, ""
 
 
@@ -587,10 +687,8 @@ def synchronize_cli(
     dirty-state marker before accepting a prompt, which makes a queued startup
     prompt harmless.
     """
-    ser.write(CLI_SYNC_BYTES)
-    flush = getattr(ser, "flush", None)
-    if callable(flush):
-        flush()
+    if ser.write(CLI_SYNC_BYTES) != len(CLI_SYNC_BYTES):
+        raise OSError("short serial write during CLI synchronization")
     return read_until_ready(
         ser,
         timeout_s,
@@ -888,10 +986,9 @@ def run_serial_command(
 ) -> dict[str, Any]:
     timeout_s = spec.timeout_s if spec.timeout_s is not None else args.command_timeout
     start = time.monotonic()
-    ser.write((command + "\n").encode("utf-8"))
-    flush = getattr(ser, "flush", None)
-    if callable(flush):
-        flush()
+    payload = (command + "\n").encode("utf-8")
+    if ser.write(payload) != len(payload):
+        raise OSError("short serial command write")
     response, wait_reason, timed_out = read_until_ready(
         ser,
         timeout_s,

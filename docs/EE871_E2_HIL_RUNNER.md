@@ -8,6 +8,14 @@ writes. A runner PASS means the selected CLI responses matched parser
 expectations; CO2 accuracy, calibration, fault tolerance, and long-run claims
 need the corresponding bench evidence.
 
+A complete prompt does not prove that the response body arrived intact. The
+runner also requires complete, unique health/dirty records, the stress duration,
+rate when applicable, all mixed-operation rows and health delta, and complete
+measurement/status values. Missing or malformed required fields cannot PASS.
+These checks detect omitted records; they are not a checksum over serial text.
+Host writes have a two-second timeout and reject short writes. Command completion
+uses the response deadline without a separate blocking serial drain.
+
 Completed campaigns, tested versions, and outstanding hardware validation are
 maintained in the
 [hardware validation matrix](EE871_E2_HARDWARE_VALIDATION_MATRIX.md).

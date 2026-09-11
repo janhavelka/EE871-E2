@@ -477,16 +477,29 @@ def write_summary_md(path: Path, payload: dict[str, Any]) -> None:
         )
 
 
-def open_serial(args: argparse.Namespace) -> object:
+def check_initial_sync(text: str, timed_out: bool) -> None:
+    clean = hil.strip_ansi(text)
+    if any(marker in clean for marker in ("Guru Meditation", "assert failed", "abort()")):
+        raise RuntimeError("crash observed during initial CLI synchronization")
+    result, reason = hil.classify_response(
+        dirty_spec("soak-initial"), text, timed_out, hil.parse_response("dirty", text),
+    )
+    if result != hil.RESULT_PASS:
+        raise RuntimeError("initial CLI synchronization failed: " + reason)
+
+
+def open_serial(args: argparse.Namespace, transcript_path: Path | None = None) -> object:
     serial_args = command_args(args)
     ser = hil.open_serial(serial_args)
     try:
-        _, _, timed_out = hil.synchronize_cli(
+        text, _, timed_out = hil.synchronize_cli(
             ser,
             args.command_timeout,
         )
-        if timed_out:
-            raise RuntimeError("serial CLI synchronization timed out")
+        if transcript_path is not None:
+            with transcript_path.open("a", encoding="utf-8", newline="\n") as handle:
+                handle.write(f"\nCLI synchronization at {utc_text()}\n{text}\n")
+        check_initial_sync(text, timed_out)
         return ser
     except Exception:
         close_serial(ser)
@@ -542,9 +555,17 @@ def main(argv: list[str] | None = None) -> int:
         "git_worktree": hil.worktree_state(),
         "claim_boundary": (
             "Transport/health/persistent-state soak only; no CO2 accuracy or "
-            "calibration claim. A fully framed control-byte NACK on a scheduled "
-            "MV3/MV4 sample is retried once by this application-level harness "
-            "only; the NACK's sensor-internal cause is not inferred."
+            "calibration claim. "
+            + (
+                "Scheduled host-level retries are disabled. "
+                if args.scheduled_nack_retry_ms == 0
+                else (
+                    "A fully framed control-byte NACK on a scheduled MV3/MV4 "
+                    "sample is retried once by this application-level harness "
+                    f"after {args.scheduled_nack_retry_ms} ms. "
+                )
+            )
+            + "The NACK's sensor-internal cause is not inferred."
         ),
     }
 
@@ -606,7 +627,7 @@ def main(argv: list[str] | None = None) -> int:
         if ser is not None:
             return True
         try:
-            ser = open_serial(args)
+            ser = open_serial(args, transcript_path)
             if connected_once:
                 reconnects += 1
             connected_once = True
