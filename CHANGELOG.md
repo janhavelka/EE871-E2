@@ -358,12 +358,15 @@ and unrun scenarios are maintained in the
 ### Removed
 - Compile-only CI environments
 
-## [0.1.0] - 2026-01-10
+### Earlier development work
 
-### Added
+Includes earlier development work that had no separate published release.
+
+#### Added
 - Initial release with template structure
 - ESP32-S2 and ESP32-S3 support
 
+[Unreleased]: https://github.com/janhavelka/EE871-E2/compare/v1.1.0...HEAD
 [1.1.0]: https://github.com/janhavelka/EE871-E2/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/janhavelka/EE871-E2/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/janhavelka/EE871-E2/compare/v0.3.0...v1.0.0
@@ -371,4 +374,3 @@ and unrun scenarios are maintained in the
 [0.2.1]: https://github.com/janhavelka/EE871-E2/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/janhavelka/EE871-E2/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/janhavelka/EE871-E2/releases/tag/v0.1.1
-[0.1.0]: https://github.com/janhavelka/EE871-E2/releases/tag/v0.1.0

@@ -17,10 +17,18 @@ examples, and HIL validation evidence.
 
 ## Release And Validation Status
 
-Source/package version `1.1.0` is available from the `v1.1.0` Git tag.
+The latest published release is
+[v1.1.0](https://github.com/janhavelka/EE871-E2/releases/tag/v1.1.0).
+This README describes the current source, including
+[Unreleased changes](CHANGELOG.md#unreleased); use the documentation at the
+release tag when consuming the published version.
 [CHANGELOG.md](CHANGELOG.md) covers migration, stricter startup/recovery,
 ordinary STOP timing, opt-in control-NACK retries, calibration guards, and
 persistent-write uncertainty.
+
+When moving from `v1.1.0` to Unreleased, review the example/HIL evidence and
+serial-framing corrections in the changelog and pin the chosen source commit.
+The older migration from `v1.0.1` remains part of the published `1.1.0` notes.
 
 Software verification of implementation commit `3d32ac3` on 2026-09-11 passed
 93 native tests, 58 Python tests, the timing/CLI/IDF contracts, synchronized
