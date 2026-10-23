@@ -13,6 +13,7 @@ results live in one validation matrix, with exact firmware versions and limits.
 | [ESP-IDF guide](IDF_PORT.md) | Native component integration, GPIO adapter, example setup, and build commands. |
 | [HIL runner guide](EE871_E2_HIL_RUNNER.md) | Reproducible serial checks, soak/discriminator tools, and verdict rules. |
 | [Validation matrix](EE871_E2_HARDWARE_VALIDATION_MATRIX.md) | Software checks, retained hardware evidence, and untested scenarios. |
+| [Retained branch review](RETAINED_BRANCH_AUDIT.md) | Unmerged hardening inventory, remaining HIL preflight gap, capability decisions, and retain/retire workflow. |
 | [Contributing](../CONTRIBUTING.md) | Development and validation workflow. |
 
 ## Vendor references
