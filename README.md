@@ -495,7 +495,8 @@ why the sensor NACKed.
 
 ## Documentation
 
-- [Retained branch review](docs/RETAINED_BRANCH_AUDIT.md) - remaining HIL preflight gap, capability decisions, and retain/retire workflow.
+- [Software implementation prompts](https://github.com/janhavelka/EE871-E2/blob/main/docs/prompts/README.md) - executable software follow-ups, optional feature scopes, and final closeout.
+- [Retained branch review](https://github.com/janhavelka/EE871-E2/blob/main/docs/RETAINED_BRANCH_AUDIT.md) - remaining HIL preflight gap, capability decisions, and retain/retire workflow.
 - [Documentation index](docs/README.md) - maintained guides and vendor references.
 - [Changelog](CHANGELOG.md) - release history and migration notes.
 - [Validation matrix](docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md) - current and historical evidence, with coverage limits.

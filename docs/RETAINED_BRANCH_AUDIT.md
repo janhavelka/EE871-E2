@@ -8,6 +8,11 @@ No implementation was changed and no branch was merged or deleted.
 
 ## Decision
 
+[Executable software prompts](prompts/README.md) now map HIL-1 and CAP-1..5 to
+independent implementation scopes, meaningful regression cases and a final
+integrated closeout. They are NOT IMPLEMENTED; optional feature prompts remain
+distinct from the required HIL admission fix. Hardware-only work is excluded.
+
 There is important unimplemented work in the retained hardening series:
 **the HIL runner's fail-closed admission of persistent writes after baseline or
 maintenance verification failures**. A read-only host reproduction confirms
