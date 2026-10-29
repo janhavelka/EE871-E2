@@ -1052,6 +1052,527 @@ void test_measurement_reads_cover_values_boundaries_and_high_byte_failure() {
                           static_cast<uint8_t>(dev.state()));
 }
 
+// Observe complete control bytes at the public HAL boundary. Faults are armed
+// after a selected control byte, keeping earlier sample evidence undisturbed.
+struct CheckedSampleBus {
+  FakeE2Transport fake;
+  Config hal = fake.makeConfig();
+  uint32_t seen[256] = {};
+  uint8_t controls[16] = {};
+  uint8_t count = 0;
+  uint8_t faultControl = 0;
+  uint8_t fault = 0; // 1: PEC, 2: ACK timeout, 3: read STOP timeout, 4: NACK STOP timeout.
+  bool observing = false;
+
+  Config config(uint8_t retries = 0, uint8_t offlineThreshold = 5) {
+    Config cfg = hal;
+    cfg.busUser = this;
+    cfg.readNackRetries = retries;
+    cfg.offlineThreshold = offlineThreshold;
+    cfg.setScl = [](bool level, void* user) {
+      auto& bus = *static_cast<CheckedSampleBus*>(user);
+      bus.hal.setScl(level, bus.hal.busUser);
+    };
+    cfg.setSda = [](bool level, void* user) {
+      auto& bus = *static_cast<CheckedSampleBus*>(user);
+      bus.hal.setSda(level, bus.hal.busUser);
+    };
+    cfg.readScl = [](void* user) {
+      auto& bus = *static_cast<CheckedSampleBus*>(user);
+      return bus.hal.readScl(bus.hal.busUser);
+    };
+    cfg.readSda = [](void* user) {
+      auto& bus = *static_cast<CheckedSampleBus*>(user);
+      return bus.hal.readSda(bus.hal.busUser);
+    };
+    cfg.delayUs = [](uint32_t us, void* user) {
+      auto& bus = *static_cast<CheckedSampleBus*>(user);
+      bus.hal.delayUs(us, bus.hal.busUser);
+      if (!bus.observing) return;
+      const uint8_t watched[] = {0xC1, 0xD1, 0xE1, 0xF1, 0x71, 0x50, 0x51};
+      for (uint8_t control : watched) {
+        const uint32_t now = bus.fake.controlCount(control);
+        if (now == bus.seen[control]) continue;
+        bus.seen[control] = now;
+        TEST_ASSERT_LESS_THAN_UINT8(sizeof(bus.controls), bus.count);
+        bus.controls[bus.count++] = control;
+        if (control != bus.faultControl) continue;
+        if (bus.fault == 1) bus.fake.setCorruptReadPec(true);
+        if (bus.fault == 2) bus.fake.stretchClockReleaseAfter(1, bus.hal.bitTimeoutUs + 1U);
+        // Eight control clocks have completed; ACK + data/PEC + STOP remain.
+        if (bus.fault == 3) bus.fake.stretchClockReleaseAfter(20, bus.hal.bitTimeoutUs + 1U);
+        if (bus.fault == 4) bus.fake.stretchClockReleaseAfter(2, bus.hal.bitTimeoutUs + 1U);
+      }
+    };
+    return cfg;
+  }
+
+  void observe() {
+    count = 0;
+    for (uint16_t control = 0; control < 256; ++control) {
+      seen[control] = fake.controlCount(static_cast<uint8_t>(control));
+    }
+    observing = true;
+  }
+};
+
+static Status readCheckedSample(EE871::EE871& dev, bool average, Co2ReadResult& out) {
+  return average ? dev.readCo2AverageSample(out) : dev.readCo2FastSample(out);
+}
+
+void test_checked_samples_reject_sensor_error_while_raw_reads_still_succeed() {
+  const bool modes[] = {false, true};
+  for (bool average : modes) {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    fake.setMv3(0x1234);
+    fake.setMv4(0x1234);
+    fake.setStatus(cmd::STATUS_CO2_ERROR_MASK);
+    fake.setMemory(cmd::CUSTOM_ERROR_CODE, 200);
+    uint16_t ppm = 0;
+    TEST_ASSERT_TRUE((average ? dev.readCo2Average(ppm) : dev.readCo2Fast(ppm)).ok());
+    TEST_ASSERT_EQUAL_UINT16(0x1234, ppm);
+    TEST_ASSERT_EQUAL_UINT32(0, fake.controlCount(0x71));
+
+    Co2ReadResult result;
+    const Status st = average ? dev.readCo2AverageSample(result) : dev.readCo2FastSample(result);
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::CO2_SENSOR_ERROR), static_cast<uint8_t>(st.code));
+    TEST_ASSERT_TRUE(result.valueValid);
+    TEST_ASSERT_EQUAL_UINT16(0x1234, result.ppm);
+    TEST_ASSERT_FALSE(result.ppmValid);
+    TEST_ASSERT_TRUE(result.statusValid);
+    TEST_ASSERT_TRUE(result.co2Error);
+    TEST_ASSERT_TRUE(result.errorCodeValid);
+    TEST_ASSERT_EQUAL_UINT8(200, result.errorCode);
+  }
+}
+
+void test_checked_samples_accept_full_word_range_in_value_then_status_order() {
+  const bool modes[] = {false, true};
+  const uint16_t values[] = {0, 50001, UINT16_MAX};
+  for (bool average : modes) {
+    for (uint16_t value : values) {
+      CheckedSampleBus bus;
+      EE871::EE871 dev;
+      TEST_ASSERT_TRUE(dev.begin(bus.config()).ok());
+      bus.fake.setMv3(value);
+      bus.fake.setMv4(value);
+      bus.observe();
+      Co2ReadResult result;
+      TEST_ASSERT_TRUE(readCheckedSample(dev, average, result).ok());
+      TEST_ASSERT_EQUAL_UINT16(value, result.ppm);
+      TEST_ASSERT_TRUE(result.valueValid);
+      TEST_ASSERT_TRUE(result.ppmValid);
+      TEST_ASSERT_TRUE(result.valueReadAttempted);
+      TEST_ASSERT_TRUE(result.valueReadStatus.ok());
+      TEST_ASSERT_TRUE(result.statusReadAttempted);
+      TEST_ASSERT_TRUE(result.statusReadStatus.ok());
+      TEST_ASSERT_TRUE(result.statusValid);
+      TEST_ASSERT_EQUAL_UINT8(0, result.statusByte);
+      TEST_ASSERT_FALSE(result.co2Error);
+      TEST_ASSERT_FALSE(result.errorCodeReadAttempted);
+      TEST_ASSERT_FALSE(result.errorCodeValid);
+      const uint8_t expected[] = {static_cast<uint8_t>(average ? 0xE1 : 0xC1),
+                                 static_cast<uint8_t>(average ? 0xF1 : 0xD1), 0x71};
+      TEST_ASSERT_EQUAL_UINT8(3, bus.count);
+      TEST_ASSERT_EQUAL_UINT8_ARRAY(expected, bus.controls, sizeof(expected));
+      TEST_ASSERT_EQUAL_UINT32(3, dev.totalSuccess());
+      TEST_ASSERT_EQUAL_UINT32(0, dev.totalFailures());
+    }
+  }
+}
+
+void test_checked_samples_short_circuit_low_or_high_failure_without_partial_value() {
+  const bool modes[] = {false, true};
+  for (bool average : modes) {
+    for (uint8_t byte = 0; byte < 2; ++byte) {
+      for (uint8_t fault = 0; fault < 4; ++fault) {
+        CheckedSampleBus bus;
+        EE871::EE871 dev;
+        TEST_ASSERT_TRUE(dev.begin(bus.config(3)).ok());
+        const uint8_t low = average ? 0xE1 : 0xC1;
+        const uint8_t high = average ? 0xF1 : 0xD1;
+        bus.faultControl = byte == 0 ? low : high;
+        bus.fault = fault;
+        if (fault == 0) bus.fake.nackNextReadMainCommand(bus.faultControl >> 4, 4);
+        bus.observe();
+        Co2ReadResult result;
+        const Status st = readCheckedSample(dev, average, result);
+        const Err expected = fault == 0 ? Err::NACK : fault == 1 ? Err::PEC_MISMATCH : Err::TIMEOUT;
+        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(expected), static_cast<uint8_t>(st.code));
+        assertSameStatus(st, result.valueReadStatus);
+        TEST_ASSERT_TRUE(result.valueReadAttempted);
+        TEST_ASSERT_FALSE(result.valueValid);
+        TEST_ASSERT_FALSE(result.ppmValid);
+        TEST_ASSERT_EQUAL_UINT16(0, result.ppm);
+        TEST_ASSERT_FALSE(result.statusReadAttempted);
+        TEST_ASSERT_FALSE(result.statusValid);
+        TEST_ASSERT_FALSE(result.errorCodeReadAttempted);
+        TEST_ASSERT_FALSE(result.errorCodeValid);
+        TEST_ASSERT_EQUAL_UINT32(0, bus.fake.controlCount(0x71));
+        TEST_ASSERT_EQUAL_UINT32(byte, dev.totalSuccess());
+        TEST_ASSERT_EQUAL_UINT32(1, dev.totalFailures());
+        TEST_ASSERT_EQUAL_UINT32(byte == 0 && fault == 0 ? 4 : 1,
+                                bus.fake.controlCount(low));
+        TEST_ASSERT_EQUAL_UINT32(byte == 0 ? 0 : fault == 0 ? 4 : 1,
+                                bus.fake.controlCount(high));
+        TEST_ASSERT_TRUE(bus.fake.masterSclReleased());
+        TEST_ASSERT_TRUE(bus.fake.masterSdaReleased());
+      }
+    }
+  }
+}
+
+void test_checked_samples_preserve_value_and_exact_status_transfer_failure() {
+  const bool modes[] = {false, true};
+  for (bool average : modes) {
+    for (uint8_t fault = 0; fault < 4; ++fault) {
+      CheckedSampleBus bus;
+      EE871::EE871 dev;
+      TEST_ASSERT_TRUE(dev.begin(bus.config()).ok());
+      bus.fake.setMv3(1234);
+      bus.fake.setMv4(1234);
+      bus.faultControl = 0x71;
+      bus.fault = fault;
+      if (fault == 0) bus.fake.nackNextReadMainCommand(cmd::MAIN_STATUS);
+      bus.observe();
+      Co2ReadResult result;
+      const Status st = readCheckedSample(dev, average, result);
+      const Err expected = fault == 0 ? Err::NACK : fault == 1 ? Err::PEC_MISMATCH : Err::TIMEOUT;
+      TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(expected), static_cast<uint8_t>(st.code));
+      assertSameStatus(st, result.statusReadStatus);
+      if (fault >= 2) {
+        TEST_ASSERT_EQUAL_INT32(bus.hal.bitTimeoutUs, st.detail);
+        TEST_ASSERT_EQUAL_STRING("Clock stretch timeout", st.msg);
+      }
+      TEST_ASSERT_TRUE(result.valueValid);
+      TEST_ASSERT_EQUAL_UINT16(1234, result.ppm);
+      TEST_ASSERT_TRUE(result.valueReadStatus.ok());
+      TEST_ASSERT_TRUE(result.statusReadAttempted);
+      TEST_ASSERT_FALSE(result.statusValid);
+      TEST_ASSERT_FALSE(result.ppmValid);
+      TEST_ASSERT_FALSE(result.errorCodeReadAttempted);
+      TEST_ASSERT_FALSE(result.errorCodeValid);
+      TEST_ASSERT_EQUAL_UINT8(3, bus.count);
+      TEST_ASSERT_EQUAL_UINT32(2, dev.totalSuccess());
+      TEST_ASSERT_EQUAL_UINT32(1, dev.totalFailures());
+      TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::DEGRADED), static_cast<uint8_t>(dev.state()));
+    }
+  }
+}
+
+void test_checked_samples_preserve_known_and_unknown_sensor_codes_without_health_failure() {
+  const bool modes[] = {false, true};
+  const uint8_t codes[] = {0, 1, 200, 201, 202, 99, 255};
+  for (bool average : modes) {
+    for (uint8_t code : codes) {
+      CheckedSampleBus bus;
+      EE871::EE871 dev;
+      TEST_ASSERT_TRUE(dev.begin(bus.config()).ok());
+      bus.fake.setStatus(cmd::STATUS_CO2_ERROR_MASK);
+      bus.fake.setMemory(cmd::CUSTOM_ERROR_CODE, code);
+      bus.observe();
+      Co2ReadResult result;
+      const Status st = readCheckedSample(dev, average, result);
+      TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::CO2_SENSOR_ERROR), static_cast<uint8_t>(st.code));
+      TEST_ASSERT_EQUAL_INT32(code, st.detail);
+      TEST_ASSERT_TRUE(result.valueValid);
+      TEST_ASSERT_FALSE(result.ppmValid);
+      TEST_ASSERT_TRUE(result.statusValid);
+      TEST_ASSERT_EQUAL_UINT8(cmd::STATUS_CO2_ERROR_MASK, result.statusByte);
+      TEST_ASSERT_TRUE(result.co2Error);
+      TEST_ASSERT_TRUE(result.errorCodeReadAttempted);
+      TEST_ASSERT_TRUE(result.errorCodeReadStatus.ok());
+      TEST_ASSERT_TRUE(result.errorCodeValid);
+      TEST_ASSERT_EQUAL_UINT8(code, result.errorCode);
+      const uint8_t expected[] = {static_cast<uint8_t>(average ? 0xE1 : 0xC1),
+                                 static_cast<uint8_t>(average ? 0xF1 : 0xD1), 0x71, 0x50, 0x51};
+      TEST_ASSERT_EQUAL_UINT8(5, bus.count);
+      TEST_ASSERT_EQUAL_UINT8_ARRAY(expected, bus.controls, sizeof(expected));
+      TEST_ASSERT_EQUAL_UINT32(5, dev.totalSuccess());
+      TEST_ASSERT_EQUAL_UINT32(0, dev.totalFailures());
+      TEST_ASSERT_TRUE(dev.lastError().ok());
+      TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::READY), static_cast<uint8_t>(dev.state()));
+    }
+  }
+}
+
+void test_checked_samples_skip_unadvertised_error_detail() {
+  const bool modes[] = {false, true};
+  for (bool average : modes) {
+    CheckedSampleBus bus;
+    bus.fake.setMemory(cmd::CUSTOM_OPERATING_FUNCTIONS,
+        static_cast<uint8_t>(bus.fake.memory(cmd::CUSTOM_OPERATING_FUNCTIONS) & ~cmd::FEATURE_ERROR_CODE));
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(dev.begin(bus.config()).ok());
+    TEST_ASSERT_FALSE(dev.hasErrorCode());
+    bus.fake.setStatus(cmd::STATUS_CO2_ERROR_MASK);
+    bus.observe();
+    Co2ReadResult result;
+    const Status st = readCheckedSample(dev, average, result);
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::CO2_SENSOR_ERROR), static_cast<uint8_t>(st.code));
+    TEST_ASSERT_EQUAL_INT32(cmd::STATUS_CO2_ERROR_MASK, st.detail);
+    TEST_ASSERT_TRUE(result.valueValid);
+    TEST_ASSERT_TRUE(result.statusValid);
+    TEST_ASSERT_TRUE(result.co2Error);
+    TEST_ASSERT_FALSE(result.ppmValid);
+    TEST_ASSERT_FALSE(result.errorCodeReadAttempted);
+    TEST_ASSERT_FALSE(result.errorCodeValid);
+    TEST_ASSERT_EQUAL_UINT8(3, bus.count);
+    TEST_ASSERT_EQUAL_UINT32(3, dev.totalSuccess());
+    TEST_ASSERT_EQUAL_UINT32(0, dev.totalFailures());
+  }
+}
+
+void test_checked_samples_keep_sensor_evidence_when_error_detail_transfer_fails() {
+  const bool modes[] = {false, true};
+  for (bool average : modes) {
+    for (uint8_t fault = 0; fault < 5; ++fault) {
+      CheckedSampleBus bus;
+      EE871::EE871 dev;
+      TEST_ASSERT_TRUE(dev.begin(bus.config(3)).ok());
+      bus.fake.setStatus(cmd::STATUS_CO2_ERROR_MASK);
+      bus.fake.setMemory(cmd::CUSTOM_ERROR_CODE, 202);
+      bus.faultControl = fault == 4 ? 0x50 : 0x51;
+      bus.fault = fault == 4 ? 2 : fault;
+      if (fault == 0) bus.fake.nackNextReadMainCommand(cmd::MAIN_CUSTOM_PTR, 4);
+      bus.observe();
+      Co2ReadResult result;
+      const Status st = readCheckedSample(dev, average, result);
+      const Err expected = fault == 0 ? Err::NACK : fault == 1 ? Err::PEC_MISMATCH : Err::TIMEOUT;
+      TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(expected), static_cast<uint8_t>(st.code));
+      assertSameStatus(st, result.errorCodeReadStatus);
+      TEST_ASSERT_TRUE(result.valueValid);
+      TEST_ASSERT_TRUE(result.statusValid);
+      TEST_ASSERT_TRUE(result.statusReadStatus.ok());
+      TEST_ASSERT_TRUE(result.co2Error);
+      TEST_ASSERT_TRUE(result.errorCodeReadAttempted);
+      TEST_ASSERT_FALSE(result.errorCodeValid);
+      TEST_ASSERT_EQUAL_UINT8(0, result.errorCode);
+      TEST_ASSERT_FALSE(result.ppmValid);
+      TEST_ASSERT_EQUAL_UINT32(fault == 4 ? 3 : 4, dev.totalSuccess());
+      TEST_ASSERT_EQUAL_UINT32(1, dev.totalFailures());
+      TEST_ASSERT_EQUAL_UINT32(0, dev.readRetryDiagnostics().controlNacks);
+      TEST_ASSERT_EQUAL_UINT32(0, dev.readRetryDiagnostics().retries);
+      TEST_ASSERT_EQUAL_UINT8(fault == 4 ? 4 : 5, bus.count);
+    }
+  }
+}
+
+void test_checked_samples_require_initialized_session_and_respect_offline_latch() {
+  const bool modes[] = {false, true};
+  for (bool average : modes) {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    Co2ReadResult result;
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
+                           static_cast<uint8_t>(readCheckedSample(dev, average, result).code));
+    TEST_ASSERT_TRUE(result.valueReadAttempted);
+    TEST_ASSERT_FALSE(result.valueValid);
+    TEST_ASSERT_FALSE(result.statusReadAttempted);
+    TEST_ASSERT_FALSE(result.errorCodeReadAttempted);
+    Config invalid = fake.makeConfig();
+    invalid.deviceAddress = 8;
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_CONFIG), static_cast<uint8_t>(dev.begin(invalid).code));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
+                           static_cast<uint8_t>(readCheckedSample(dev, average, result).code));
+    TEST_ASSERT_EQUAL_UINT32(0, fake.elapsedUs());
+
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake, 1).ok());
+    fake.setDevicePresent(false);
+    const Status absent = readCheckedSample(dev, average, result);
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NACK), static_cast<uint8_t>(absent.code));
+    TEST_ASSERT_FALSE(result.valueValid);
+    TEST_ASSERT_FALSE(result.statusReadAttempted);
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::OFFLINE), static_cast<uint8_t>(dev.state()));
+    fake.resetElapsed();
+    const uint32_t failures = dev.totalFailures();
+    const Status latched = readCheckedSample(dev, average, result);
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(absent.code), static_cast<uint8_t>(latched.code));
+    TEST_ASSERT_EQUAL_INT32(absent.detail, latched.detail);
+    TEST_ASSERT_EQUAL_STRING("Driver offline; call recover()", latched.msg);
+    assertSameStatus(latched, result.valueReadStatus);
+    TEST_ASSERT_EQUAL_UINT32(0, fake.elapsedUs());
+    TEST_ASSERT_EQUAL_UINT32(failures, dev.totalFailures());
+    TEST_ASSERT_EQUAL_UINT32(0, fake.controlCount(0x71));
+    fake.setDevicePresent(true);
+    TEST_ASSERT_TRUE(dev.recover().ok());
+    TEST_ASSERT_TRUE(readCheckedSample(dev, average, result).ok());
+    TEST_ASSERT_TRUE(result.ppmValid);
+  }
+}
+
+void test_checked_samples_clear_reused_result_after_success_and_failure() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+  Co2ReadResult result;
+  fake.setStatus(cmd::STATUS_CO2_ERROR_MASK);
+  fake.setMemory(cmd::CUSTOM_ERROR_CODE, 201);
+  TEST_ASSERT_FALSE(dev.readCo2FastSample(result).ok());
+  TEST_ASSERT_TRUE(result.errorCodeValid);
+  TEST_ASSERT_TRUE(result.errorCodeReadAttempted);
+  fake.setStatus(0);
+  fake.setMv4(4321);
+  TEST_ASSERT_TRUE(dev.readCo2AverageSample(result).ok());
+  TEST_ASSERT_EQUAL_UINT16(4321, result.ppm);
+  TEST_ASSERT_TRUE(result.ppmValid);
+  TEST_ASSERT_FALSE(result.co2Error);
+  TEST_ASSERT_EQUAL_UINT8(0, result.statusByte);
+  TEST_ASSERT_FALSE(result.errorCodeValid);
+  TEST_ASSERT_FALSE(result.errorCodeReadAttempted);
+  TEST_ASSERT_EQUAL_UINT8(0, result.errorCode);
+  TEST_ASSERT_TRUE(result.errorCodeReadStatus.ok());
+
+  fake.nackNextReadMainCommand(cmd::MAIN_MV3_LO);
+  TEST_ASSERT_FALSE(dev.readCo2FastSample(result).ok());
+  TEST_ASSERT_EQUAL_UINT16(0, result.ppm);
+  TEST_ASSERT_FALSE(result.valueValid);
+  TEST_ASSERT_FALSE(result.ppmValid);
+  TEST_ASSERT_FALSE(result.statusValid);
+  TEST_ASSERT_FALSE(result.statusReadAttempted);
+  TEST_ASSERT_TRUE(result.statusReadStatus.ok());
+  TEST_ASSERT_FALSE(result.errorCodeValid);
+  TEST_ASSERT_FALSE(result.errorCodeReadAttempted);
+
+  TEST_ASSERT_TRUE(dev.readCo2AverageSample(result).ok());
+  fake.nackNextReadMainCommand(cmd::MAIN_STATUS);
+  TEST_ASSERT_FALSE(dev.readCo2FastSample(result).ok());
+  TEST_ASSERT_TRUE(result.valueValid);
+  TEST_ASSERT_FALSE(result.ppmValid);
+  TEST_ASSERT_FALSE(result.statusValid);
+  TEST_ASSERT_FALSE(result.co2Error);
+  TEST_ASSERT_FALSE(result.errorCodeReadAttempted);
+  TEST_ASSERT_TRUE(dev.readCo2AverageSample(result).ok());
+  TEST_ASSERT_TRUE(result.valueReadStatus.ok());
+  TEST_ASSERT_TRUE(result.statusReadStatus.ok());
+  TEST_ASSERT_TRUE(result.ppmValid);
+
+  fake.setStatus(cmd::STATUS_CO2_ERROR_MASK);
+  fake.corruptNextCustomReadPec(cmd::CUSTOM_ERROR_CODE);
+  TEST_ASSERT_FALSE(dev.readCo2FastSample(result).ok());
+  TEST_ASSERT_TRUE(result.errorCodeReadAttempted);
+  TEST_ASSERT_FALSE(result.errorCodeReadStatus.ok());
+  TEST_ASSERT_FALSE(result.errorCodeValid);
+  fake.setStatus(0);
+  TEST_ASSERT_TRUE(dev.readCo2AverageSample(result).ok());
+  TEST_ASSERT_FALSE(result.errorCodeReadAttempted);
+  TEST_ASSERT_FALSE(result.errorCodeValid);
+  TEST_ASSERT_TRUE(result.errorCodeReadStatus.ok());
+}
+
+void test_checked_samples_reuse_frame_retry_limits_and_sticky_diagnostics() {
+  const bool modes[] = {false, true};
+  const uint8_t limits[] = {0, 3};
+  for (bool average : modes) {
+    for (uint8_t retries : limits) {
+      const uint8_t commands[] = {static_cast<uint8_t>(average ? cmd::MAIN_MV4_LO : cmd::MAIN_MV3_LO),
+                                  static_cast<uint8_t>(average ? cmd::MAIN_MV4_HI : cmd::MAIN_MV3_HI),
+                                  cmd::MAIN_STATUS};
+      for (uint8_t step = 0; step < 3; ++step) {
+        FakeE2Transport fake;
+        Config cfg = fake.makeConfig();
+        cfg.readNackRetries = retries;
+        EE871::EE871 dev;
+        TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+        fake.nackNextReadMainCommand(commands[step], retries == 0 ? 1 : 3);
+        Co2ReadResult result;
+        const Status st = readCheckedSample(dev, average, result);
+        TEST_ASSERT_EQUAL(retries != 0, st.ok());
+        TEST_ASSERT_EQUAL(retries != 0, result.ppmValid);
+        for (uint8_t index = 0; index < 3; ++index) {
+          const uint32_t count = index == step ? (retries == 0 ? 1U : 4U)
+              : retries != 0 || index < step ? 1U : 0U;
+          TEST_ASSERT_EQUAL_UINT32(count, fake.controlCount(cmd::makeControlRead(commands[index], 0)));
+        }
+        TEST_ASSERT_EQUAL_UINT32(retries == 0 ? step : 3U, dev.totalSuccess());
+        TEST_ASSERT_EQUAL_UINT32(retries == 0 ? 1U : 0U, dev.totalFailures());
+        const ReadRetryDiagnostics diagnostics = dev.readRetryDiagnostics();
+        TEST_ASSERT_EQUAL_UINT32(retries == 0 ? 1U : 3U, diagnostics.controlNacks);
+        TEST_ASSERT_EQUAL_UINT32(retries, diagnostics.retries);
+        TEST_ASSERT_EQUAL_UINT32(retries == 0 ? 0U : 1U, diagnostics.recovered);
+        TEST_ASSERT_EQUAL_UINT8(cmd::makeControlRead(commands[step], 0), diagnostics.lastControlByte);
+        TEST_ASSERT_EQUAL_UINT8(retries, diagnostics.lastRetriesUsed);
+        TEST_ASSERT_EQUAL(retries != 0, diagnostics.lastRecovered);
+      }
+    }
+  }
+}
+
+void test_checked_samples_preserve_latched_word_when_high_byte_is_retried() {
+  const bool modes[] = {false, true};
+  for (bool average : modes) {
+    FakeE2Transport fake;
+    Config cfg = fake.makeConfig();
+    cfg.readNackRetries = 3;
+    cfg.allowReadRetry = [](void* user) {
+      auto& bus = *static_cast<FakeE2Transport*>(user);
+      bus.setMv3(0xABCD);
+      bus.setMv4(0xABCD);
+      return true;
+    };
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+    fake.setMv3(0x1234);
+    fake.setMv4(0x1234);
+    const uint8_t low = average ? cmd::MAIN_MV4_LO : cmd::MAIN_MV3_LO;
+    const uint8_t high = average ? cmd::MAIN_MV4_HI : cmd::MAIN_MV3_HI;
+    fake.nackNextReadMainCommand(high, 3);
+    Co2ReadResult result;
+    TEST_ASSERT_TRUE(readCheckedSample(dev, average, result).ok());
+    TEST_ASSERT_EQUAL_UINT16(0x1234, result.ppm);
+    TEST_ASSERT_TRUE(result.ppmValid);
+    TEST_ASSERT_EQUAL_UINT32(1, fake.controlCount(cmd::makeControlRead(low, 0)));
+    TEST_ASSERT_EQUAL_UINT32(4, fake.controlCount(cmd::makeControlRead(high, 0)));
+    TEST_ASSERT_EQUAL_UINT32(1, fake.controlCount(0x71));
+    TEST_ASSERT_EQUAL_UINT8(cmd::makeControlRead(high, 0), dev.readRetryDiagnostics().lastControlByte);
+    TEST_ASSERT_EQUAL_UINT32(3, dev.totalSuccess());
+    TEST_ASSERT_EQUAL_UINT32(0, dev.totalFailures());
+  }
+}
+
+void test_checked_samples_do_not_replay_after_retry_veto_or_failed_cleanup() {
+  const uint8_t controls[] = {0xD1, 0x71};
+  const bool cleanupFailures[] = {false, true};
+  for (uint8_t control : controls) {
+    for (bool cleanupFailure : cleanupFailures) {
+      CheckedSampleBus bus;
+      Config cfg = bus.config(3);
+      if (!cleanupFailure) {
+        cfg.allowReadRetry = [](void*) { return false; };
+      }
+      EE871::EE871 dev;
+      TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+      bus.fake.nackNextReadMainCommand(control >> 4, 4);
+      if (cleanupFailure) {
+        bus.faultControl = control;
+        bus.fault = 4;
+      }
+      bus.observe();
+      Co2ReadResult result;
+      const Status st = dev.readCo2FastSample(result);
+      TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NACK), static_cast<uint8_t>(st.code));
+      TEST_ASSERT_FALSE(result.ppmValid);
+      TEST_ASSERT_EQUAL(control == 0x71, result.valueValid);
+      TEST_ASSERT_EQUAL(control == 0x71, result.statusReadAttempted);
+      TEST_ASSERT_FALSE(result.errorCodeReadAttempted);
+      const ReadRetryDiagnostics diagnostics = dev.readRetryDiagnostics();
+      TEST_ASSERT_EQUAL(cleanupFailure, diagnostics.cleanupBlocked);
+      TEST_ASSERT_EQUAL(!cleanupFailure, diagnostics.retryVetoed);
+      TEST_ASSERT_EQUAL_UINT32(0, diagnostics.retries);
+      TEST_ASSERT_EQUAL_UINT32(1, diagnostics.controlNacks);
+      if (cleanupFailure) {
+        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::TIMEOUT), static_cast<uint8_t>(diagnostics.lastCleanupError.code));
+        TEST_ASSERT_EQUAL_INT32(cfg.bitTimeoutUs, diagnostics.lastCleanupError.detail);
+      }
+      TEST_ASSERT_EQUAL_UINT32(1, bus.fake.controlCount(control));
+      TEST_ASSERT_EQUAL_UINT32(control == 0x71 ? 2U : 1U, dev.totalSuccess());
+      TEST_ASSERT_EQUAL_UINT32(1, dev.totalFailures());
+    }
+  }
+}
+
 void test_pec_mismatch_probe_is_raw_but_tracked_read_updates_health() {
   FakeE2Transport fake;
   EE871::EE871 dev;
@@ -2504,6 +3025,18 @@ int main() {
   RUN_TEST(test_bus_safety_checks_cover_sda_and_do_not_track_reset);
   RUN_TEST(test_start_requires_sda_high_to_low_edge);
   RUN_TEST(test_measurement_reads_cover_values_boundaries_and_high_byte_failure);
+  RUN_TEST(test_checked_samples_reject_sensor_error_while_raw_reads_still_succeed);
+  RUN_TEST(test_checked_samples_accept_full_word_range_in_value_then_status_order);
+  RUN_TEST(test_checked_samples_short_circuit_low_or_high_failure_without_partial_value);
+  RUN_TEST(test_checked_samples_preserve_value_and_exact_status_transfer_failure);
+  RUN_TEST(test_checked_samples_preserve_known_and_unknown_sensor_codes_without_health_failure);
+  RUN_TEST(test_checked_samples_skip_unadvertised_error_detail);
+  RUN_TEST(test_checked_samples_keep_sensor_evidence_when_error_detail_transfer_fails);
+  RUN_TEST(test_checked_samples_require_initialized_session_and_respect_offline_latch);
+  RUN_TEST(test_checked_samples_clear_reused_result_after_success_and_failure);
+  RUN_TEST(test_checked_samples_reuse_frame_retry_limits_and_sticky_diagnostics);
+  RUN_TEST(test_checked_samples_preserve_latched_word_when_high_byte_is_retried);
+  RUN_TEST(test_checked_samples_do_not_replay_after_retry_veto_or_failed_cleanup);
   RUN_TEST(test_pec_mismatch_probe_is_raw_but_tracked_read_updates_health);
   RUN_TEST(test_probe_validates_full_identity_without_health_side_effects);
   RUN_TEST(test_device_absent_probe_has_no_health_side_effect_tracked_read_fails);

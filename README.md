@@ -11,6 +11,7 @@ examples, and HIL validation evidence.
 - **Health monitoring** - READY/DEGRADED/OFFLINE tracking
 - **Deterministic behavior** - bounded loops, explicit timeouts
 - **Managed synchronous** - blocking transfers with spec-compliant limits
+- **Explicit checked samples** - MV3/MV4 evidence followed by sensor status
 - **Feature guards** - cached operating capabilities and on-demand calibration checks
 - **Dirty/resync diagnostics** - uncertain single- and multi-byte writes are visible
 - **HIL evidence tooling** - serial runner emits transcript, JSON, and Markdown reports
@@ -182,12 +183,54 @@ void loop() {
 This quick start checks transport setup, the EE871 group/subgroup, CO2
 capability, and a complete, valid feature-cache read. `readCo2Fast()` and
 `readCo2Average()` are raw MV3/MV4 reads: they do not check status, warm-up,
-freshness, or the product-specific valid ppm range. A sampling application
-should wait for its warm-up policy, read the selected measured value first,
-read `readStatus()` second, reject status bit 3 via `hasCo2Error()`, and apply
-its own range/staleness policy. Reading status can trigger the next measurement
-and reset the interval counter only when the global interval exceeds 15 s and
-the previous value is older than 10 s (AN1611-1 sections 4 and 10).
+freshness, or the product-specific valid ppm range. They retain their raw
+contract, including successful transfers while sensor status reports an error.
+
+For explicit value/status composition, use `readCo2FastSample()` or
+`readCo2AverageSample()`. Each reads the value low byte then high byte, followed
+by status. It reads error detail only when status bit 3 is set and cached
+capabilities advertise the error-code register. A failed value read stops the
+procedure before the side-effecting status read. Reading status can trigger
+the next measurement and reset the interval counter only when the global
+interval exceeds 15 s and the previous value is older than 10 s (AN1611-1
+sections 4 and 10). Value-before-status ordering does not prove that a fresh
+conversion occurred.
+
+```cpp
+// The owner applies warm-up, cadence and freshness policy before this call.
+EE871::Co2ReadResult sample;
+const EE871::Status checked = sensor.readCo2AverageSample(sample);
+if (!checked.ok()) {
+  // sample.valueValid can still preserve a raw word as diagnostic evidence.
+  // sample.co2Error remains true if a later error-detail transfer failed.
+} else {
+  // Example application policy only: this installation accepts 400..10000 ppm.
+  static constexpr uint16_t APP_MIN_PPM = 400;
+  static constexpr uint16_t APP_MAX_PPM = 10000;
+  const bool applicationRangeValid =
+      sample.ppm >= APP_MIN_PPM && sample.ppm <= APP_MAX_PPM;
+  if (applicationRangeValid) {
+    // Consume sample.ppm under the owner's freshness/accuracy requirements.
+  }
+}
+```
+
+`Co2ReadResult` is replaced on every call. `valueValid` means the complete raw
+word was transferred; `ppmValid` means the checked procedure succeeded with
+clear sensor status. The driver accepts the entire 16-bit word, including 0
+and 65535, without imposing a product range. Checked success certifies only
+successful requested transfers and clear sensor status; warm-up, freshness,
+concentration accuracy, product model, range and cadence remain application
+policy.
+
+The result retains the raw value, status byte and optional error code, with
+explicit validity and attempted flags and exact per-step `Status` values.
+Default OK status fields do not prove an unattempted step ran. Status or
+error-detail transfer failure returns its exact code/detail while preserving
+earlier evidence. A reported sensor error returns `CO2_SENSOR_ERROR` when
+optional detail succeeds or is unsupported; known and unknown raw codes remain
+visible. If detail fails, its transfer status is returned separately from the
+retained sensor-status evidence.
 
 `begin()` and `recover()` reject reserved bits in feature bytes `0x07..0x09`
 before installing the cache. `readOperatingMode()` rejects active mode bits
@@ -219,7 +262,12 @@ During ordinary reads, validating returned metadata adds no health event;
 preceding transfers remain tracked. `probe()` uses raw E2 reads and is diagnostic-only; normal
 reads/writes use tracked wrappers. Health counts tracked bus transfers rather
 than application sampling cycles: a failed low byte short-circuits a 16-bit
-read before its high byte is attempted. `BUSY` means auto adjustment is already
+read before its high byte is attempted. Checked sample helpers add no aggregate
+health event: clean value/status uses three successful tracked reads, and
+supported error detail adds a pointer write and read. `CO2_SENSOR_ERROR` is a
+sensor-domain result and does not add a transport failure. Existing retry
+rules and sticky diagnostics apply to each frame, without replaying the whole
+sample. `BUSY` means auto adjustment is already
 running and must become idle before the requested operation. `IN_PROGRESS`
 remains reserved and neutral for health.
 `Config::offlineThreshold = 0` is normalized to one failed operation. Failed
@@ -392,7 +440,8 @@ on the same `EE871` instance recursively.
 - Diagnostics: `probe`, `recover`, `resyncPersistentConfig`, `busReset`,
   `checkBusIdle`, `persistentConfigDirty`, `persistentConfigDirtyError`
 - Identification: `readGroup`, `readSubgroup`, `readFirmwareVersion`, `readE2SpecVersion`
-- Measurements: `readStatus`, `readCo2Fast`, `readCo2Average`, `readErrorCode`
+- Measurements: `readStatus`, raw `readCo2Fast` / `readCo2Average`, checked
+  `readCo2FastSample` / `readCo2AverageSample`, `readErrorCode`
 - Custom memory/config: `customRead`, `customWrite`, `writeMeasurementInterval`, bus address, filter, operating mode, auto-adjust, calibration helpers
 - Low-level command helpers: `cmd::makeControlRead`,
   `cmd::makeControlWrite`, `cmd::isReadMainCommandSupported`, and
@@ -415,6 +464,13 @@ on the same `EE871` instance recursively.
 The `sniff` command in both diagnostic CLIs decodes synchronously inside the
 transport callbacks. Its console output perturbs E2 timing, so do not use
 sniffer-enabled transactions as timing or protocol-stability evidence.
+
+Both CLIs expose explicit `co2fastsample` and `co2avgsample` diagnostics with
+per-step evidence. These commands read status and can trigger the next
+measurement under the conditions above. Existing `read`, `co2fast` and
+`co2avg` commands remain raw; automated HIL/soak plans do not add checked reads.
+See the [manual checked-command guide](docs/EE871_E2_HIL_RUNNER.md#manual-checked-co2-diagnostics)
+and [native IDF example guide](examples/idf/basic_bringup/README.md).
 
 ## Building And Validation
 

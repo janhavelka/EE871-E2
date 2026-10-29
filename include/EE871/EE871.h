@@ -38,6 +38,31 @@ struct ReadRetryDiagnostics {
   bool lastRecovered = false; ///< Latest NACK-bearing frame succeeded after a retry.
 };
 
+/// @brief Fixed-size evidence from an explicit checked MV3/MV4 sample read.
+///
+/// A step is attempted when its existing typed API is invoked, even if a
+/// precondition prevents bus traffic. An unattempted step's default OK Status
+/// does not indicate success. Valid fields retain earlier evidence if a later
+/// step fails. Every sample call replaces this entire result, including on
+/// precondition failure. No field certifies warm-up, freshness, accuracy, or
+/// application/product range; the application owns those policies.
+struct Co2ReadResult {
+  uint16_t ppm = 0;          ///< Raw word; use as evidence only when valueValid.
+  bool valueValid = false;  ///< Both value-byte transfers succeeded, including PEC and STOP.
+  bool ppmValid = false;    ///< Complete checked procedure succeeded with clear CO2 status.
+  uint8_t statusByte = 0;   ///< Raw status byte; meaningful only when statusValid.
+  bool statusValid = false; ///< Status transfer succeeded, including PEC and STOP.
+  bool co2Error = false;    ///< Status bit3; meaningful only when statusValid.
+  uint8_t errorCode = 0;    ///< Raw 0xC1 code, including unknown codes; use only when errorCodeValid.
+  bool errorCodeValid = false; ///< Supported error-detail read succeeded.
+  bool valueReadAttempted = false; ///< Requested raw MV3/MV4 API was invoked.
+  bool statusReadAttempted = false; ///< Side-effecting status API was invoked after valid value.
+  bool errorCodeReadAttempted = false; ///< Error-detail API was invoked for an advertised status error.
+  Status valueReadStatus = Status::Ok(); ///< Exact value-read result, if attempted.
+  Status statusReadStatus = Status::Ok(); ///< Exact status-read result, if attempted.
+  Status errorCodeReadStatus = Status::Ok(); ///< Exact error-detail result, if attempted.
+};
+
 /// @brief Snapshot of current configuration, cached feature flags, and driver health.
 ///
 /// Snapshot access does not touch the E2 bus. The persistent dirty fields mirror
@@ -91,7 +116,9 @@ struct SettingsSnapshot {
 /// A 16-bit read stops after a failed low-byte frame; a retried high byte does
 /// not re-read the low byte or disturb its sensor-side latch.
 ///
-/// Read outputs are valid only when the returned Status is OK. Raw byte and
+/// Ordinary read outputs are valid only when the returned Status is OK. Checked
+/// sample results instead retain per-step evidence with explicit validity flags.
+/// Raw byte and
 /// buffer reads may change their outputs before a later PEC, STOP, or transfer
 /// failure; methods that preserve outputs on failure document that separately.
 class EE871 {
@@ -687,6 +714,41 @@ public:
   /// @return Status::Ok() when MV4 low/high reads succeed.
   Status readCo2Average(uint16_t& ppm);
 
+  /// Read a checked fast-response MV3 sample, explicitly including sensor status.
+  ///
+  /// Reads the raw value low byte then high byte through readCo2Fast(), followed
+  /// by readStatus(). A failed value read short-circuits without reading status.
+  /// When status bit3 is set and hasErrorCode() is true, reads error detail via
+  /// readErrorCode(); unknown codes remain visible and are still sensor errors.
+  /// The status read can trigger the next measurement and reset its interval
+  /// counter only when the global interval is >15 s and the previous value is
+  /// >10 s old (AN1611-1 sections 4 and 10). Value-before-status ordering does
+  /// not prove a fresh conversion. No warm-up, freshness, accuracy or ppm range
+  /// validation is performed; applications own cadence and validity policy.
+  ///
+  /// Uses existing bounded tracked transfers and their configured narrow NACK
+  /// retries; adds no aggregate health event or helper-level replay. A sensor
+  /// error alone is independent of transport health. Blocking, task-context
+  /// only; externally serialize access as for all other E2 operations.
+  /// @param[out] out Replaced with per-step evidence, including on failure.
+  /// @return Exact first failing transfer/precondition Status, or
+  /// CO2_SENSOR_ERROR for status bit3 after successful requested transfers
+  /// (detail is the error code when valid, otherwise the status byte), or OK
+  /// with ppmValid true. Error-detail failure takes return precedence while
+  /// out.co2Error retains the sensor failure separately.
+  Status readCo2FastSample(Co2ReadResult& out);
+
+  /// Read a checked averaged MV4 sample, explicitly including sensor status.
+  ///
+  /// Uses readCo2Average() for the raw value, then the same procedure, evidence,
+  /// conditional status-trigger side effect, validity limits and error/health
+  /// semantics as readCo2FastSample(). A clean result accepts the full uint16_t
+  /// word range; product-specific range checks belong to the caller.
+  /// @param[out] out Replaced with per-step evidence, including on failure.
+  /// @return Exact first failing transfer/precondition Status, CO2_SENSOR_ERROR,
+  /// or OK with ppmValid true. See readCo2FastSample() for detail semantics.
+  Status readCo2AverageSample(Co2ReadResult& out);
+
   // =========================================================================
   // Bus Safety
   // =========================================================================
@@ -708,6 +770,8 @@ public:
   Status checkBusIdle();
 
 private:
+  Status _readCo2Sample(bool fast, Co2ReadResult& out);
+
   // =========================================================================
   // Tracked/Raw Transport Wrappers
   // =========================================================================

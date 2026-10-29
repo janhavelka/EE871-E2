@@ -26,7 +26,8 @@ enum class Err : uint8_t {
   BUS_STUCK,                 ///< Bus line cannot reach a commanded/idle level
   ALREADY_INITIALIZED,       ///< begin() called without end()
   OUT_OF_RANGE,              ///< Value out of valid range
-  NOT_SUPPORTED              ///< Unsupported identity/feature, missing capability, or malformed support flags
+  NOT_SUPPORTED,             ///< Unsupported identity/feature, missing capability, or malformed support flags
+  CO2_SENSOR_ERROR           ///< Checked sample has status bit3 set; inspect its sensor/error-code evidence
 };
 
 /// @brief Status structure returned by all fallible operations.

@@ -42,6 +42,38 @@ above on current HEAD; see the [prompt index](prompts/README.md) for current
 per-finding outcomes. Implementation SHA and exact terminal CI evidence belong
 in the implementation handoff, not this commit's own contents.
 
+## CAP-1 disposition after the audit — 2026-10-29
+
+**CAP-1 is implemented as an additive checked sample API.**
+`readCo2FastSample()` and `readCo2AverageSample()` share one procedure owned by
+the existing driver: complete raw value first, status second, and supported
+error detail only for a CO2 status error. They use the current raw/typed paths,
+preserving protocol, narrow frame retries, low-byte latching and tracked health
+ownership. Raw reads still succeed when their transfers succeed, even if the
+sensor status would report an error; that behavior was intentional.
+
+Fixed-size `Co2ReadResult` replaces its evidence on each call and records raw
+value validity separately from checked validity, with status/error validity,
+attempted flags and exact step statuses. Later failures retain earlier
+evidence. Appended `CO2_SENSOR_ERROR` separates sensor rejection from transport
+failure without renumbering existing errors; unknown raw detail remains
+visible. There is no inherited 50,000 ppm limit. Checked success makes no
+warm-up, freshness, accuracy, product-model or application-range guarantee.
+
+Manual `co2fastsample` / `co2avgsample` callers in both diagnostic CLIs expose
+that contract without changing live automated plans.
+`test_checked_samples_reject_sensor_error_while_raw_reads_still_succeed`
+demonstrates intentional raw success and checked rejection for the same sensor
+error. Native fake regressions cover ordering, boundaries, transfer failures,
+unsupported detail, sensor codes,
+preconditions, retry decisions, health deltas and result reuse. See the
+[prompt index](prompts/README.md) for current regression references and the
+implementation handoff for exact local/CI results. No hardware qualification,
+persistent sensor writes or branch retirement is claimed.
+
+The remaining decision and tables preserve the historical audit baseline;
+their then-missing CAP-1 description is superseded by this disposition.
+
 ## Decision
 
 [Executable software prompts](prompts/README.md) now map HIL-1 and CAP-1..5 to

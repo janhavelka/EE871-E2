@@ -1,12 +1,22 @@
 # Prompt 02 — Add explicit checked CO2 samples
 
-**Finding:** CAP-1. **Status: NOT IMPLEMENTED.** Optional additive capability.
+**Finding:** CAP-1. **Status: IMPLEMENTED.** Selected additive capability.
 Invoking this prompt selects implementation of checked sample APIs and their
 native/Arduino diagnostic callers. The current raw API is intentionally raw;
 do not describe its lack of status checking as a regression. Complete the
 selected software feature rather than asking again whether to add it. If an
 equivalent feature already exists, verify and use it instead of duplicating it.
 No hardware tests, serial access or physical calibration are in scope.
+
+Implemented on 2026-10-29 with explicit `readCo2FastSample()` and
+`readCo2AverageSample()` APIs, fixed-size per-step evidence, appended
+`CO2_SENSOR_ERROR`, and manual Arduino/native IDF diagnostics. Raw APIs,
+frame-level retry rules and transport-health ownership are preserved. Checked
+success means successful requested transfers and clear sensor status; the
+application still owns warm-up, freshness, accuracy and range. The execution
+handoff records actual commands/results, final SHA and exact terminal CI URL;
+no hardware qualification or release is claimed. The instructions below remain
+the selected scope and acceptance contract.
 
 ## Inspect and reproduce the actual contract gap
 

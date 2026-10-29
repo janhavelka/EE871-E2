@@ -15,6 +15,25 @@ feature/capability inspection, configuration/calibration helpers, register/raw
 access, diagnostics, bus reset, trace, self-test, stress, and mixed stress
 workflows.
 
+`co2fastsample` and `co2avgsample` explicitly call the checked MV3/MV4 APIs.
+They report the raw word and its validity, checked validity, status/error-code
+evidence, and each step's attempted flag and exact transfer status. A value
+read failure stops before status; a later failure preserves earlier evidence.
+Sensor status bit 3 rejects the checked sample without creating a transport
+health failure. Error detail is read only when advertised and unknown codes
+remain visible. These commands are manual diagnostics and are not added to
+automated HIL/soak plans.
+
+Checked success means successful requested transfers and clear sensor status.
+It does not establish warm-up, freshness, concentration accuracy, application
+range or product model. Status is read after the value and can trigger the
+next measurement and reset its interval counter only when the global interval
+is greater than 15 s and the previous value is older than 10 s. This ordering
+does not prove a new conversion. The existing `read`, `co2fast` and `co2avg`
+commands remain raw. See the
+[manual command guide](../../../docs/EE871_E2_HIL_RUNNER.md#manual-checked-co2-diagnostics)
+for evidence semantics.
+
 The `sniff` command prints decoded edges synchronously from the transport path.
 This perturbs E2 timing; sniffer-enabled traffic is diagnostic only and is not
 valid timing or protocol-stability evidence.

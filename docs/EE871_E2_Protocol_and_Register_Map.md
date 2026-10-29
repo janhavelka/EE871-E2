@@ -533,6 +533,11 @@ transport, validation, capability, and protocol failures:
 - Protocol/custom memory: `readControlByte()`, `readU16()`,
   `setCustomPointer()`, `customRead()`, and `customWrite()`.
 - Raw measurements: `readCo2Fast()` for MV3 and `readCo2Average()` for MV4.
+- Checked measurements: `readCo2FastSample()` / `readCo2AverageSample()` retain
+  per-step evidence in `Co2ReadResult`, reading value before side-effecting
+  status and optional supported error detail. `CO2_SENSOR_ERROR` rejects sensor
+  status independently of transport health. Checked success does not establish
+  warm-up, freshness, accuracy or a product/application range.
 - Status/error: `readStatus()`, `hasCo2Error()`, and `readErrorCode()`.
 - Lifecycle/recovery: `begin()`, `tick()`, `end()`, `probe()`, `recover()`,
   `busReset()`, and `checkBusIdle()`.

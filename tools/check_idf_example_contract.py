@@ -47,9 +47,17 @@ IDF_REQUIRED_FRAGMENTS = [
     "recover",
     "busReset",
     "checkBusIdle",
+    "readCo2FastSample",
+    "readCo2AverageSample",
+    "Checked sample valid:",
+    "Raw CO2:",
+    "Sensor status:",
+    "CO2_SENSOR_ERROR",
 ]
 
 IDF_REQUIRED_PATTERNS = {
+    "checked fast command dispatch": r'std::strcmp\(\s*trimmed\s*,\s*"co2fastsample"\s*\)\s*==\s*0\s*\)\s*\{\s*printCo2Sample\(true\)',
+    "checked average command dispatch": r'std::strcmp\(\s*trimmed\s*,\s*"co2avgsample"\s*\)\s*==\s*0\s*\)\s*\{\s*printCo2Sample\(false\)',
     "dirty command dispatch": r'std::strcmp\(\s*trimmed\s*,\s*"dirty"\s*\)\s*==\s*0',
     "resync command dispatch": r'std::strcmp\(\s*trimmed\s*,\s*"resync"\s*\)\s*==\s*0',
     "dirty accessor": r"persistentConfigDirty",
@@ -65,6 +73,8 @@ IDF_REQUIRED_PATTERNS = {
 }
 
 PROCESS_COMMAND_PATTERNS = {
+    "checked fast command dispatch",
+    "checked average command dispatch",
     "dirty command dispatch",
     "resync command dispatch",
     "resync before after output",

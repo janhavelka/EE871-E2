@@ -1,8 +1,8 @@
 # EE871-E2 software implementation prompts
 
-**Status: PARTIALLY IMPLEMENTED.** Prompt 01 implements HIL-1; prompts 02..06
-remain NOT IMPLEMENTED and were not selected with this fix. These executable
-instructions were prepared on 2026-10-25 after source/test review of clean,
+**Status: PARTIALLY IMPLEMENTED.** Prompt 01 implements HIL-1 and prompt 02
+implements CAP-1. Prompts 03..06 remain NOT IMPLEMENTED and were not selected.
+These executable instructions were prepared on 2026-10-25 after source/test review of clean,
 fetched `main` at `d37b586e35e553af2a65197282d6d478e554733b`.
 The underlying [retained branch audit](../RETAINED_BRANCH_AUDIT.md) compares
 implementation at `43168fcc60616cb62daf28224fdbf22864849bb9` with historical
@@ -15,7 +15,7 @@ to overwrite subsequent fixes.
 | Finding | Prompt | Selection | State |
 | --- | --- | --- | --- |
 | HIL-1: stale clean state admits persistent writes after failed preflight | [01 — Persistent HIL admission](01_persistent_hil_admission.md) | Required defect correction; host-side implementation only. | IMPLEMENTED: current target baseline and fresh clean diagnostics gate every destructive send; campaign failures remain latched. |
-| CAP-1: checked value/status sample result | [02 — Checked CO2 samples](02_checked_co2_samples.md) | Optional additive feature; invoking this prompt selects the feature. Raw API absence is not a bug. | NOT IMPLEMENTED |
+| CAP-1: checked value/status sample result | [02 — Checked CO2 samples](02_checked_co2_samples.md) | Selected additive feature; raw APIs retain their existing contract. | IMPLEMENTED: explicit MV3/MV4 then status/optional detail, per-step evidence, manual Arduino/IDF callers; no product-range or freshness claim. |
 | CAP-2: cooperative long waits | [03 — Cooperative maintenance waits](03_cooperative_maintenance_waits.md) | Optional additive callbacks; invoking this prompt selects the feature. Current waits are bounded. | NOT IMPLEMENTED |
 | CAP-4: richer persistent operation evidence/admission | [04 — Persistent operation evidence](04_persistent_operation_evidence.md) | Optional fixed-size evidence and application admission; invoking it selects the feature. Current dirty tracking already exists. | NOT IMPLEMENTED |
 | CAP-3: programmatic operation timing bounds | [05 — Requested-delay bounds](05_requested_delay_bounds.md) | Optional additive pure API and real example consumer; invoking it selects the feature. Current manual bounds are not automatically incorrect. | NOT IMPLEMENTED |
@@ -42,6 +42,23 @@ These are host tests, not physical qualification. Requested-value success does
 not restore the baseline, and uncertain writes require operator-owned
 reconciliation outside the runner.
 
+Prompt 02 adds `readCo2FastSample()` / `readCo2AverageSample()` and fixed-size
+`Co2ReadResult`, preserving raw methods and their retry/health behavior.
+The fake demonstrates raw success with status bit 3 set, then checked rejection
+with retained value evidence in
+`test_checked_samples_reject_sensor_error_while_raw_reads_still_succeed`.
+`test_checked_samples_accept_full_word_range_in_value_then_status_order`
+checks both value kinds and boundaries;
+`test_checked_samples_keep_sensor_evidence_when_error_detail_transfer_fails`
+checks retained status evidence and exact detail failure. Native coverage also
+includes value/status failures, unsupported detail, sensor codes, OFFLINE/UNINIT,
+result reuse and frame-retry decisions. The Arduino and native IDF CLIs expose
+manual `co2fastsample` / `co2avgsample`; automated hardware plans are unchanged.
+Checked success means successful requested transfers and clear sensor status,
+with application-owned warm-up, freshness, accuracy and range policy.
+Current implementation checks and exact CI evidence are recorded in its handoff;
+no hardware qualification is claimed.
+
 For the required defect fix and closeout, execute **01, then 06**. For the optional full
 software feature set, execute **01 → 02 → 03 → 04 → 05 → 06**. Prompt 05 must
 describe the operations actually present after any selected optional work.
@@ -65,9 +82,9 @@ rows into software implementation requirements or claim host tests close them.
 
 ## Preparation code audit supporting the prompts
 
-The following observations describe the preparation baseline above. HIL-1 is
-superseded by the implementation disposition and regression evidence in the
-coverage table; the optional capability observations remain unchanged.
+The following observations describe the preparation baseline above. HIL-1 and
+CAP-1 are superseded by the implementation dispositions and regression evidence
+in the coverage table; other optional capability observations remain unchanged.
 
 - HIL `main()` continues after a prompt-framed failure and stops only on a
   framing timeout. `update_state()` keeps older parsed values and clean flags;

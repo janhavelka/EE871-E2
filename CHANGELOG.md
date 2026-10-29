@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Explicit `readCo2FastSample()` / `readCo2AverageSample()` helpers read MV3/MV4
+  low/high, then status, then supported error detail only for a CO2 status
+  error. Fixed-size `Co2ReadResult` retains raw evidence, validity, attempted
+  flags and exact per-step statuses; a failed value read skips status entirely.
+  Appended `Err::CO2_SENSOR_ERROR` preserves existing error values and separates
+  sensor status from transport health. Existing raw APIs and frame retry rules
+  are unchanged. Checked success does not certify warm-up, freshness, accuracy
+  or product/application range; all 16-bit values remain representable.
+- Manual `co2fastsample` / `co2avgsample` diagnostics in both Arduino and native
+  ESP-IDF CLIs expose the checked procedure and evidence. Existing automated
+  HIL/soak plans keep their command sequences and measurement side effects.
+
 ### Fixed
 
 - HIL persistent-write admission requires fresh clean diagnostics and a complete

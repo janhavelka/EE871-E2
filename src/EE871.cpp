@@ -833,6 +833,51 @@ Status EE871::readCo2Average(uint16_t& ppm) {
   return readU16(cmd::MAIN_MV4_LO, cmd::MAIN_MV4_HI, ppm);
 }
 
+Status EE871::readCo2FastSample(Co2ReadResult& out) {
+  return _readCo2Sample(true, out);
+}
+
+Status EE871::readCo2AverageSample(Co2ReadResult& out) {
+  return _readCo2Sample(false, out);
+}
+
+Status EE871::_readCo2Sample(bool fast, Co2ReadResult& out) {
+  out = Co2ReadResult{};
+  out.valueReadAttempted = true;
+  out.valueReadStatus = fast ? readCo2Fast(out.ppm) : readCo2Average(out.ppm);
+  if (!out.valueReadStatus.ok()) {
+    return out.valueReadStatus;
+  }
+  out.valueValid = true;
+
+  uint8_t status = 0;
+  out.statusReadAttempted = true;
+  out.statusReadStatus = readStatus(status);
+  if (!out.statusReadStatus.ok()) {
+    return out.statusReadStatus;
+  }
+  out.statusByte = status;
+  out.statusValid = true;
+  out.co2Error = hasCo2Error(status);
+  if (out.co2Error) {
+    if (hasErrorCode()) {
+      uint8_t code = 0;
+      out.errorCodeReadAttempted = true;
+      out.errorCodeReadStatus = readErrorCode(code);
+      if (!out.errorCodeReadStatus.ok()) {
+        return out.errorCodeReadStatus;
+      }
+      out.errorCode = code;
+      out.errorCodeValid = true;
+    }
+    return Status::Error(Err::CO2_SENSOR_ERROR, "CO2 sensor status error",
+                         out.errorCodeValid ? out.errorCode : out.statusByte);
+  }
+
+  out.ppmValid = true;
+  return Status::Ok();
+}
+
 // ============================================================================
 // Firmware / Spec Version
 // ============================================================================

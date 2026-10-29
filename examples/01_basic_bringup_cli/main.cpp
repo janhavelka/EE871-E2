@@ -258,6 +258,7 @@ const char* errToStr(EE871::Err err) {
     case Err::ALREADY_INITIALIZED: return "ALREADY_INITIALIZED";
     case Err::OUT_OF_RANGE:        return "OUT_OF_RANGE";
     case Err::NOT_SUPPORTED:       return "NOT_SUPPORTED";
+    case Err::CO2_SENSOR_ERROR:    return "CO2_SENSOR_ERROR";
     default:                       return "UNKNOWN";
   }
 }
@@ -347,6 +348,41 @@ void printStatus(const EE871::Status& st) {
   if (st.msg && st.msg[0]) {
     Serial.printf("  Message: %s%s%s\n", LOG_COLOR_YELLOW, st.msg, LOG_COLOR_RESET);
   }
+}
+
+void printSampleStep(const char* label, bool attempted, bool valid, const EE871::Status& st) {
+  Serial.printf("  %s: attempted=%s, valid=%s\n", label,
+                attempted ? "yes" : "no", valid ? "yes" : "no");
+  if (attempted) {
+    Serial.printf("  %s result: %s (code=%u, detail=%ld)\n", label, errToStr(st.code),
+                  static_cast<unsigned>(st.code), static_cast<long>(st.detail));
+    Serial.printf("  %s message: %s\n", label, st.msg ? st.msg : "");
+  }
+}
+
+void printCo2Sample(bool fast) {
+  EE871::Co2ReadResult sample;
+  const auto st = fast ? device.readCo2FastSample(sample) : device.readCo2AverageSample(sample);
+  Serial.printf("=== Checked CO2 Sample (%s) ===\n", fast ? "MV3" : "MV4");
+  printStatus(st);
+  Serial.printf("  Checked sample valid: %s\n", sample.ppmValid ? "yes" : "no");
+  printSampleStep("Value read", sample.valueReadAttempted, sample.valueValid, sample.valueReadStatus);
+  if (sample.valueValid) {
+    Serial.printf("  Raw CO2: %u ppm\n", static_cast<unsigned>(sample.ppm));
+  }
+  printSampleStep("Status read", sample.statusReadAttempted, sample.statusValid, sample.statusReadStatus);
+  if (sample.statusValid) {
+    Serial.printf("  Sensor status: 0x%02X\n", static_cast<unsigned>(sample.statusByte));
+    Serial.printf("  CO2 error: %s\n", sample.co2Error ? "yes" : "no");
+  }
+  printSampleStep("Error code read", sample.errorCodeReadAttempted,
+                  sample.errorCodeValid, sample.errorCodeReadStatus);
+  if (sample.errorCodeValid) {
+    Serial.printf("  Error code: %u (%s)\n", static_cast<unsigned>(sample.errorCode),
+                  EE871::cmd::co2ErrorCodeName(sample.errorCode));
+  }
+  Serial.printf("  Status may trigger next measurement when interval >15 s and prior value >10 s old.\n");
+  Serial.printf("  Checked success does not certify warm-up, freshness or application range.\n");
 }
 
 void printPersistentDirtyFields(const EE871::SettingsSnapshot& settings) {
@@ -502,9 +538,11 @@ void printHelp() {
 
   cli::printHelpSection("Device Commands");
   cli::printHelpItem("id", "Read group/subgroup/available bits");
-  cli::printHelpItem("status", "Read status byte (starts measurement)");
+  cli::printHelpItem("status", "Read status byte (may trigger measurement)");
   cli::printHelpItem("co2fast", "Read MV3 (fast response)");
   cli::printHelpItem("co2avg", "Read MV4 (averaged)");
+  cli::printHelpItem("co2fastsample", "Checked MV3 then status (may trigger measurement)");
+  cli::printHelpItem("co2avgsample", "Checked MV4 then status (may trigger measurement)");
   cli::printHelpItem("error", "Read error code (if status indicates error)");
   cli::printHelpItem("reg read <addr>", "Read custom register (0x00..0xFF)");
   cli::printHelpItem("reg write <addr> <value>", "Write persistent custom register (bench only)");
@@ -1034,6 +1072,10 @@ void processCommand(const String& cmd) {
       }
       printPersistentDirtySummaryIfDirty();
     }
+  } else if (trimmed == "co2fastsample") {
+    printCo2Sample(true);
+  } else if (trimmed == "co2avgsample") {
+    printCo2Sample(false);
   } else if (trimmed == "co2fast") {
     uint16_t ppm = 0;
     auto st = device.readCo2Fast(ppm);

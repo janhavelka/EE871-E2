@@ -83,6 +83,48 @@ before accepting a prompt. Successful value reads must include their value
 line; a fully parsed error takes precedence over a missing success value.
 A framing timeout stops the remaining plan to prevent shifted responses.
 
+## Manual Checked CO2 Diagnostics
+
+The Arduino and native ESP-IDF bring-up CLIs both provide these explicit
+commands:
+
+```text
+co2fastsample
+co2avgsample
+```
+
+They read the selected MV3/MV4 low byte, high byte, then status. Only a CO2
+status error with advertised error-code support adds the custom-pointer update
+and error-code read. A failed value read stops before status. These commands
+are not included in default, extended, niche or soak plans; existing `read`,
+`co2fast` and `co2avg` remain raw value commands.
+
+The `Checked CO2 Sample (MV3)` or `(MV4)` section reports the overall `Status`
+and `Message`, then evidence for each step:
+
+| Output | Meaning |
+| --- | --- |
+| `Checked sample valid: yes/no` | Successful requested transfers and clear sensor status. |
+| `Value read: attempted=..., valid=...` | Whether the raw word procedure ran and completed; `Raw CO2: N ppm` appears only when valid. |
+| `Status read: attempted=..., valid=...` | Whether status was requested and transferred successfully; valid status prints `Sensor status: 0xNN` and `CO2 error: yes/no`. |
+| `Error code read: attempted=..., valid=...` | Whether supported error detail was needed and transferred; valid detail prints the raw `Error code: N (name)`. |
+
+Attempted steps include their exact result and message. Unattempted steps
+explicitly print `attempted=no, valid=no` without a misleading default OK
+result. A later failure preserves successful earlier evidence. A status error
+returns `CO2_SENSOR_ERROR` when detail succeeds or is unsupported, retaining
+known or unknown codes. If error-detail transfer fails, its exact transfer
+failure is the overall result while the sensor-status error remains visible.
+Sensor-domain rejection adds no transport-health failure; real transfers and
+existing frame retry outcomes keep their ordinary health accounting.
+
+Checked success does not certify warm-up, freshness, accuracy, application
+range or product model. All raw 16-bit words, including 0 and 65535, remain
+representable; apply an application range separately. Status can trigger the
+next measurement and reset its interval counter only when the global interval
+is greater than 15 s and the previous value is older than 10 s. Reading the
+value before status does not establish that a fresh conversion occurred.
+
 ## Extended and Niche Plans
 
 ```powershell

@@ -29,6 +29,12 @@ REQUIRED_FRAGMENTS = [
     "Write persistent interval",
     "Write persistent CO2 offset",
     "Write persistent CO2 gain",
+    "readCo2FastSample",
+    "readCo2AverageSample",
+    "Checked sample valid:",
+    "Raw CO2:",
+    "Sensor status:",
+    "CO2_SENSOR_ERROR",
 ]
 
 REQUIRED_PATTERNS = {
@@ -39,6 +45,8 @@ REQUIRED_PATTERNS = {
     "recover command dispatch": r'trimmed\s*==\s*"recover"',
     "driver command dispatch": r'trimmed\s*==\s*"drv"',
     "read command dispatch": r'trimmed\s*==\s*"read"',
+    "checked fast command dispatch": r'trimmed\s*==\s*"co2fastsample"\s*\)\s*\{\s*printCo2Sample\(true\)',
+    "checked average command dispatch": r'trimmed\s*==\s*"co2avgsample"\s*\)\s*\{\s*printCo2Sample\(false\)',
     "verbose command dispatch": r'trimmed\s*==\s*"verbose"',
     "library test dispatch": r"e2diag::testLibraryCommands\s*\(\s*device\s*\)",
     "stress command dispatch": r'trimmed\s*==\s*"stress"',
@@ -62,6 +70,8 @@ PROCESS_COMMAND_PATTERNS = {
     "recover command dispatch",
     "driver command dispatch",
     "read command dispatch",
+    "checked fast command dispatch",
+    "checked average command dispatch",
     "verbose command dispatch",
     "stress command dispatch",
     "library test dispatch",
@@ -121,7 +131,7 @@ def main() -> int:
 
     for fragment in REQUIRED_FRAGMENTS:
         if fragment not in text:
-            fail(f"mandatory CLI dirty diagnostic fragment '{fragment}' missing")
+            fail(f"mandatory CLI diagnostic fragment '{fragment}' missing")
 
     for label, pattern in REQUIRED_PATTERNS.items():
         scope = process_command if label in PROCESS_COMMAND_PATTERNS else text
