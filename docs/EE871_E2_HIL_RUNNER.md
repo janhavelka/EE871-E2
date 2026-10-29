@@ -186,6 +186,14 @@ dirty/resync diagnostics. This applies to explicitly supplied values too. A
 value cached by an earlier safe or niche read cannot supply the baseline. The
 default interval rewrite uses only the current preflight baseline.
 
+Diagnostic values and completeness checks use the same bounded current response
+section. Unexpected sections or duplicate section headers, including duplicates
+with different capitalization, block maintenance. Resync requires exactly one
+`Before:` followed by one `After:` inside its own section, with the operation
+status between those markers. Only the `After:` fields establish current state.
+Clean dirty/resync flags must agree with an `OK` dirty-error name and code zero.
+Contradictory diagnostics cannot authorize a write.
+
 The baseline stays separate from the requested value and later observations.
 Each admitted write consumes the clean diagnostic observation; another write
 requires a successful clean check after it. The first failed or incomplete

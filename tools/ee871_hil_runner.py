@@ -42,6 +42,7 @@ VERDICT_INCOMPLETE = "INCOMPLETE"
 
 ANSI_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 PROMPT_RE = re.compile(r"(?:^|\r?\n)>[ \t]*\r?\n\Z")
+HEADER_RE = re.compile(r"^[ \t]*(=== [^\r\n]+ ===)[ \t]*\r?$", re.MULTILINE)
 BOOL_TRUE = {"yes", "true", "1", "on"}
 BOOL_FALSE = {"no", "false", "0", "off"}
 
@@ -181,11 +182,11 @@ def last_match(pattern: str, text: str, flags: int = 0) -> re.Match[str] | None:
 
 def header_sections(text: str, header: str) -> list[tuple[int, str]]:
     sections: list[tuple[int, str]] = []
-    for match in re.finditer(re.escape(header), text, re.IGNORECASE):
-        tail = text[match.end():]
-        next_header = re.search(r"\r?\n=== [^\r\n]+ ===", tail)
-        end = match.end() + next_header.start() if next_header else len(text)
-        sections.append((match.start(), text[match.start():end]))
+    headers = list(HEADER_RE.finditer(text))
+    for index, match in enumerate(headers):
+        if match.group(1).lower() == header.lower():
+            end = headers[index + 1].start() if index + 1 < len(headers) else len(text)
+            sections.append((match.start(), text[match.start():end]))
     return sections
 
 
@@ -400,21 +401,37 @@ def parse_measurements(text: str) -> dict[str, Any]:
 
 def parse_response(command: str, text: str) -> dict[str, Any]:
     parsed: dict[str, Any] = {}
-    parsed.update(parse_status(text))
+    status_text = resync_records(text)[0] if command == "resync" else text
+    parsed.update(parse_status(status_text))
     parsed.update(parse_version(text))
     parsed.update(parse_selftest(text))
     parsed.update(parse_stress(text))
     parsed.update(parse_health(text))
-    parsed.update(parse_dirty(resync_after(text) if command == "resync" else text))
+    parsed.update(parse_dirty(diagnostic_section(command, text)))
     parsed.update(parse_measurements(text))
     parsed["command"] = command
     return parsed
 
 
-def resync_after(text: str) -> str:
-    """Never fill missing current resync fields from its Before diagnostics."""
-    parts = re.split(r"(?m)^After:[ \t]*\r?$", strip_ansi(text))
-    return parts[1] if len(parts) == 2 else ""
+def resync_records(text: str) -> tuple[str, str]:
+    """Bound the operation status and current diagnostics to their resync records."""
+    section = last_header_section(strip_ansi(text), "=== Persistent Config Resync ===")
+    parts = re.split(r"(?im)^[ \t]*(Before:|After:)[ \t]*\r?$", section)
+    if len(parts) == 5 and parts[1].lower() == "before:" and parts[3].lower() == "after:":
+        return parts[2], parts[4]
+    return "", ""
+
+
+def diagnostic_section(command: str, text: str) -> str:
+    """Parse and validate dirty fields from the same command-owned section."""
+    clean = strip_ansi(text)
+    if command == "resync":
+        return resync_records(clean)[1]
+    header = {
+        "dirty": "=== Persistent Config Dirty State ===",
+        "drv": "=== Driver Health ===",
+    }.get(command)
+    return last_header_section(clean, header) if header else clean
 
 
 def command_count(command: str) -> int | None:
@@ -571,7 +588,7 @@ def validate_parsed(
 
 def capture_integrity_errors(command: str, text: str) -> list[str]:
     """Require complete diagnostic records, even when the final prompt survived."""
-    clean = strip_ansi(text)
+    clean = diagnostic_section(command, text)
     fields: dict[str, str] = {}
     dirty_fields = {
         "persistentConfigDirty:": r"(?:yes|no|true|false|0|1)",
@@ -580,7 +597,6 @@ def capture_integrity_errors(command: str, text: str) -> list[str]:
         "resyncNeeded:": r"(?:yes|no|true|false|0|1)",
     }
     if command == "drv":
-        clean = last_header_section(clean, "=== Driver Health ===")
         fields = {
             "State:": r"(?:UNINIT|READY|DEGRADED|OFFLINE)",
             "Online:": r"(?:yes|no|true|false|0|1)",
@@ -596,11 +612,7 @@ def capture_integrity_errors(command: str, text: str) -> list[str]:
         # The example emits message text only when the Status contains it.
         if re.search(r"^[ \t]*Error msg:", clean, re.MULTILINE):
             fields["Error msg:"] = r".+"
-    elif command == "dirty":
-        clean = last_header_section(clean, "=== Persistent Config Dirty State ===")
-        fields = dirty_fields
-    elif command == "resync":
-        clean = resync_after(clean)
+    elif command in ("dirty", "resync"):
         fields = dirty_fields
     elif command == "interval":
         fields = {"Interval:": r"\d+ deciseconds(?: \(\d+\.\d s\))?"}
@@ -679,22 +691,28 @@ def classify_response(
     if failures:
         return RESULT_FAIL, "; ".join(failures)
     if spec.group.startswith("maintenance"):
+        expected_header = {
+            "dirty": "=== persistent config dirty state ===",
+            "resync": "=== persistent config resync ===",
+        }.get(spec.command)
+        headers = [match.group(1).lower() for match in HEADER_RE.finditer(clean)]
+        if headers != ([expected_header] if expected_header else []):
+            return RESULT_FAIL, "missing, duplicate or unexpected maintenance response section"
         # These typed commands emit exactly one status (dirty emits none).
         # Last-match parsing alone could otherwise hide an earlier failure.
         status_lines = [line.strip() for line in clean.splitlines()
                         if line.strip().lower().startswith("status:")]
         if spec.command == "dirty":
-            if status_lines or clean.count("=== Persistent Config Dirty State ===") != 1:
-                return RESULT_FAIL, "incomplete or duplicate maintenance dirty response"
+            if status_lines:
+                return RESULT_FAIL, "unexpected status in maintenance dirty response"
         elif len(status_lines) != 1 or not re.fullmatch(
             r"Status:[ \t]+[A-Z][A-Z0-9_]* \(code=\d+, detail=-?\d+\)", status_lines[0], re.IGNORECASE,
         ):
             return RESULT_FAIL, "incomplete or duplicate maintenance status"
-        if spec.command == "resync" and (
-            clean.count("=== Persistent Config Resync ===") != 1
-            or len(re.findall(r"(?m)^Before:[ \t]*\r?$", clean)) != 1
-        ):
-            return RESULT_FAIL, "incomplete or duplicate maintenance resync response"
+        if spec.command in ("dirty", "resync"):
+            dirty_error = parsed.get("persistent_config_dirty_error")
+            if dirty_error and (dirty_error.get("name") != "OK" or dirty_error.get("code") != 0):
+                return RESULT_FAIL, "clean maintenance flags disagree with persistent dirty error"
         if spec.command in MAINTENANCE_TARGETS:
             key, minimum, maximum = MAINTENANCE_TARGETS[spec.command]
             value = parsed.get(key)

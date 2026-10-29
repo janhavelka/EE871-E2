@@ -269,6 +269,98 @@ class HilRunnerParserTest(unittest.TestCase):
         self.assertNotEqual(0, code)
         self.assertNotIn("interval 160", ser.sent)
 
+    def test_main_following_section_cannot_replace_dirty_preflight(self):
+        clean = "=== Persistent Config Dirty State ===\n" + MaintenanceSerial.CLEAN + "> \n"
+        dirty = ("=== Persistent Config Dirty State ===\npersistentConfigDirty: yes\n"
+                 "persistentConfigDirtyError: NACK (code=8, detail=0)\n"
+                 "persistentConfigDirtyError message: Control byte NACK\nresyncNeeded: yes\n"
+                 "=== Driver Health ===\n" + MaintenanceSerial.CLEAN + "> \n")
+        ser, summary, code = self.run_maintenance(
+            ["--maintenance-interval", "160"], {"dirty": [clean] * 3 + [dirty]},
+        )
+        self.assertNotIn("interval 160", ser.sent)
+        self.assertNotEqual(0, code)
+        row = next(row for row in summary["commands"]
+                   if row["group"] == "maintenance" and row["command"] == "dirty")
+        self.assertNotEqual(runner.RESULT_PASS, row["result"])
+        self.assertTrue(row["reason"])
+
+    def test_main_following_section_cannot_supply_missing_resync_after_fields(self):
+        resync = ("=== Persistent Config Resync ===\nBefore:\n" + MaintenanceSerial.CLEAN
+                  + MaintenanceSerial.OK + "After:\n=== Driver Health ===\n"
+                  + MaintenanceSerial.CLEAN + "> \n")
+        ser, summary, code = self.run_maintenance(
+            ["--maintenance-interval", "160", "--write-co2-offset", "10"],
+            {"resync": [resync]},
+        )
+        self.assertEqual(1, ser.sent.count("interval 160"))
+        self.assertNotIn("offset 10", ser.sent)
+        self.assertNotEqual(0, code)
+        row = next(row for row in summary["commands"] if row["command"] == "resync")
+        self.assertNotEqual(runner.RESULT_PASS, row["result"])
+        self.assertTrue(row["reason"])
+
+    def test_main_mixed_case_duplicate_dirty_headers_cannot_admit_write(self):
+        header = "=== Persistent Config Dirty State ===\n"
+        clean = header + MaintenanceSerial.CLEAN + "> \n"
+        dirty_fields = MaintenanceSerial.CLEAN.replace(
+            "persistentConfigDirty: no", "persistentConfigDirty: yes",
+        ).replace("resyncNeeded: no", "resyncNeeded: yes")
+        response = header + dirty_fields + header.lower() + MaintenanceSerial.CLEAN + "> \n"
+        ser, summary, code = self.run_maintenance(
+            ["--maintenance-interval", "160"], {"dirty": [clean] * 3 + [response]},
+        )
+        self.assertNotIn("interval 160", ser.sent)
+        self.assertNotEqual(0, code)
+        row = next(row for row in summary["commands"]
+                   if row["group"] == "maintenance" and row["command"] == "dirty")
+        self.assertNotEqual(runner.RESULT_PASS, row["result"])
+
+    def test_main_contradictory_clean_error_cannot_admit_later_write(self):
+        clean = "=== Persistent Config Dirty State ===\n" + MaintenanceSerial.CLEAN + "> \n"
+        for error in ("NACK (code=8, detail=0)", "OK (code=8, detail=0)", "NACK (code=0, detail=0)"):
+            fields = MaintenanceSerial.CLEAN.replace("OK (code=0, detail=0)", error)
+            for command in ("dirty", "resync"):
+                with self.subTest(command=command, error=error):
+                    if command == "dirty":
+                        response = "=== Persistent Config Dirty State ===\n" + fields + "> \n"
+                        responses = {command: [clean] * 3 + [response]}
+                        blocked = "interval 160"
+                    else:
+                        response = ("=== Persistent Config Resync ===\nBefore:\n" + MaintenanceSerial.CLEAN
+                                    + MaintenanceSerial.OK + "After:\n" + fields + "> \n")
+                        responses = {command: [response]}
+                        blocked = "offset 10"
+                    ser, summary, code = self.run_maintenance(
+                        ["--maintenance-interval", "160", "--write-co2-offset", "10"], responses,
+                    )
+                    self.assertNotIn(blocked, ser.sent)
+                    self.assertNotEqual(0, code)
+                    row = next(row for row in summary["commands"]
+                               if row["group"] == "maintenance" and row["command"] == command)
+                    self.assertNotEqual(runner.RESULT_PASS, row["result"])
+                    self.assertTrue(row["reason"])
+                    # Later clean diagnostics must not erase the rejected record.
+                    self.assertEqual(runner.RESULT_PASS, next(
+                        row for row in reversed(summary["commands"]) if row["command"] == "dirty"
+                    )["result"])
+
+    def test_drv_dirty_fields_come_from_its_own_health_section(self):
+        fixture = MaintenanceSerial()
+        other = fixture.response("dirty").replace("> \n", "")
+        current = fixture.response("drv").replace(
+            "persistentConfigDirty: no", "persistentConfigDirty: yes",
+        ).replace("resyncNeeded: no", "resyncNeeded: yes").replace(
+            "persistentConfigDirtyError: OK (code=0, detail=0)",
+            "persistentConfigDirtyError: NACK (code=8, detail=0)",
+        )
+        for capture in (other + current, current.replace("> \n", "") + other + "> \n"):
+            with self.subTest(capture=capture):
+                parsed = runner.parse_response("drv", capture)
+                self.assertTrue(parsed["persistent_config_dirty"])
+                self.assertTrue(parsed["resync_needed"])
+                self.assertEqual("NACK", parsed["persistent_config_dirty_error"]["name"])
+
     def test_main_mixed_case_duplicate_evidence_cannot_admit_write(self):
         clean = "=== Persistent Config Dirty State ===\n" + MaintenanceSerial.CLEAN + "> \n"
         disguised_dirty = clean.replace(
@@ -338,6 +430,17 @@ class HilRunnerParserTest(unittest.TestCase):
                    good.replace("Before:\n", ""), good.replace("Before:\n", "Before:\nBefore:\n"),
                    good.replace("=== Persistent Config Resync ===\n", ""),
                    good.replace(MaintenanceSerial.OK, MaintenanceSerial.OK * 2)]
+        header = "=== Persistent Config Resync ===\n"
+        invalid.extend([
+            good.replace("Before:\n", "Before:\nbefore:\n"),
+            good.replace("After:\n", "After:\nafter:\n"),
+            good.replace(header, header + header.lower()),
+            "Before:\n" + good.replace("Before:\n", ""),
+            header + MaintenanceSerial.OK + "After:\n" + MaintenanceSerial.CLEAN + "Before:\n> \n",
+            MaintenanceSerial.OK + good.replace(MaintenanceSerial.OK, ""),
+            good.replace(MaintenanceSerial.OK, "").replace("Before:\n", MaintenanceSerial.OK + "Before:\n"),
+            good.replace(MaintenanceSerial.OK, "").replace("After:\n", "After:\n" + MaintenanceSerial.OK),
+        ])
         for field in fields:
             invalid.append(before + "After:\n" + after.replace(field, ""))
             invalid.append(before + "After:\n" + field + after)

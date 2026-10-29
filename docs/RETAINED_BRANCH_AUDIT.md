@@ -13,6 +13,10 @@ owner requires a complete successful current target baseline and fresh clean
 diagnostics before interval, offset or gain writes, including explicit values.
 It preserves baselines separately from expected values and latches the first
 maintenance failure; later clean or successful rows cannot reopen admission.
+Diagnostic parsing and completeness checks use the same bounded current
+section. Unexpected or duplicate sections (regardless of capitalization),
+misplaced or unordered resync markers, and disagreement between clean flags
+and the dirty error also block maintenance.
 
 The real-main host regression
 `test_main_failed_interval_baseline_blocks_explicit_serial_write` first
@@ -22,6 +26,12 @@ reproduced the unsafe `interval 160` send on the unchanged runner. Coverage in
 `test_main_each_target_requires_complete_successful_baseline`,
 `test_main_maintenance_failure_stays_latched_after_clean_diagnostics`, and
 `test_main_authorized_write_has_separate_baseline_and_expected_evidence`.
+Section and consistency regressions include
+`test_main_following_section_cannot_replace_dirty_preflight`,
+`test_main_following_section_cannot_supply_missing_resync_after_fields`,
+`test_main_mixed_case_duplicate_dirty_headers_cannot_admit_write`,
+`test_main_contradictory_clean_error_cannot_admit_later_write`, and
+`test_maintenance_resync_requires_complete_unique_after_fields`.
 No hardware validation is claimed. A successful requested-value write is not
 restoration; uncertain writes require operator-owned reconciliation outside
 the runner. CAP-1..5 and branch retirement were not selected by this fix.

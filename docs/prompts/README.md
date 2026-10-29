@@ -30,9 +30,17 @@ covers interval/offset/gain preflight;
 `test_main_maintenance_failure_stays_latched_after_clean_diagnostics` covers
 continued admission closure; and
 `test_main_authorized_write_has_separate_baseline_and_expected_evidence`
-covers the authorized success path. These are host tests, not physical
-qualification. Requested-value success does not restore the baseline, and
-uncertain writes require operator-owned reconciliation outside the runner.
+covers the authorized success path. Current-section boundaries and duplicate
+headers are covered by
+`test_main_following_section_cannot_replace_dirty_preflight`,
+`test_main_following_section_cannot_supply_missing_resync_after_fields`, and
+`test_main_mixed_case_duplicate_dirty_headers_cannot_admit_write`.
+`test_main_contradictory_clean_error_cannot_admit_later_write` rejects clean/error
+disagreement; `test_maintenance_resync_requires_complete_unique_after_fields`
+also checks resync markers are unique, ordered and inside the current section.
+These are host tests, not physical qualification. Requested-value success does
+not restore the baseline, and uncertain writes require operator-owned
+reconciliation outside the runner.
 
 For the required defect fix and closeout, execute **01, then 06**. For the optional full
 software feature set, execute **01 → 02 → 03 → 04 → 05 → 06**. Prompt 05 must
