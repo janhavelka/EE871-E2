@@ -4,6 +4,8 @@
 #pragma once
 
 #include <Arduino.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 namespace transport {
 
@@ -80,6 +82,21 @@ inline bool readSda(void* user) {
 inline void delayUs(uint32_t us, void* user) {
   (void)user;
   delayMicroseconds(us);
+}
+
+/// Post-write task wait only; round up and allow one tick for scheduler phase.
+/// The core requests positive slices of at most 50 ms, never bit timing here.
+inline void delayMs(uint32_t ms, void*) {
+  if (ms == 0U) {
+    return;
+  }
+  const TickType_t ticks = static_cast<TickType_t>(
+      (static_cast<uint64_t>(ms) * configTICK_RATE_HZ + 999U) / 1000U + 1U);
+  vTaskDelay(ticks);
+}
+
+inline void yieldTask(void*) {
+  ::yield();
 }
 
 } // namespace transport

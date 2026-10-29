@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Optional task-context `Config::delayMs` and `Config::yield` callbacks for
+  post-write quiet waits, appended after existing configuration members.
+  `longDelaySliceMs` defaults to 10 ms and accepts 1..50 ms; delay precedes
+  yield at each completed slice. Null callbacks retain the per-millisecond
+  microsecond-delay fallback. Zero waits, 150/300 ms defaults, 5000 ms limits,
+  signaling, retry pauses, health and persistent-state behavior are preserved.
+  Arduino and native IDF adapters install cooperative waits; IDF rounds delays
+  conservatively. Callback timing remains application-owned; no scheduler or
+  watchdog latency improvement has been measured on hardware.
 - Explicit `readCo2FastSample()` / `readCo2AverageSample()` helpers read MV3/MV4
   low/high, then status, then supported error detail only for a CO2 status
   error. Fixed-size `Co2ReadResult` retains raw evidence, validity, attempted

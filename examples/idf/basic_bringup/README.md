@@ -71,6 +71,20 @@ owns the driver and calls `tick()` between commands; it does not implement a
 production sampling or automatic recovery policy. Public bus operations and
 persistent-write verification block for their documented bounded durations.
 
+The CLI and `ee871_idf::makeConfig()` install native FreeRTOS `delayMs`/`yield`
+callbacks for post-write quiet waits. The default 10 ms slices preserve the
+configured total requested wait, including the final partial slice; delay
+precedes yield after every slice. The adapter rounds upward with tick-phase
+allowance so it does not under-wait a request. Protocol signaling, flash STOP
+stretching and the fixed read-retry pause continue using microsecond timing.
+Zero waits invoke no long-wait callback. Core defaults remain optional/null,
+with a per-millisecond microsecond fallback for existing integrations.
+
+These callbacks run in the owner's task with external serialization retained;
+they must be bounded and must not recursively call the driver. Void callbacks
+cannot report failures or let the driver prove elapsed time. No hardware
+scheduler or watchdog latency improvement is claimed.
+
 See the [ESP-IDF integration guide](../../../docs/IDF_PORT.md) for component
 dependencies, callback contracts, timing, and application integration. Build
 and hardware qualification results are recorded in the

@@ -35,6 +35,28 @@ using E2ReadLineFn = bool (*)(void* user);
 /// @param user User context pointer passed through from Config.
 using E2DelayUsFn = void (*)(uint32_t us, void* user);
 
+/// @brief Optional task-context millisecond delay for post-write quiet waits.
+///
+/// Wait at least the requested positive slice, remain bounded, and do not
+/// recursively call the same driver. The application owns this callback and
+/// externally serializes the complete operation, including these waits. Never
+/// used during E2 signaling, SCL-release polling, or the fixed read-retry pause.
+/// A void callback cannot report failures; the core cannot independently prove
+/// wall-clock adherence, cancellation, or watchdog/scheduler latency.
+/// @param ms Positive milliseconds to wait, at most Config::longDelaySliceMs.
+/// @param user User context pointer passed through from Config::busUser.
+using E2DelayMsFn = void (*)(uint32_t ms, void* user);
+
+/// @brief Optional bounded task-context yield after each post-write wait slice.
+///
+/// Called after the delay callback (or its microsecond fallback), including
+/// after the final partial slice. A zero quiet wait calls neither callback.
+/// Never used inside START/STOP (including flash stretching), bit/byte/ACK/PEC
+/// timing, SCL-release polling, or read retries. Must not recursively call the
+/// same driver; application ownership and serialization remain unchanged.
+/// @param user User context pointer passed through from Config::busUser.
+using E2YieldFn = void (*)(void* user);
+
 /// Optional bounded application veto for an otherwise safe read retry.
 /// Called with busUser before and after the retry pause, and once more after
 /// the final idle-line check, before another frame. Return false after
@@ -94,6 +116,11 @@ struct Config {
   /// Appended fields preserve existing positional Config initializers.
   uint8_t readNackRetries = 0;
   E2AllowReadRetryFn allowReadRetry = nullptr; ///< Null permits eligible retries.
+
+  // === Optional task-context post-write quiet waits (appended for compatibility) ===
+  E2DelayMsFn delayMs = nullptr; ///< Optional delay per positive quiet-wait slice; null uses one delayUs(1000) per millisecond.
+  E2YieldFn yield = nullptr; ///< Optional yield after every completed quiet-wait slice, including the final slice.
+  uint8_t longDelaySliceMs = 10; ///< Slice size 1..50 ms; begin() rejects zero or >50 before GPIO traffic, even without callbacks.
 };
 
 } // namespace EE871

@@ -1618,6 +1618,8 @@ void setup() {
   deviceCfg.readScl = trace::readScl;
   deviceCfg.readSda = trace::readSda;
   deviceCfg.delayUs = trace::delayUs;
+  deviceCfg.delayMs = transport::delayMs;
+  deviceCfg.yield = transport::yieldTask;
   deviceCfg.busUser = &board::e2Pins();
   deviceCfg.deviceAddress = EE871::cmd::DEFAULT_DEVICE_ADDRESS;
   deviceCfg.clockLowUs = board::E2_CLOCK_LOW_US;

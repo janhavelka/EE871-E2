@@ -316,8 +316,38 @@ identify 0x50 as a read-pointer update, which does not justify a flash wait.
 The default flash allowance adds 50 ms margin. START and byte transfers retain
 the generic budgets. Post-write waits remain `writeDelayMs` (default
 150 ms) or `intervalWriteDelayMs` (default 300 ms), each limited to 5000 ms,
-followed by readback verification. The new field is appended to `Config` so
-existing positional initializers retain their field order; rebuild consumers.
+followed by readback verification. Zero quiet waits remain valid. Appended
+`Config` fields preserve existing positional initializer order; rebuild consumers.
+
+Optional `Config::delayMs` and `Config::yield` callbacks make only those
+post-write quiet waits cooperative, after a successful persistent transfer and
+before readback. `longDelaySliceMs` defaults to 10 ms and
+must be 1..50 ms; `begin()` rejects zero or larger slices before GPIO traffic.
+Each slice requests the smaller of the remaining wait and the configured
+slice size, so requested delays sum exactly to the configured quiet wait,
+including a final partial slice. With `delayMs` set, the driver invokes it once
+per positive slice. Otherwise it retains one `delayUs(1000)` request per
+millisecond. If `yield` is set, it runs after each completed slice, including
+the final one. When both callbacks exist, delay runs first and yield second.
+A zero wait invokes neither callback. Both callbacks default to null, retaining
+the existing fallback delay sequence without requiring changes from callers.
+
+These callbacks never run during START, STOP, bit/byte/ACK/PEC signaling,
+SCL-release polling, reads, volatile pointer updates, or the fixed 1000 us
+read-retry pause. Flash STOP stretching remains protocol signaling with its
+separate timeout; it is not a quiet wait. The Arduino and native IDF examples
+install FreeRTOS task-delay callbacks through their adapters, with conservative
+upward tick rounding plus their framework's task yield, to avoid under-waiting
+the requested milliseconds.
+
+Callbacks belong to the application, run in task context under the same
+external serialization as the driver, and must remain bounded and
+non-reentrant. `delayMs` must wait at least the requested duration. A void
+callback cannot report failure, and the core cannot independently prove its
+wall-clock adherence or impose a cancellation/watchdog guarantee. Tick rounding,
+scheduler delay and callback/yield overhead can lengthen the actual wait and
+are excluded from requested-delay sums. Ownership remains with the calling
+application; no background task or asynchronous engine is introduced.
 
 A reset has nine clock releases plus STOP, so its maximum stretch allowance is
 `10 * flashStretchTimeoutUs` plus nominal phases. Transaction bounds include

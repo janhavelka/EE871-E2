@@ -22,7 +22,7 @@ The supplied framework adapters remain example code:
 
 | File | Purpose |
 | --- | --- |
-| [examples/idf/common/E2GpioTransport.h](../examples/idf/common/E2GpioTransport.h) | Native ESP-IDF GPIO and microsecond delay callbacks. |
+| [examples/idf/common/E2GpioTransport.h](../examples/idf/common/E2GpioTransport.h) | Native ESP-IDF GPIO, microsecond timing and cooperative post-write wait callbacks. |
 | [examples/idf/basic_bringup/main/main.cpp](../examples/idf/basic_bringup/main/main.cpp) | Native `app_main` diagnostic CLI with fixed command buffers and `stdio`. |
 | [examples/common/E2Transport.h](../examples/common/E2Transport.h) | Arduino GPIO adapter used by the Arduino examples. |
 
@@ -79,8 +79,16 @@ Keep the bus context alive throughout the driver session.
   stay enabled so `gpio_get_level()` can observe idle levels and clock stretching.
 - A callback level of `false` pulls the line low; `true` releases it for the
   external pull-up. Read callbacks return the physical line level.
-- Use `esp_rom_delay_us()` for the supplied `delayUs` callback. It also handles
-  the core's repeated 1 ms write-wait and optional retry pauses.
+- Use `esp_rom_delay_us()` for the supplied `delayUs` callback. Protocol
+  signaling, SCL polling and optional fixed 1 ms retry pauses stay on this path.
+- The adapter configuration also installs optional `delayMs` and `yield`
+  callbacks for post-write quiet waits. `ee871_idf::delayMs()` uses
+  `vTaskDelay(ceil(ms * configTICK_RATE_HZ / 1000) + 1)` ticks: the extra tick
+  accounts for entry just before the next tick, avoiding a short wait.
+  `ee871_idf::yieldTask()` calls `taskYIELD()` after the slice. These callbacks
+  never replace protocol timing or flash STOP stretching. Omitting `delayMs`
+  retains one `delayUs(1000)` call per quiet-wait
+  millisecond; omitting both optional callbacks retains the legacy fallback.
 - External pull-ups are required for the documented electrical interface.
   `init()` disables internal pull-ups by default; its optional
   `enableInternalPullups` argument is for bench use.
@@ -109,6 +117,25 @@ interval-pair wait. It inherits `Config::flashStretchTimeoutUs = 350000` for
 flash-write STOP and explicit bus reset. Ordinary reads and volatile custom-read
 pointer writes use `bitTimeoutUs` for STOP. The flash allowance does not extend
 ordinary bit or byte transfer limits.
+
+Only the quiet wait after a successful persistent transfer uses the optional
+long-wait callbacks. `Config::longDelaySliceMs` defaults to 10 ms and accepts
+1..50 ms; invalid values are rejected before GPIO traffic. The driver requests
+positive slices whose sum is exactly `writeDelayMs` or `intervalWriteDelayMs`,
+then verifies the write. `delayMs` runs first, or the microsecond fallback when
+absent, followed by optional `yield` after each completed slice, including the
+final partial slice. A zero wait performs no callbacks; existing zero settings,
+150/300 ms defaults and 5000 ms maxima are preserved.
+
+Keep ownership and external serialization throughout the synchronous call,
+including callbacks. Callbacks are application-owned, task-context only,
+bounded and non-reentrant; they must not call the same driver recursively.
+`delayMs` must wait at least its requested milliseconds. Its void signature
+cannot report failure, and the driver cannot independently measure callback
+adherence, cancel a wait or guarantee watchdog latency. FreeRTOS tick rounding,
+scheduling and callback/yield overhead can increase elapsed time beyond the
+requested-delay sum. Host callback tests establish software placement and
+requested durations, not measured scheduler behavior on a device.
 
 `readNackRetries` defaults to zero, including in this example. An application
 may explicitly allow up to three additional MV3/MV4/status attempts after a

@@ -424,6 +424,15 @@ verify the stored value by readback. A partial write or uncertain commit must
 remain visible through persistent dirty/resync diagnostics until a successful
 documented verification path clears it.
 
+Optional `Config::delayMs`/`yield` callbacks apply only to the post-write quiet
+wait before readback, in validated 1..50 ms slices (default 10 ms). Delay runs
+before optional yield after every completed slice; requested slices sum exactly
+to the configured wait. Null callbacks retain one `delayUs(1000)` per quiet-wait
+millisecond and zero waits remain empty. These callbacks do not enter flash
+STOP stretching or other protocol phases. See
+[timing and blocking](../README.md#timing-and-blocking) for ownership and void
+callback limitations.
+
 In this driver, uncertainty includes single-byte and raw custom writes when
 PEC transmission, the final ACK, STOP, or readback fails after the write may
 have applied. A definitely sampled final PEC NACK does not newly dirty a
@@ -519,6 +528,10 @@ The driver accepts callbacks through `Config`:
 - `setScl(level)` / `setSda(level)` where **level=1 means release line** (open-drain high), level=0 means pull low
 - `readScl()` / `readSda()` to support clock stretching checks
 - `delayUs(t)` to control bit timing and bounded waits
+
+Optional `delayMs(ms)` and `yield()` callbacks support only post-write quiet
+waits. The millisecond callback must wait at least its positive requested slice;
+the driver cannot independently verify wall-clock adherence or callback failure.
 
 All callbacks also receive `busUser`. The application owns GPIO setup,
 pull-ups, timebase, and serialization of all driver/shared-bus access.

@@ -1,6 +1,7 @@
 /// @file test_basic.cpp
 /// @brief Native contract tests for EE871 validation and lifecycle guards.
 
+#include <initializer_list>
 #include <type_traits>
 
 #include <unity.h>
@@ -2962,8 +2963,386 @@ void test_pending_auto_adjust_offline_resync_replays_transport_failure_without_i
   assertDirtyWithOriginalError(dev, first);
 }
 
+struct MaintenanceWaitBus {
+  FakeE2Transport fake;
+  Config hal = fake.makeConfig();
+  uint32_t oneMsDelays = 0;
+  uint32_t ioCalls = 0;
+  uint32_t longDelayCalls = 0;
+  uint32_t yieldCalls = 0;
+  uint32_t longDelayTotalMs = 0;
+  uint8_t slices[5000] = {};
+  uint32_t yieldAtMs[5000] = {};
+  uint8_t events[10000] = {};
+  uint32_t eventCount = 0;
+  uint32_t writesAtWait = UINT32_MAX;
+  uint32_t pointerBeforeWait = 0;
+
+  void expectWaitAfterWrites(uint32_t writeFrames) {
+    writesAtWait = fake.controlCount(0x10) + writeFrames;
+    pointerBeforeWait = fake.controlCount(0x50);
+  }
+
+  void assertQuietBoundary() const {
+    TEST_ASSERT_TRUE(fake.masterSclReleased());
+    TEST_ASSERT_TRUE(fake.masterSdaReleased());
+    TEST_ASSERT_EQUAL_UINT32(writesAtWait, fake.controlCount(0x10));
+    TEST_ASSERT_EQUAL_UINT32(pointerBeforeWait, fake.controlCount(0x50));
+  }
+
+  void recordEvent(uint8_t event) {
+    TEST_ASSERT_LESS_THAN_UINT32(sizeof(events), eventCount);
+    events[eventCount++] = event;
+  }
+
+  Config config(bool useDelay = false, bool useYield = false) {
+    Config cfg = hal;
+    cfg.busUser = this;
+    cfg.setScl = [](bool level, void* user) {
+      auto& bus = *static_cast<MaintenanceWaitBus*>(user);
+      ++bus.ioCalls;
+      bus.hal.setScl(level, bus.hal.busUser);
+    };
+    cfg.setSda = [](bool level, void* user) {
+      auto& bus = *static_cast<MaintenanceWaitBus*>(user);
+      ++bus.ioCalls;
+      bus.hal.setSda(level, bus.hal.busUser);
+    };
+    cfg.readScl = [](void* user) {
+      auto& bus = *static_cast<MaintenanceWaitBus*>(user);
+      ++bus.ioCalls;
+      return bus.hal.readScl(bus.hal.busUser);
+    };
+    cfg.readSda = [](void* user) {
+      auto& bus = *static_cast<MaintenanceWaitBus*>(user);
+      ++bus.ioCalls;
+      return bus.hal.readSda(bus.hal.busUser);
+    };
+    cfg.delayUs = [](uint32_t us, void* user) {
+      auto& bus = *static_cast<MaintenanceWaitBus*>(user);
+      if (us == 1000U) ++bus.oneMsDelays;
+      bus.hal.delayUs(us, bus.hal.busUser);
+    };
+    if (useDelay) {
+      cfg.delayMs = [](uint32_t ms, void* user) {
+        auto& bus = *static_cast<MaintenanceWaitBus*>(user);
+        bus.assertQuietBoundary();
+        TEST_ASSERT_GREATER_THAN_UINT32(0, ms);
+        TEST_ASSERT_LESS_OR_EQUAL_UINT32(50, ms);
+        TEST_ASSERT_LESS_THAN_UINT32(sizeof(bus.slices), bus.longDelayCalls);
+        bus.slices[bus.longDelayCalls++] = static_cast<uint8_t>(ms);
+        bus.longDelayTotalMs += ms;
+        bus.recordEvent(1);
+        bus.hal.delayUs(ms * 1000U, bus.hal.busUser);
+      };
+    }
+    if (useYield) {
+      cfg.yield = [](void* user) {
+        auto& bus = *static_cast<MaintenanceWaitBus*>(user);
+        bus.assertQuietBoundary();
+        TEST_ASSERT_LESS_THAN_UINT32(5000, bus.yieldCalls);
+        bus.yieldAtMs[bus.yieldCalls] = bus.longDelayTotalMs + bus.oneMsDelays;
+        ++bus.yieldCalls;
+        bus.recordEvent(2);
+      };
+    }
+    return cfg;
+  }
+};
+
+static Status performMaintenanceWrite(EE871::EE871& dev, bool interval) {
+  return interval ? dev.writeMeasurementInterval(300)
+                  : dev.customWrite(cmd::CUSTOM_FILTER_CO2, 42);
+}
+
+void test_maintenance_wait_fallback_preserves_one_micro_delay_per_millisecond() {
+  TEST_ASSERT_NULL(Config{}.delayMs);
+  TEST_ASSERT_NULL(Config{}.yield);
+  TEST_ASSERT_EQUAL_UINT32(150, Config{}.writeDelayMs);
+  TEST_ASSERT_EQUAL_UINT32(300, Config{}.intervalWriteDelayMs);
+  const uint32_t waits[] = {0, 1, 10, 13, 5000};
+  for (bool interval : {false, true}) {
+    for (uint32_t wait : waits) {
+      MaintenanceWaitBus bus;
+      Config cfg = bus.config();
+      cfg.writeDelayMs = wait;
+      cfg.intervalWriteDelayMs = wait;
+      EE871::EE871 dev;
+      TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+      bus.oneMsDelays = 0;
+      TEST_ASSERT_TRUE(performMaintenanceWrite(dev, interval).ok());
+      TEST_ASSERT_EQUAL_UINT32(wait, bus.oneMsDelays);
+      TEST_ASSERT_EQUAL_UINT32(interval ? 2 : 1, bus.fake.controlCount(0x10));
+      TEST_ASSERT_EQUAL_UINT32(interval ? 5 : 3, dev.totalSuccess());
+      TEST_ASSERT_EQUAL_UINT32(0, dev.totalFailures());
+      TEST_ASSERT_EQUAL_UINT32(0, bus.longDelayCalls);
+      TEST_ASSERT_EQUAL_UINT32(0, bus.yieldCalls);
+      TEST_ASSERT_FALSE(dev.persistentConfigDirty());
+    }
+  }
+}
+
+void test_maintenance_wait_callbacks_cover_slice_boundaries_and_order() {
+  const uint32_t waits[] = {0, 1, 10, 11, 5000};
+  const uint32_t counts[] = {0, 1, 1, 2, 500};
+  const uint8_t lastSlices[] = {0, 1, 10, 1, 10};
+  for (bool interval : {false, true}) {
+    for (uint8_t mode = 1; mode <= 3; ++mode) {
+      const bool useDelay = (mode & 1U) != 0;
+      const bool useYield = (mode & 2U) != 0;
+      for (uint8_t scenario = 0; scenario < 5; ++scenario) {
+        MaintenanceWaitBus bus;
+        Config cfg = bus.config(useDelay, useYield);
+        TEST_ASSERT_EQUAL_UINT8(10, cfg.longDelaySliceMs);
+        cfg.writeDelayMs = waits[scenario];
+        cfg.intervalWriteDelayMs = waits[scenario];
+        EE871::EE871 dev;
+        TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+        bus.expectWaitAfterWrites(interval ? 2 : 1);
+        bus.oneMsDelays = 0;
+        TEST_ASSERT_TRUE(performMaintenanceWrite(dev, interval).ok());
+        TEST_ASSERT_EQUAL_UINT32(useDelay ? counts[scenario] : 0, bus.longDelayCalls);
+        TEST_ASSERT_EQUAL_UINT32(useYield ? counts[scenario] : 0, bus.yieldCalls);
+        TEST_ASSERT_EQUAL_UINT32(useDelay ? waits[scenario] : 0, bus.longDelayTotalMs);
+        TEST_ASSERT_EQUAL_UINT32(useDelay ? 0 : waits[scenario], bus.oneMsDelays);
+        if (useYield) {
+          for (uint32_t slice = 0; slice < counts[scenario]; ++slice) {
+            const uint32_t expectedMs = slice + 1U == counts[scenario]
+                ? waits[scenario] : (slice + 1U) * 10U;
+            TEST_ASSERT_EQUAL_UINT32(expectedMs, bus.yieldAtMs[slice]);
+          }
+        }
+        if (useDelay && counts[scenario] != 0) {
+          TEST_ASSERT_EQUAL_UINT8(lastSlices[scenario], bus.slices[counts[scenario] - 1U]);
+          for (uint32_t slice = 0; slice + 1 < counts[scenario]; ++slice) {
+            TEST_ASSERT_EQUAL_UINT8(10, bus.slices[slice]);
+          }
+        }
+        if (mode == 3) {
+          TEST_ASSERT_EQUAL_UINT32(counts[scenario] * 2U, bus.eventCount);
+          for (uint32_t event = 0; event < bus.eventCount; event += 2) {
+            TEST_ASSERT_EQUAL_UINT8(1, bus.events[event]);
+            TEST_ASSERT_EQUAL_UINT8(2, bus.events[event + 1U]);
+          }
+        }
+        TEST_ASSERT_EQUAL_UINT32(interval ? 5 : 3, dev.totalSuccess());
+        TEST_ASSERT_EQUAL_UINT32(0, dev.totalFailures());
+        TEST_ASSERT_FALSE(dev.persistentConfigDirty());
+      }
+    }
+  }
+  const uint8_t slices[] = {1, 50};
+  for (uint8_t slice : slices) {
+    MaintenanceWaitBus bus;
+    Config cfg = bus.config(true, true);
+    cfg.longDelaySliceMs = slice;
+    cfg.writeDelayMs = 51;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+    bus.expectWaitAfterWrites(1);
+    TEST_ASSERT_TRUE(performMaintenanceWrite(dev, false).ok());
+    TEST_ASSERT_EQUAL_UINT32(51, bus.longDelayTotalMs);
+    TEST_ASSERT_EQUAL_UINT32(slice == 1 ? 51 : 2, bus.longDelayCalls);
+    TEST_ASSERT_EQUAL_UINT32(bus.longDelayCalls, bus.yieldCalls);
+    TEST_ASSERT_EQUAL_UINT8(1, bus.slices[bus.longDelayCalls - 1U]);
+  }
+}
+
+void test_maintenance_wait_config_rejects_invalid_without_io_and_preserves_active_session() {
+  const uint8_t invalidSlices[] = {0, 51, 255};
+  for (bool callbacks : {false, true}) {
+    for (uint8_t slice : invalidSlices) {
+      MaintenanceWaitBus bus;
+      Config cfg = bus.config(callbacks, callbacks);
+      cfg.longDelaySliceMs = slice;
+      EE871::EE871 dev;
+      TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_CONFIG),
+                             static_cast<uint8_t>(dev.begin(cfg).code));
+      TEST_ASSERT_EQUAL_UINT32(0, bus.ioCalls);
+      TEST_ASSERT_EQUAL_UINT32(0, bus.fake.elapsedUs());
+      TEST_ASSERT_EQUAL_UINT32(0, bus.eventCount);
+      TEST_ASSERT_FALSE(dev.isInitialized());
+      TEST_ASSERT_NULL(dev.getConfig().delayMs);
+      TEST_ASSERT_EQUAL_UINT8(10, dev.getConfig().longDelaySliceMs);
+    }
+  }
+  for (bool interval : {false, true}) {
+    MaintenanceWaitBus bus;
+    Config cfg = bus.config(true, true);
+    if (interval) cfg.intervalWriteDelayMs = 5001;
+    else cfg.writeDelayMs = 5001;
+    EE871::EE871 dev;
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_CONFIG),
+                           static_cast<uint8_t>(dev.begin(cfg).code));
+    TEST_ASSERT_EQUAL_UINT32(0, bus.ioCalls);
+    TEST_ASSERT_EQUAL_UINT32(0, bus.eventCount);
+  }
+  {
+    MaintenanceWaitBus missingBus;
+    Config missing = missingBus.config(true, true);
+    missing.delayUs = nullptr; // Task delays never replace the required bit-timing HAL.
+    EE871::EE871 missingDev;
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_CONFIG),
+                           static_cast<uint8_t>(missingDev.begin(missing).code));
+    TEST_ASSERT_EQUAL_UINT32(0, missingBus.ioCalls);
+    TEST_ASSERT_EQUAL_UINT32(0, missingBus.eventCount);
+  }
+  MaintenanceWaitBus bus;
+  Config active = bus.config(true, true);
+  active.longDelaySliceMs = 7;
+  active.writeDelayMs = 13;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(dev.begin(active).ok());
+  const uint32_t ioBefore = bus.ioCalls;
+  Config invalid = active;
+  invalid.longDelaySliceMs = 0;
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::ALREADY_INITIALIZED),
+                         static_cast<uint8_t>(dev.begin(invalid).code));
+  TEST_ASSERT_EQUAL_UINT32(ioBefore, bus.ioCalls);
+  TEST_ASSERT_EQUAL_UINT8(7, dev.getConfig().longDelaySliceMs);
+  TEST_ASSERT_EQUAL_UINT32(13, dev.getConfig().writeDelayMs);
+  TEST_ASSERT_TRUE(dev.getConfig().delayMs == active.delayMs);
+  TEST_ASSERT_TRUE(dev.getConfig().yield == active.yield);
+  TEST_ASSERT_TRUE(dev.getConfig().busUser == active.busUser);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::READY), static_cast<uint8_t>(dev.state()));
+}
+
+void test_maintenance_wait_callbacks_never_run_during_reads_pointer_retry_or_stretch() {
+  MaintenanceWaitBus bus;
+  Config cfg = bus.config(true, true);
+  cfg.readNackRetries = 3;
+  cfg.writeDelayMs = 13;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+  uint8_t byte = 0;
+  uint16_t ppm = 0;
+  TEST_ASSERT_TRUE(dev.readStatus(byte).ok());
+  TEST_ASSERT_TRUE(dev.readCo2Fast(ppm).ok());
+  TEST_ASSERT_TRUE(dev.setCustomPointer(cmd::CUSTOM_FILTER_CO2).ok());
+  TEST_ASSERT_TRUE(dev.customRead(cmd::CUSTOM_FILTER_CO2, byte).ok());
+  bus.fake.nackNextReadMainCommand(cmd::MAIN_STATUS);
+  bus.oneMsDelays = 0;
+  TEST_ASSERT_TRUE(dev.readStatus(byte).ok());
+  TEST_ASSERT_EQUAL_UINT32(1, bus.oneMsDelays);
+  TEST_ASSERT_EQUAL_UINT32(1, dev.readRetryDiagnostics().retries);
+  TEST_ASSERT_EQUAL_UINT32(0, bus.eventCount);
+  // A successful flash STOP can stretch before any quiet-wait callback.
+  bus.fake.stretchClockReleaseAfter(38, 150000);
+  bus.expectWaitAfterWrites(1);
+  TEST_ASSERT_TRUE(performMaintenanceWrite(dev, false).ok());
+  TEST_ASSERT_EQUAL_UINT32(2, bus.longDelayCalls);
+  TEST_ASSERT_EQUAL_UINT32(2, bus.yieldCalls);
+  TEST_ASSERT_EQUAL_UINT32(13, bus.longDelayTotalMs);
+  // With a zero quiet wait, flash stretching and explicit reset remain purely
+  // microsecond signaling even when both optional callbacks are configured.
+  MaintenanceWaitBus zeroBus;
+  Config zero = zeroBus.config(true, true);
+  EE871::EE871 zeroDev;
+  TEST_ASSERT_TRUE(zeroDev.begin(zero).ok());
+  zeroBus.fake.stretchClockReleaseAfter(38, 150000);
+  TEST_ASSERT_TRUE(performMaintenanceWrite(zeroDev, false).ok());
+  zeroBus.fake.stretchClockReleaseAfter(1, 150000);
+  TEST_ASSERT_TRUE(zeroDev.busReset().ok());
+  TEST_ASSERT_EQUAL_UINT32(0, zeroBus.eventCount);
+}
+
+void test_maintenance_wait_transfer_failure_skips_quiet_wait_and_verify() {
+  for (bool interval : {false, true}) {
+    for (uint8_t fault = 0; fault < (interval ? 5 : 3); ++fault) {
+      MaintenanceWaitBus bus;
+      Config cfg = bus.config(true, true);
+      cfg.writeDelayMs = 13;
+      cfg.intervalWriteDelayMs = 13;
+      EE871::EE871 dev;
+      TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+      if (fault == 0) bus.fake.setDevicePresent(false);
+      if (fault == 1) bus.fake.nackNextWritePec();
+      if (fault == 2) bus.fake.stretchClockReleaseAfter(38, cfg.flashStretchTimeoutUs + 1U);
+      if (fault == 3) bus.fake.failNextWriteToAddress(cmd::CUSTOM_INTERVAL_H);
+      if (fault == 4) bus.fake.stretchClockReleaseAfter(76, cfg.flashStretchTimeoutUs + 1U);
+      const uint32_t pointers = bus.fake.controlCount(0x50);
+      const uint32_t reads = bus.fake.controlCount(0x51);
+      const Status st = performMaintenanceWrite(dev, interval);
+      TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fault == 2 || fault == 4 ? Err::TIMEOUT : Err::NACK),
+                             static_cast<uint8_t>(st.code));
+      TEST_ASSERT_EQUAL_UINT32(0, bus.eventCount);
+      TEST_ASSERT_EQUAL_UINT32(pointers, bus.fake.controlCount(0x50));
+      TEST_ASSERT_EQUAL_UINT32(reads, bus.fake.controlCount(0x51));
+      TEST_ASSERT_EQUAL_UINT32(1, dev.totalFailures());
+      TEST_ASSERT_EQUAL_UINT32(fault >= 3 ? 1 : 0, dev.totalSuccess());
+      TEST_ASSERT_EQUAL_UINT32(fault >= 3 ? 2 : 1, bus.fake.controlCount(0x10));
+      TEST_ASSERT_EQUAL(fault >= 2, dev.persistentConfigDirty());
+      if (fault >= 2) assertDirtyWithOriginalError(dev, st);
+    }
+  }
+}
+
+void test_maintenance_wait_readback_failures_retain_dirty_and_exact_status() {
+  for (bool interval : {false, true}) {
+    for (uint8_t fault = 0; fault < 3; ++fault) {
+      MaintenanceWaitBus bus;
+      Config cfg = bus.config(true, true);
+      cfg.writeDelayMs = 13;
+      cfg.intervalWriteDelayMs = 13;
+      EE871::EE871 dev;
+      TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+      const uint8_t address = interval ? cmd::CUSTOM_INTERVAL_L : cmd::CUSTOM_FILTER_CO2;
+      if (fault == 0) bus.fake.corruptReadPecAfterNextWrite(address);
+      if (fault == 1) bus.fake.dropNextWriteCommitToAddress(address);
+      if (fault == 2) bus.fake.nackNextReadMainCommand(cmd::MAIN_CUSTOM_PTR);
+      bus.expectWaitAfterWrites(interval ? 2 : 1);
+      const Status st = performMaintenanceWrite(dev, interval);
+      const Err expected[] = {Err::PEC_MISMATCH, Err::E2_ERROR, Err::NACK};
+      TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(expected[fault]), static_cast<uint8_t>(st.code));
+      if (fault == 1) {
+        TEST_ASSERT_EQUAL_INT32(interval ? 406 : 0, st.detail);
+        TEST_ASSERT_EQUAL_STRING(interval ? "Interval verify failed" : "Write verify failed", st.msg);
+      } else {
+        assertSameStatus(st, dev.lastError());
+      }
+      assertDirtyWithOriginalError(dev, st);
+      TEST_ASSERT_EQUAL_UINT32(13, bus.longDelayTotalMs);
+      TEST_ASSERT_EQUAL_UINT32(2, bus.longDelayCalls);
+      TEST_ASSERT_EQUAL_UINT32(2, bus.yieldCalls);
+      TEST_ASSERT_EQUAL_UINT32(fault == 1 ? 0 : 1, dev.totalFailures());
+    }
+  }
+}
+
+static void legacySetScl(bool, void*) {}
+static void legacySetSda(bool, void*) {}
+static bool legacyReadScl(void*) { return true; }
+static bool legacyReadSda(void*) { return true; }
+static void legacyDelayUs(uint32_t, void*) {}
+static bool legacyAllowRetry(void*) { return true; }
+
+void test_legacy_config_aggregate_retains_original_member_bindings() {
+  static int context = 0;
+  constexpr Config legacy{
+      legacySetScl, legacySetSda, legacyReadScl, legacyReadSda, legacyDelayUs,
+      &context, 3, 110, 120, 5, 6, 24000, 34000, 123, 456, 7, 400000, 2, legacyAllowRetry};
+  static_assert(std::is_aggregate_v<Config>);
+  static_assert(legacy.setScl == legacySetScl && legacy.setSda == legacySetSda);
+  static_assert(legacy.readScl == legacyReadScl && legacy.readSda == legacyReadSda);
+  static_assert(legacy.delayUs == legacyDelayUs && legacy.busUser == &context);
+  static_assert(legacy.deviceAddress == 3 && legacy.clockLowUs == 110 && legacy.clockHighUs == 120);
+  static_assert(legacy.startHoldUs == 5 && legacy.stopHoldUs == 6);
+  static_assert(legacy.bitTimeoutUs == 24000 && legacy.byteTimeoutUs == 34000);
+  static_assert(legacy.writeDelayMs == 123 && legacy.intervalWriteDelayMs == 456);
+  static_assert(legacy.offlineThreshold == 7 && legacy.flashStretchTimeoutUs == 400000);
+  static_assert(legacy.readNackRetries == 2 && legacy.allowReadRetry == legacyAllowRetry);
+  static_assert(legacy.delayMs == nullptr && legacy.yield == nullptr && legacy.longDelaySliceMs == 10);
+}
+
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(test_maintenance_wait_fallback_preserves_one_micro_delay_per_millisecond);
+  RUN_TEST(test_maintenance_wait_callbacks_cover_slice_boundaries_and_order);
+  RUN_TEST(test_maintenance_wait_config_rejects_invalid_without_io_and_preserves_active_session);
+  RUN_TEST(test_maintenance_wait_callbacks_never_run_during_reads_pointer_retry_or_stretch);
+  RUN_TEST(test_maintenance_wait_transfer_failure_skips_quiet_wait_and_verify);
+  RUN_TEST(test_maintenance_wait_readback_failures_retain_dirty_and_exact_status);
+  RUN_TEST(test_legacy_config_aggregate_retains_original_member_bindings);
   RUN_TEST(test_read_retry_config_rejects_invalid_without_io);
   RUN_TEST(test_measurement_status_retries_recover_on_each_allowed_attempt);
   RUN_TEST(test_retry_exhaustion_counts_one_health_failure_and_preserves_session);

@@ -15,6 +15,7 @@ static constexpr uint32_t kMaxNominalBitTimeUs = 1000000U / kMinClockFrequencyHz
 static constexpr uint32_t kBitsPerByte = 9;
 static constexpr uint32_t kMaxBitTimeoutUs = 25000;
 static constexpr uint32_t kMaxByteTimeoutUs = 35000;
+static constexpr uint8_t LONG_DELAY_SLICE_MAX_MS = 50;
 
 inline void setScl(const Config& cfg, bool level) {
   cfg.setScl(level, cfg.busUser);
@@ -303,9 +304,22 @@ static uint8_t calcPecWrite(uint8_t controlByte, uint8_t addressByte, uint8_t da
   return static_cast<uint8_t>((controlByte + addressByte + dataByte) & 0xFF);
 }
 
-static void sleepMs(const Config& cfg, uint32_t delayMs) {
-  for (uint32_t i = 0; i < delayMs; ++i) {
-    cfg.delayUs(1000, cfg.busUser);
+static void waitAfterWriteMs(const Config& cfg, uint32_t remainingMs) {
+  while (remainingMs != 0U) {
+    const uint32_t sliceMs = remainingMs < cfg.longDelaySliceMs
+        ? remainingMs : cfg.longDelaySliceMs;
+    if (cfg.delayMs != nullptr) {
+      cfg.delayMs(sliceMs, cfg.busUser);
+    } else {
+      // Preserve the existing fallback's requested delays and call granularity.
+      for (uint32_t ms = 0; ms < sliceMs; ++ms) {
+        cfg.delayUs(1000, cfg.busUser);
+      }
+    }
+    if (cfg.yield != nullptr) {
+      (cfg.yield)(cfg.busUser);
+    }
+    remainingMs -= sliceMs;
   }
 }
 
@@ -321,6 +335,9 @@ Status EE871::begin(const Config& config) {
 
   if (config.readNackRetries > cmd::READ_NACK_RETRIES_MAX) {
     return Status::Error(Err::INVALID_CONFIG, "Read NACK retries must be <=3");
+  }
+  if (config.longDelaySliceMs == 0 || config.longDelaySliceMs > LONG_DELAY_SLICE_MAX_MS) {
+    return Status::Error(Err::INVALID_CONFIG, "Long delay slice must be 1-50 ms");
   }
 
   if (config.setScl == nullptr || config.setSda == nullptr ||
@@ -718,7 +735,7 @@ Status EE871::_customWriteDirect(uint8_t address, uint8_t value, bool* writeMayH
     return st;
   }
 
-  sleepMs(_config, _config.writeDelayMs);
+  waitAfterWriteMs(_config, _config.writeDelayMs);
 
   uint8_t verify = 0;
   st = customRead(address, verify);
@@ -767,7 +784,7 @@ Status EE871::writeMeasurementInterval(uint16_t intervalDeciSeconds) {
     return st;
   }
 
-  sleepMs(_config, _config.intervalWriteDelayMs);
+  waitAfterWriteMs(_config, _config.intervalWriteDelayMs);
 
   uint8_t verifyBuf[2] = {0};
   st = customRead(cmd::CUSTOM_INTERVAL_L, verifyBuf, 2);

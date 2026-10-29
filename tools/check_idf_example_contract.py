@@ -56,6 +56,8 @@ IDF_REQUIRED_FRAGMENTS = [
 ]
 
 IDF_REQUIRED_PATTERNS = {
+    "post-write delay adapter": r'deviceCfg\.delayMs\s*=\s*ee871_idf::delayMs\s*;',
+    "post-write yield adapter": r'deviceCfg\.yield\s*=\s*ee871_idf::yieldTask\s*;',
     "checked fast command dispatch": r'std::strcmp\(\s*trimmed\s*,\s*"co2fastsample"\s*\)\s*==\s*0\s*\)\s*\{\s*printCo2Sample\(true\)',
     "checked average command dispatch": r'std::strcmp\(\s*trimmed\s*,\s*"co2avgsample"\s*\)\s*==\s*0\s*\)\s*\{\s*printCo2Sample\(false\)',
     "dirty command dispatch": r'std::strcmp\(\s*trimmed\s*,\s*"dirty"\s*\)\s*==\s*0',

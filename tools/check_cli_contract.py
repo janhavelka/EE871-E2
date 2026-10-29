@@ -38,6 +38,8 @@ REQUIRED_FRAGMENTS = [
 ]
 
 REQUIRED_PATTERNS = {
+    "post-write delay adapter": r'deviceCfg\.delayMs\s*=\s*transport::delayMs\s*;',
+    "post-write yield adapter": r'deviceCfg\.yield\s*=\s*transport::yieldTask\s*;',
     "bounded CLI line reader": r"cli_shell::readLine\s*\(",
     "help command dispatch": r'trimmed\s*==\s*"help"',
     "scan command dispatch": r'trimmed\s*==\s*"scan"',

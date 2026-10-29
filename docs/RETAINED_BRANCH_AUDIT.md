@@ -74,6 +74,36 @@ persistent sensor writes or branch retirement is claimed.
 The remaining decision and tables preserve the historical audit baseline;
 their then-missing CAP-1 description is superseded by this disposition.
 
+## CAP-2 disposition after the audit — 2026-10-29
+
+**CAP-2 is implemented as optional cooperative post-write quiet waits.**
+Appended `Config::delayMs`, `Config::yield` and `longDelaySliceMs` retain all
+earlier positional aggregate fields. Slices default to 10 ms and must be
+1..50 ms; invalid settings fail before GPIO traffic. One shared helper requests
+exactly the configured quiet wait in positive slices, using the delay callback
+or the existing per-millisecond `delayUs(1000)` fallback, then optional yield
+after each completed slice. Zero waits, 150/300 ms defaults and 5000 ms limits
+remain unchanged.
+
+Arduino and native IDF adapters install task-context callbacks, with IDF tick
+rounding that avoids under-waiting. These callbacks never enter protocol
+signaling, flash STOP stretching, SCL polling, reads, volatile pointer updates
+or the fixed retry pause. Existing health, readback and persistent uncertainty
+behavior remain with their current owners. Callbacks are bounded,
+application-owned and non-reentrant under external serialization; void callbacks
+cannot prove wall-clock adherence or report their own failure. Host tests show
+requested waits and placement only, not scheduler/watchdog improvement on a
+physical device.
+`test_maintenance_wait_fallback_preserves_one_micro_delay_per_millisecond`
+records the existing finite fallback on a successful fake write;
+`test_maintenance_wait_callbacks_cover_slice_boundaries_and_order` checks the
+additive callback path. See the [prompt index](prompts/README.md) for native
+regression references and the implementation handoff for exact checks, SHA and
+CI evidence.
+
+The remaining decision and tables preserve the historical audit baseline;
+their then-missing CAP-2 description is superseded by this disposition.
+
 ## Decision
 
 [Executable software prompts](prompts/README.md) now map HIL-1 and CAP-1..5 to

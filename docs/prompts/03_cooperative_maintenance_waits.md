@@ -1,11 +1,21 @@
 # Prompt 03 — Make optional long maintenance waits cooperative
 
-**Finding:** CAP-2. **Status: NOT IMPLEMENTED.** Optional additive capability.
+**Finding:** CAP-2. **Status: IMPLEMENTED.** Selected additive capability.
 Invoking this prompt selects long-wait callback support and example adapters.
 Current delays are finite; the selected improvement is scheduler cooperation
 during post-write quiet waits. Do not invent an unboundedness bug or introduce
 an asynchronous driver engine. Complete the software change without hardware
 tests, serial access, scheduler measurements on devices or real writes.
+
+Implemented on 2026-10-29 with appended optional `delayMs`/`yield` callbacks,
+a validated 1..50 ms slice (default 10 ms), one shared post-write quiet-wait
+procedure, and Arduino/native IDF adapters. Default-null fallback, zero waits,
+150/300 ms settings, 5000 ms limits, protocol and retry timing, and persistent
+diagnostics are preserved. Void callbacks remain bounded application-owned
+task-context contracts, not measured wall-clock or watchdog guarantees. The
+execution handoff records actual checks, final SHA and exact terminal CI URL;
+no physical qualification or release is claimed. The instructions below remain
+the selected scope and acceptance contract.
 
 ## Audit the current boundaries first
 

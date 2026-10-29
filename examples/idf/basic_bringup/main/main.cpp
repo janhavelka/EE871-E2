@@ -2580,6 +2580,8 @@ void configureDevice() {
   deviceCfg.readScl = trace::readScl;
   deviceCfg.readSda = trace::readSda;
   deviceCfg.delayUs = trace::delayUs;
+  deviceCfg.delayMs = ee871_idf::delayMs;
+  deviceCfg.yield = ee871_idf::yieldTask;
   deviceCfg.busUser = &e2Bus;
   deviceCfg.deviceAddress = EE871_ADDRESS;
   deviceCfg.clockLowUs = E2_CLOCK_LOW_US;

@@ -9,6 +9,8 @@
 #include "driver/gpio.h"
 #include "esp_err.h"
 #include "esp_rom_sys.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 namespace ee871_idf {
 
@@ -78,6 +80,21 @@ inline void delayUs(uint32_t us, void*) {
   esp_rom_delay_us(us);
 }
 
+/// Post-write task wait only; ceiling conversion plus one tick prevents an
+/// early next tick from shortening the requested wait. The core slices <=50 ms.
+inline void delayMs(uint32_t ms, void*) {
+  if (ms == 0U) {
+    return;
+  }
+  const TickType_t ticks = static_cast<TickType_t>(
+      (static_cast<uint64_t>(ms) * configTICK_RATE_HZ + 999U) / 1000U + 1U);
+  vTaskDelay(ticks);
+}
+
+inline void yieldTask(void*) {
+  taskYIELD();
+}
+
 inline EE871::Config makeConfig(E2GpioBus& bus, uint8_t deviceAddress = 0) {
   EE871::Config cfg;
   cfg.setScl = setScl;
@@ -85,6 +102,8 @@ inline EE871::Config makeConfig(E2GpioBus& bus, uint8_t deviceAddress = 0) {
   cfg.readScl = readScl;
   cfg.readSda = readSda;
   cfg.delayUs = delayUs;
+  cfg.delayMs = delayMs;
+  cfg.yield = yieldTask;
   cfg.busUser = &bus;
   cfg.deviceAddress = deviceAddress;
   return cfg;
