@@ -200,7 +200,64 @@ electrical timing qualification, calibration or branch retirement is claimed.
 The remaining decision and tables preserve the historical audit baseline;
 their then-missing CAP-3 description is superseded by this disposition.
 
-## Decision
+## CAP-5 and integrated software closeout — 2026-10-29
+
+**CAP-5: strict startup preserved and verified.** The selected HIL-1 and
+CAP-1..4 implementations are complete at
+`5c920d00b7065a906b8fae7f4bf751a42796e955`; no selected software scope is
+deferred. Prompt 06 reviewed their actual combined diff from preparation
+baseline `d37b586e35e553af2a65197282d6d478e554733b` and found no concrete
+runtime regression or overlapping owner requiring a source change. Existing
+coverage suffices; no permissive startup API or duplicate startup tests were
+added. The [prompt index](prompts/README.md) records each implementation commit,
+regression references and actual local checks.
+
+Failed `begin()` from UNINIT retains its precise status, UNINIT and an empty
+feature cache. An active-session call returns `ALREADY_INITIALIZED` without
+changing that session. `_resetStoppedState()` retains unresolved persistent
+targets, their first error and the latest-operation evidence. Raw identity and
+feature checks install capabilities only after full success. Failed recovery
+clears capabilities and latches OFFLINE from READY, DEGRADED or OFFLINE;
+ordinary traffic cannot reopen it. Successful recovery verifies communication
+and capabilities, while only complete resync clears dirty state, without
+certifying requested write intent. New sample, wait, timing and evidence APIs
+reuse these owners. Raw reads, original Config positional bindings and existing
+error values remain compatible; the core remains managed synchronous and
+framework-neutral.
+
+Existing registered tests include
+`test_begin_validates_full_ee871_identity_and_co2_capability`,
+`test_feature_cache_failure_fails_begin_closed`,
+`test_malformed_feature_flags_fail_begin_and_recovery_closed`,
+`test_failed_recover_clears_capabilities_and_latches_from_ready_or_degraded`,
+`test_failed_recovery_is_atomic_and_keeps_offline_latched`,
+`test_recovery_refreshes_feature_cache_atomically`,
+`test_offline_replay_marks_message_and_preserves_original_diagnostics`, and
+`test_pending_single_write_survives_offline_recovery_and_reinitialization`.
+HIL-1 remains established by actual host sender-admission tests above, including
+failed current preflight with stale clean flags/values; driver evidence alone
+does not establish that fix.
+
+Historical attribution clarification from exact `git show` inspection:
+`27023a164b4bd8c5a51614fffb071329e1b70867` accepts NACK, TIMEOUT, BUS_STUCK,
+E2_ERROR, PEC_MISMATCH and DEVICE_NOT_FOUND as successful OFFLINE startup.
+Intermediate `432519862430703a056d4ab37247adcf5fbbc1d1` still admits a cleanly
+terminated identity NACK as well as DEVICE_NOT_FOUND, but rejects a NACK whose
+STOP failed. Only final tip `dae9bea1155db4efb757a37a99ed7b507d718e6c` restricts
+that policy to DEVICE_NOT_FOUND. This clarifies the intermediate-commit row in
+the preserved inventory below. Current GPIO E2 cannot establish authoritative
+absence and never returns the reserved DEVICE_NOT_FOUND code. Bounded hot-plug
+startup retry remains application-owned.
+
+[All six existing CI jobs passed](https://github.com/janhavelka/EE871-E2/actions/runs/40915629506)
+at the exact implementation SHA above, including both native-IDF 6.0.1 targets.
+Prompt 06 reuses those unchanged implementation results and changes only
+closeout prose; its later documentation SHA is separate. Hardware qualification,
+real persistent writes, physical timing/calibration outcomes and branch
+retirement remain outside scope. No hardware matrix rows or historical audit
+baseline claims are rewritten.
+
+## Historical decision at the reviewed baseline
 
 [Executable software prompts](prompts/README.md) now map HIL-1 and CAP-1..5 to
 independent implementation scopes, meaningful regression cases and a final

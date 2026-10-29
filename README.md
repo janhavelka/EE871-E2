@@ -29,9 +29,24 @@ persistent-write uncertainty.
 
 When moving from `v1.1.0` to Unreleased, review the example/HIL evidence and
 serial-framing corrections in the changelog and pin the chosen source commit.
+Rebuild consumers for the appended Config members and fixed driver storage;
+existing positional Config bindings and error values retain their meaning.
 The older migration from `v1.0.1` remains part of the published `1.1.0` notes.
 
-Software verification of implementation commit `3d32ac3` on 2026-09-11 passed
+The selected software work is complete at implementation commit
+`5c920d00b7065a906b8fae7f4bf751a42796e955` (2026-10-29): HIL sender admission,
+checked samples, cooperative maintenance waits, persistent-operation evidence,
+and requested-delay bounds. Strict startup is preserved and verified.
+Local verification passed 134 native tests, 100 Python tests, the timing/CLI/IDF
+contracts, version consistency, Doxygen and all three Arduino builds (S3, S2,
+TunnelMonitor compatibility). [All six CI jobs passed at that exact SHA](https://github.com/janhavelka/EE871-E2/actions/runs/40915629506),
+including native ESP-IDF 6.0.1 S3/S2 builds. Local native-IDF builds were NOT RUN
+because the SDK was unavailable. The later integrated closeout changes only
+documentation and reuses these unchanged implementation results; its checks
+cover documentation separately. [Prompt outcomes and verification details](https://github.com/janhavelka/EE871-E2/blob/main/docs/prompts/README.md)
+retain the implementation traceability. No hardware qualification was added.
+
+Earlier software verification of implementation commit `3d32ac3` on 2026-09-11 passed
 93 native tests, 58 Python tests, the timing/CLI/IDF contracts, synchronized
 version metadata, Doxygen, and all three local Arduino builds (ESP32-S3,
 ESP32-S2, and the older TunnelMonitor compatibility stack).
@@ -237,6 +252,16 @@ before installing the cache. `readOperatingMode()` rejects active mode bits
 whose capability is absent. `readAutoAdjustStatus()` requires advertised
 auto-adjust support and rejects reserved result bits instead of decoding
 unsupported register replies as a running adjustment.
+
+Startup is strict: failed initialization from UNINIT returns its precise status,
+leaves UNINIT and installs no partial capability cache. Calling `begin()` on an
+active session returns `ALREADY_INITIALIZED` without changing that session.
+NACK, PEC, timeout, stuck lines and wrong identity are never converted into
+successful startup or confirmed
+absence. `DEVICE_NOT_FOUND` remains reserved for compatibility. Applications
+needing hot-plug startup own a bounded schedule for retrying `begin()`; the
+driver adds no recurring retry policy. Persistent uncertainty and latest
+operation evidence survive both successful and failed initialization.
 
 Offset/gain helpers first check CO2 support in `0x03`; calibration-point reads
 check `0x04`. Each call adds one volatile pointer update and one byte read.

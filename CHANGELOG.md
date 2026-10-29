@@ -59,6 +59,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ESP-IDF CLIs expose the checked procedure and evidence. Existing automated
   HIL/soak plans keep their command sequences and measurement side effects.
 
+### Changed
+
+- Closed the selected software prompt set with traceable implementation and CI
+  evidence. Strict startup and atomic recovery are preserved and verified by
+  existing regressions; no permissive absence policy was added. Current audit
+  dispositions distinguish completed software from historical findings and
+  hardware qualification, including the intermediate historical NACK policy.
+
 ### Fixed
 
 - HIL persistent-write admission requires fresh clean diagnostics and a complete

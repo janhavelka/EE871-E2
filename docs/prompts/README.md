@@ -1,8 +1,9 @@
 # EE871-E2 software implementation prompts
 
-**Status: PARTIALLY IMPLEMENTED.** Prompts 01 through 05 implement HIL-1,
-CAP-1, CAP-2, CAP-4 and CAP-3 in the selected software scope.
-Prompt 06 remains NOT IMPLEMENTED and was not selected.
+**Status: SELECTED SOFTWARE COMPLETE.** Prompts 01 through 05 implement HIL-1,
+CAP-1, CAP-2, CAP-4 and CAP-3. Prompt 06 closes the selected software scope;
+CAP-5 strict startup is preserved and verified. All six prompts were selected;
+no selected software scope is deferred. Hardware qualification remains separate.
 These executable instructions were prepared on 2026-10-25 after source/test review of clean,
 fetched `main` at `d37b586e35e553af2a65197282d6d478e554733b`.
 The underlying [retained branch audit](../RETAINED_BRANCH_AUDIT.md) compares
@@ -20,7 +21,7 @@ to overwrite subsequent fixes.
 | CAP-2: cooperative long waits | [03 — Cooperative maintenance waits](03_cooperative_maintenance_waits.md) | Selected additive callbacks; existing finite waits retain their settings. | IMPLEMENTED: optional sliced delay/yield only after persistent transfer, exact requested totals and native/Arduino adapters; no physical scheduler claim. |
 | CAP-4: richer persistent operation evidence/admission | [04 — Persistent operation evidence](04_persistent_operation_evidence.md) | Selected fixed-size latest-operation evidence and application admission; existing dirty tracking remains authoritative. | IMPLEMENTED: bounded outer-operation evidence, cache-only CLI diagnostics and explicit CLI/HIL admission; no physical outcome claim. |
 | CAP-3: programmatic operation timing bounds | [05 — Requested-delay bounds](05_requested_delay_bounds.md) | Selected additive pure API and real example consumer; current manual bounds were not automatically incorrect. | IMPLEMENTED: checked microsecond sums from explicit Config, bounded targets/counts and bus-silent Arduino/IDF diagnostics. |
-| CAP-5: permissive absent startup in older branch | [06 — Software closeout](06_software_closeout.md) | Integrated closeout preserves strict startup; no new feature or mandatory duplicate test batch. | NOT IMPLEMENTED |
+| CAP-5: permissive absent startup in older branch | [06 — Software closeout](06_software_closeout.md) | Selected integrated closeout preserves strict startup; no new startup feature. | PRESERVED AND VERIFIED: precise failed begin, atomic recovery and persistent retention; existing tests suffice. |
 
 Prompt 01 regression evidence in `test/test_hil_runner_parser.py`:
 `test_main_failed_interval_baseline_blocks_explicit_serial_write` reproduces
@@ -138,8 +139,76 @@ for repeated query purity. `test/test_cli_contract.py` adds
 `test_requested_delay_formatters_use_real_calculator_without_io`, which compiles
 and executes both actual CLI formatters, and
 `test_requested_delay_contract_rejects_bus_calls_and_wall_time_claims`, which
-checks the diagnostic boundary. Exact local and final-commit CI results remain
-in the execution handoff.
+checks the diagnostic boundary. Exact local and final-commit CI results are
+recorded below.
+
+Prompt 06 reviewed the complete selected diff and current startup, transport,
+sample, wait, evidence, timing and sender-admission owners. No concrete runtime
+regression or redundant implementation owner was found; no source change or
+duplicate startup test was needed. Failed strict `begin()` from UNINIT preserves
+its precise status, UNINIT and an empty capability cache while retaining
+persistent uncertainty. An active-session call returns `ALREADY_INITIALIZED`
+without changing that session.
+Failed recovery clears capabilities and latches OFFLINE; only complete identity
+and capability verification restores READY. Recovery does not verify uncertain
+writes, and resync establishes current coherence only.
+
+Existing registered native tests provide the CAP-5 evidence:
+`test_begin_validates_full_ee871_identity_and_co2_capability`,
+`test_feature_cache_failure_fails_begin_closed`,
+`test_malformed_feature_flags_fail_begin_and_recovery_closed`,
+`test_failed_recover_clears_capabilities_and_latches_from_ready_or_degraded`,
+`test_failed_recovery_is_atomic_and_keeps_offline_latched`,
+`test_recovery_refreshes_feature_cache_atomically`,
+`test_offline_replay_marks_message_and_preserves_original_diagnostics`, and
+`test_pending_single_write_survives_offline_recovery_and_reinitialization`.
+Raw read behavior and existing Config positional fields/error values are
+preserved; new fields and `CO2_SENSOR_ERROR` append. No permissive startup,
+hidden reset/retry or new framework was introduced. Application-owned bounded
+hot-plug retries remain outside the driver.
+
+## Implementation and verification record — 2026-10-29
+
+All selected changes remain on the existing `main` branch. The preparation
+baseline is `d37b586e35e553af2a65197282d6d478e554733b`; these commits identify
+the implemented scopes:
+
+| Prompt / finding | Implementation commit(s) | Verified outcome |
+| --- | --- | --- |
+| 01 / HIL-1 | `b41c46aa7b12071e769a2e7b49cfcf99dccacd7d`, `9df386a6696135abdad470495dbb406d8d63446f` | Actual destructive-send admission fixed, including inconsistent diagnostic sections. |
+| 02 / CAP-1 | `46d01ab7a915eb32f7a59946446cc5dbd3c95f1d` | Explicit checked sample API and both CLI callers. |
+| 03 / CAP-2 | `934a4d673a194122b609afa20ce62cdfa179f7c5` | Optional cooperative quiet waits and both transport adapters. |
+| 04 / CAP-4 | `83af3cf8351e344e2c0be133324cc70d13f5de6d` | Latest-operation evidence and CLI/HIL maintenance admission. |
+| 05 / CAP-3 | `5c920d00b7065a906b8fae7f4bf751a42796e955` | Pure requested-delay bounds and both CLI consumers. |
+| 06 / CAP-5 and integration | Audited combined implementation `5c920d00b7065a906b8fae7f4bf751a42796e955` | Strict startup preserved and verified; documentation-only closeout. |
+
+The combined implementation at
+`5c920d00b7065a906b8fae7f4bf751a42796e955` passed these actual local checks:
+
+- `python -m unittest discover -s test -p "test_*.py"`: 100 passed.
+- `.\scripts\pio.cmd test -e native`: 134 passed.
+- `python tools/check_core_timing_guard.py`,
+  `python tools/check_cli_contract.py`,
+  `python tools/check_idf_example_contract.py`, and
+  `python scripts/generate_version.py check`: passed.
+- `.\scripts\pio.cmd run -e ex_bringup_s3`,
+  `.\scripts\pio.cmd run -e ex_bringup_s2`, and
+  `.\scripts\pio.cmd run -e compat_tunnelmonitor_s3`: passed.
+- `doxygen Doxyfile` and `git diff --check`: passed.
+
+[CI run 40915629506](https://github.com/janhavelka/EE871-E2/actions/runs/40915629506)
+completed successfully at that exact implementation SHA: native tests, library
+validation, both Arduino builds and both native-IDF 6.0.1 builds (ESP32-S3/S2).
+Local native-IDF builds were **NOT RUN** because the SDK was unavailable; static
+checks are not substituted for those builds. Prompt 06 reuses the unchanged
+implementation's test/build results and reconfirmed this terminal CI evidence.
+Focused Doxygen, local links/anchors, source/test references, fenced blocks and
+whitespace checks passed for this documentation-only closeout. Its later
+documentation commit is distinct and identified in the final handoff.
+Hardware access, physical timing/write/calibration qualification, branch
+retirement and a new release remain outside this closeout.
+
+## Original selection and execution rules
 
 For the required defect fix and closeout, execute **01, then 06**. For the optional full
 software feature set, execute **01 → 02 → 03 → 04 → 05 → 06**. Prompt 05 must
@@ -167,7 +236,7 @@ rows into software implementation requirements or claim host tests close them.
 The following observations describe the preparation baseline above. HIL-1 and
 CAP-1 through CAP-4 are superseded by the implementation dispositions and
 regression evidence in the coverage table. The strict-startup boundary remains
-current; Prompt 06 software closeout is not selected here.
+current and was preserved and verified by Prompt 06.
 
 - HIL `main()` continues after a prompt-framed failure and stops only on a
   framing timeout. `update_state()` keeps older parsed values and clean flags;

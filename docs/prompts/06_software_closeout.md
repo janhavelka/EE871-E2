@@ -1,7 +1,15 @@
 # Prompt 06 — Close the selected software work and preserve strict startup
 
 **Findings:** selected HIL-1/CAP-1..4 work and CAP-5 disposition.
-**Status: NOT IMPLEMENTED.** This is the final integrated closeout prompt, not
+**Status: COMPLETE — selected software closed; CAP-5 preserved and verified.**
+The audit at `5c920d00b7065a906b8fae7f4bf751a42796e955` found no concrete
+runtime regression requiring another source change or duplicate test batch.
+See the [prompt index](README.md#implementation-and-verification-record--2026-10-29)
+for implementation commits, existing regression symbols, actual checks and
+terminal CI evidence. This closeout updates documentation only; hardware
+qualification remains outside scope. The original execution instructions follow.
+
+This is the final integrated closeout prompt, not
 a new feature request. CAP-5 means preserve the existing strict startup policy;
 no startup defect or missing API is presumed. Do not add tests that only repeat
 already-covered implementation, and do not add `AllowAbsent` or a new startup
