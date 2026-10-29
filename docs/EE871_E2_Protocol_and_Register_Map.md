@@ -556,7 +556,9 @@ transport, validation, capability, and protocol failures:
   `busReset()`, and `checkBusIdle()`.
 - Persistent maintenance: typed helpers such as
   `writeMeasurementInterval()`, with dirty/resync diagnostics for uncertain
-  single-byte, multi-byte, and raw custom-memory writes.
+  single-byte, multi-byte, and raw custom-memory writes. Cache-only
+  `getLastPersistentOperation()` separately reports the latest operation's
+  intent, phase evidence, readback and precise result.
 
 This section maps the protocol to the current library; it is not a generic C
 API compatibility requirement.
@@ -605,6 +607,52 @@ through `lastCleanupError` and `cleanupBlocked`. OFFLINE remains latched for
 ordinary operations until explicit `recover()` succeeds. CO2 status errors
 and validated out-of-range values remain sensor-domain failures when the
 underlying transport succeeded.
+
+### 13.5 Persistent operation evidence and admission
+
+`PersistentOperationResult` retains the latest outer mutation only. Its
+operation, start address and length describe the complete target; 16-byte
+requested/observed arrays and relative validity/progress masks preserve partial
+pair and part-name results. Internal writes and volatile pointer updates do
+not start separate user operations. `result` preserves the original returned
+code, detail and message; observation bytes become valid only after a
+successful read frame, including PEC and STOP.
+
+The direct-write transport helper owns effect classification. Before PEC
+starts, the write has no possible persistent effect. Starting PEC transmission
+makes acceptance uncertain until the final ACK bit is sampled: an ACK records
+acknowledgement, while a definite NACK proves rejection. A later clock-low or
+STOP failure cannot undo that sampled evidence. An unsampled final ACK and
+interrupted PEC remain uncertain. Original transfer errors take precedence
+over cleanup errors, and each tracked frame retains its existing health update.
+
+`possibleEffectMask` includes acknowledged bytes; `acknowledgedMask` records
+sampled final ACKs. `observedValidMask` and `matchedMask` distinguish successful
+reads from values matching `requestedValidMask`/`requested`. The derived
+`effect()` summary is `NONE`, `POSSIBLE`, `ACKNOWLEDGED` or `VERIFIED`; partial
+progress remains available in the masks. Interval writes retain their two-byte
+commit and final pair readback. Offset/gain and part-name writes retain their
+per-byte waits and readbacks. No additional retries or bus transactions are
+introduced to collect evidence.
+
+The existing pending-target bitmap and sticky first error are the sole owner
+of unresolved configuration. Latest-operation evidence survives recovery,
+end/begin and resync, but the next outer mutation, including a rejection,
+replaces it. Core writes continue to permit multiple pending targets.
+`resyncPersistentConfig()` clears dirty state only after all required current
+fields are readable/coherent; it does not revise the latest operation into
+success when the observed configuration differs from the requested one.
+Applications retain longer-lived baseline/intent and control maintenance
+admission. The example CLIs block dirty state, possible unmatched effects and
+possible address effects; their `operation` command only reads the cache.
+
+Stored address readback does not establish active-address change timing.
+Choosing and validating a candidate session remains explicit application work.
+Auto-adjust is a one-shot operation: the existing status preflight prevents a
+duplicate request while running, and uncertain-start resync remains `BUSY`
+until idle. A matching running-status byte is not proof of successful
+calibration; later idle does not prove that an uncertain request ran. No
+recovery, diagnostic or resync helper replays the request.
 
 ---
 

@@ -55,6 +55,8 @@ REQUIRED_PATTERNS = {
     "dirty help entry": r'printHelpItem\(\s*"dirty"\s*,',
     "resync help entry": r'printHelpItem\(\s*"resync"\s*,',
     "dirty command dispatch": r'trimmed\s*==\s*"dirty"',
+    "operation command dispatch": r'trimmed\s*==\s*"operation"\s*\)\s*\{\s*printPersistentOperation\(\s*\)',
+    "operation help entry": r'printHelpItem\(\s*"operation"\s*,',
     "resync command dispatch": r'trimmed\s*==\s*"resync"',
     "dirty accessor": r"persistentConfigDirty",
     "dirty error accessor": r"persistentConfigDirtyError",
@@ -78,6 +80,7 @@ PROCESS_COMMAND_PATTERNS = {
     "stress command dispatch",
     "library test dispatch",
     "dirty command dispatch",
+    "operation command dispatch",
     "resync command dispatch",
     "resync before after output",
 }
@@ -104,6 +107,33 @@ def extract_section(text: str, start: str, end: str) -> str:
     if start_index < 0 or end_index < 0:
         fail(f"cannot locate source section from {start!r} to {end!r}")
     return text[start_index:end_index]
+
+
+def persistent_cli_errors(text: str, process_command: str) -> list[str]:
+    """Keep both shells' cache diagnostics and maintenance send boundary explicit."""
+    errors = []
+    helpers = strip_cpp_non_code(extract_section(
+        text, "const char* persistentOperationName", "bool ensureProbeOk"
+    ))
+    calls = set(re.findall(r"\bdevice\s*\.\s*(\w+)\s*\(", helpers))
+    if calls != {"getLastPersistentOperation", "persistentConfigDirty"}:
+        errors.append("operation diagnostics and admission must use only cache accessors")
+
+    code = strip_cpp_non_code(process_command)
+    methods = (
+        "customWrite", "writePartName", "writeBusAddress", "writeMeasurementInterval",
+        "writeCo2IntervalFactor", "writeCo2Filter", "writeOperatingMode", "writeCo2Offset",
+        "writeCo2Gain", "startAutoAdjust",
+    )
+    guard = r"if\s*\(\s*!allowMaintenanceWrite\(\s*\)\s*\)\s*\{\s*return\s*;\s*\}\s*"
+    probe = r"if\s*\(\s*!ensureProbeOk\(\s*\)\s*\)\s*\{\s*return\s*;\s*\}\s*"
+    for method in methods:
+        call = rf"\bdevice\s*\.\s*{method}\s*\("
+        guarded = guard + (probe if method == "customWrite" else "") + rf"auto\s+st\s*=\s*{call}"
+        count = len(re.findall(call, code))
+        if count == 0 or count != len(re.findall(guarded, code)):
+            errors.append(f"every {method} call must follow maintenance admission before bus I/O")
+    return errors
 
 
 def main() -> int:
@@ -139,6 +169,9 @@ def main() -> int:
         scope = process_command if label in PROCESS_COMMAND_PATTERNS else text
         if re.search(pattern, scope) is None:
             fail(f"missing {label} in {bringup_main.as_posix()}")
+
+    for error in persistent_cli_errors(text, process_command):
+        fail(error)
 
     line_reader_pattern = (
         r"if\s*\(\s*overflowed\s*\)\s*\{"

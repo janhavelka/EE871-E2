@@ -57,6 +57,217 @@ class CliContractTests(unittest.TestCase):
                 commands = {spec.command for spec in runner.build_plan(args)}
                 self.assertTrue(commands.isdisjoint({"co2fastsample", "co2avgsample"}))
 
+    def test_persistent_cli_contract_rejects_unguarded_mutations_and_bus_calls(self) -> None:
+        methods = (
+            "customWrite", "writePartName", "writeBusAddress", "writeMeasurementInterval",
+            "writeCo2IntervalFactor", "writeCo2Filter", "writeOperatingMode", "writeCo2Offset",
+            "writeCo2Gain", "startAutoAdjust",
+        )
+        for relative, end in (
+            ("examples/01_basic_bringup_cli/main.cpp", "void setup"),
+            ("examples/idf/basic_bringup/main/main.cpp", "void configureConsoleInput"),
+        ):
+            source = (ROOT / relative).read_text(encoding="utf-8")
+            command = arduino.extract_section(source, "void processCommand", end)
+            for method in methods:
+                with self.subTest(source=relative, method=method):
+                    position = command.index(f"auto st = device.{method}(")
+                    guard = command.rfind("if (!allowMaintenanceWrite())", 0, position)
+                    self.assertGreaterEqual(guard, 0)
+                    mutated = command[:guard] + command[guard:].replace(
+                        "if (!allowMaintenanceWrite())", "if (false)", 1
+                    )
+                    errors = arduino.persistent_cli_errors(source, mutated)
+                    self.assertTrue(any(f"every {method} call" in error for error in errors), errors)
+            for bus_call in ("probe()", "recover()", "resyncPersistentConfig()", "customWrite(0, 0)"):
+                with self.subTest(source=relative, bus_call=bus_call):
+                    mutated = source.replace(
+                        "void printPersistentOperation() {",
+                        f"void printPersistentOperation() {{ device.{bus_call};", 1,
+                    )
+                    self.assertIn(
+                        "operation diagnostics and admission must use only cache accessors",
+                        arduino.persistent_cli_errors(mutated, command),
+                    )
+
+    def test_persistent_operation_cli_preserves_evidence_and_gates_without_io(self) -> None:
+        # Compile the actual shipped helpers with a fake exposing only cache
+        # accessors. A hidden read, write, recovery or resync cannot compile.
+        compiler = shutil.which("g++")
+        self.assertIsNotNone(compiler, "Native persistent CLI regression requires g++")
+        source = r'''
+#include "EE871/EE871.h"
+#include <cassert>
+#include <cstdarg>
+#include <cstdio>
+struct FakeSerial {
+  void printf(const char* format, ...) {
+    va_list args; va_start(args, format); std::vprintf(format, args); va_end(args);
+  }
+} Serial;
+struct FakeDriver {
+  EE871::PersistentOperationResult operation;
+  bool dirty = false;
+  mutable unsigned operationReads = 0, dirtyReads = 0;
+  EE871::PersistentOperationResult getLastPersistentOperation() const {
+    ++operationReads; return operation;
+  }
+  bool persistentConfigDirty() const { ++dirtyReads; return dirty; }
+};
+unsigned statusPrints = 0;
+EE871::Status lastStatus;
+const char* errToStr(EE871::Err code) {
+  switch (code) {
+    case EE871::Err::OK: return "OK";
+    case EE871::Err::NACK: return "NACK";
+    case EE871::Err::TIMEOUT: return "TIMEOUT";
+    case EE871::Err::BUSY: return "BUSY";
+    case EE871::Err::OUT_OF_RANGE: return "OUT_OF_RANGE";
+    case EE871::Err::E2_ERROR: return "E2_ERROR";
+    default: return "OTHER";
+  }
+}
+void printStatus(const EE871::Status& status) { ++statusPrints; lastStatus = status; }
+'''
+        for name, relative in (
+            ("arduino", "examples/01_basic_bringup_cli/main.cpp"),
+            ("idf", "examples/idf/basic_bringup/main/main.cpp"),
+        ):
+            text = (ROOT / relative).read_text(encoding="utf-8")
+            helpers = arduino.extract_section(text, "const char* persistentOperationName", "bool ensureProbeOk")
+            source += f"namespace {name} {{ FakeDriver device;\n" + helpers + "\n}\n"
+        source += r'''
+int main() {
+  using EE871::Err;
+  using EE871::Status;
+  using EE871::PersistentOperation;
+  FakeDriver* drivers[] = {&arduino::device, &idf::device};
+  void (*formatters[])() = {arduino::printPersistentOperation, idf::printPersistentOperation};
+  bool (*gates[])() = {arduino::allowMaintenanceWrite, idf::allowMaintenanceWrite};
+  const bool expectedAllowed[] = {true, true, true, false, false, false, true,
+                                 false, false, false, true, false, false, true};
+  for (unsigned implementation = 0; implementation < 2; ++implementation) {
+    for (unsigned scenario = 0; scenario < 14; ++scenario) {
+      auto& device = *drivers[implementation];
+      device = FakeDriver{};
+      auto& operation = device.operation;
+      if (scenario != 0) {
+        operation.operation = PersistentOperation::MEASUREMENT_INTERVAL;
+        operation.startAddress = 0xC6;
+        operation.length = 2;
+        operation.requested[0] = 0xBC; operation.requested[1] = 0x02;
+        operation.requestedValidMask = 3;
+      }
+      if (scenario == 1) operation.result = Status::Error(Err::OUT_OF_RANGE, "rejected", 150);
+      if (scenario == 2) {
+        operation.attemptedMask = 1;
+        operation.result = Status::Error(Err::NACK, "control NACK", 77);
+      }
+      if (scenario == 3) {
+        operation.attemptedMask = operation.possibleEffectMask = 1;
+        operation.result = Status::Error(Err::TIMEOUT, "PEC timeout", 88);
+      }
+      if (scenario >= 4) {
+        operation.attemptedMask = operation.possibleEffectMask = operation.acknowledgedMask = 3;
+      }
+      if (scenario >= 5) {
+        operation.observed[0] = 0xBC; operation.observed[1] = 0;
+        operation.observedValidMask = 3; operation.matchedMask = 1;
+        operation.result = Status::Error(Err::E2_ERROR, "mismatch", 99);
+      }
+      if (scenario >= 6) {
+        operation.observed[1] = 2; operation.matchedMask = 3;
+        operation.result = Status::Ok();
+      }
+      device.dirty = scenario == 7;
+      if (scenario >= 8 && scenario <= 11) {
+        operation.operation = scenario == 8 ? PersistentOperation::BUS_ADDRESS :
+                              scenario == 9 ? PersistentOperation::CUSTOM_WRITE :
+                              PersistentOperation::AUTO_ADJUST;
+        operation.startAddress = scenario <= 9 ? 0xC0 : 0xD9;
+        operation.length = 1;
+        operation.requested[0] = operation.observed[0] = 1;
+        operation.requestedValidMask = operation.attemptedMask = operation.possibleEffectMask = 1;
+        operation.acknowledgedMask = operation.observedValidMask = operation.matchedMask = 1;
+        if (scenario == 11) {
+          operation.acknowledgedMask = operation.observedValidMask = operation.matchedMask = 0;
+          operation.result = Status::Error(Err::TIMEOUT, "uncertain start", 100);
+        }
+      }
+      if (scenario == 12) {
+        operation.operation = PersistentOperation::PART_NAME;
+        operation.startAddress = 0xB0; operation.length = 16;
+        for (unsigned i = 0; i < 16; ++i) {
+          operation.requested[i] = static_cast<uint8_t>(0x40 + i);
+          operation.observed[i] = static_cast<uint8_t>(0x40 + i);
+        }
+        operation.requestedValidMask = 0xFFFF; operation.attemptedMask = 0x3F;
+        operation.possibleEffectMask = operation.acknowledgedMask = 0x1F;
+        operation.observedValidMask = operation.matchedMask = 7;
+        operation.result = Status::Error(Err::NACK, "part name interrupted", 101);
+      }
+      if (scenario == 13) {
+        operation.operation = PersistentOperation::CUSTOM_WRITE;
+        operation.startAddress = 0xC1;
+      }
+      std::printf("CASE %u:%u\n", implementation, scenario);
+      statusPrints = 0;
+      formatters[implementation]();
+      assert(statusPrints == 0);
+      assert(device.operationReads == 1 && device.dirtyReads == 1);
+      const bool allowed = gates[implementation]();
+      assert(allowed == expectedAllowed[scenario]);
+      assert(statusPrints == (allowed ? 0U : 1U));
+      assert(allowed || lastStatus.code == Err::BUSY);
+      assert(device.operationReads == 2 && device.dirtyReads == 2);
+      assert(operation.result.detail == device.getLastPersistentOperation().result.detail);
+    }
+  }
+}
+'''
+        with tempfile.TemporaryDirectory(prefix="ee871-persistent-cli-") as directory:
+            cpp = pathlib.Path(directory) / "persistent.cpp"
+            executable = pathlib.Path(directory) / "persistent.exe"
+            cpp.write_text(source, encoding="utf-8")
+            build = subprocess.run(
+                [compiler, "-std=c++17", "-I", str(ROOT / "include"), str(cpp), "-o", str(executable)],
+                capture_output=True, text=True, timeout=60,
+            )
+            self.assertEqual(0, build.returncode, build.stdout + build.stderr)
+            run = subprocess.run([str(executable)], capture_output=True, text=True, timeout=10)
+            self.assertEqual(0, run.returncode, run.stdout + run.stderr)
+        captures = re.split(r"CASE \d:\d+\n", run.stdout)[1:]
+        self.assertEqual(28, len(captures))
+        for scenario in range(14):
+            self.assertEqual(captures[scenario], captures[14 + scenario])
+            self.assertEqual([], runner.parse_status(captures[scenario]).get("statuses", []))
+        self.assertIn("Target: <none>", captures[0])
+        self.assertIn("Effect: NONE", captures[2])
+        self.assertIn("Effect: POSSIBLE", captures[3])
+        self.assertIn("Operation result: TIMEOUT (code=", captures[3])
+        self.assertIn("detail=88)", captures[3])
+        self.assertIn("Operation result message: PEC timeout", captures[3])
+        self.assertIn("Observed bytes: -- --", captures[3])
+        self.assertIn("Effect: ACKNOWLEDGED", captures[4])
+        self.assertIn("Requested bytes: BC 02", captures[5])
+        self.assertIn("Observed bytes: BC 00", captures[5])
+        self.assertIn("Matched mask: 0x0001", captures[5])
+        self.assertIn("Maintenance admission: blocked", captures[5])
+        self.assertIn("Effect: VERIFIED", captures[6])
+        self.assertIn("Maintenance admission: open", captures[6])
+        self.assertIn("Maintenance admission: blocked", captures[7])
+        for scenario in (8, 9):
+            self.assertIn("Effect: VERIFIED", captures[scenario])
+            self.assertIn("Maintenance admission: blocked", captures[scenario])
+            self.assertIn("does not establish active address", captures[scenario])
+        self.assertIn("Maintenance admission: open", captures[10])
+        self.assertIn("does not establish calibration completion or success", captures[10])
+        self.assertIn("Maintenance admission: blocked", captures[11])
+        self.assertIn("Target: 0xB0..0xBF (length=16)", captures[12])
+        self.assertIn("Requested bytes: " + " ".join(f"{value:02X}" for value in range(0x40, 0x50)), captures[12])
+        self.assertIn("Observed bytes: 40 41 42" + " --" * 13, captures[12])
+        self.assertIn("Maintenance admission: open", captures[13])
+
     def test_checked_sample_formatters_preserve_evidence_and_overall_status(self) -> None:
         # Execute the shipped formatters with fixed driver evidence. This checks
         # both native output parity and compatibility with the runner's generic

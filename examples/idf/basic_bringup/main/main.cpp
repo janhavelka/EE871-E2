@@ -523,6 +523,107 @@ void printPersistentDirtySummaryIfDirty() {
   }
 }
 
+const char* persistentOperationName(EE871::PersistentOperation operation) {
+  switch (operation) {
+    case EE871::PersistentOperation::NONE: return "NONE";
+    case EE871::PersistentOperation::CUSTOM_WRITE: return "CUSTOM_WRITE";
+    case EE871::PersistentOperation::MEASUREMENT_INTERVAL: return "MEASUREMENT_INTERVAL";
+    case EE871::PersistentOperation::PART_NAME: return "PART_NAME";
+    case EE871::PersistentOperation::BUS_ADDRESS: return "BUS_ADDRESS";
+    case EE871::PersistentOperation::CO2_INTERVAL_FACTOR: return "CO2_INTERVAL_FACTOR";
+    case EE871::PersistentOperation::CO2_FILTER: return "CO2_FILTER";
+    case EE871::PersistentOperation::OPERATING_MODE: return "OPERATING_MODE";
+    case EE871::PersistentOperation::AUTO_ADJUST: return "AUTO_ADJUST";
+    case EE871::PersistentOperation::CO2_OFFSET: return "CO2_OFFSET";
+    case EE871::PersistentOperation::CO2_GAIN: return "CO2_GAIN";
+    default: return "UNKNOWN";
+  }
+}
+
+const char* persistentEffectName(EE871::PersistentEffect effect) {
+  switch (effect) {
+    case EE871::PersistentEffect::NONE: return "NONE";
+    case EE871::PersistentEffect::POSSIBLE: return "POSSIBLE";
+    case EE871::PersistentEffect::ACKNOWLEDGED: return "ACKNOWLEDGED";
+    case EE871::PersistentEffect::VERIFIED: return "VERIFIED";
+    default: return "UNKNOWN";
+  }
+}
+
+bool persistentAddressMayHaveChanged(const EE871::PersistentOperationResult& operation,
+                                     uint8_t address) {
+  if (address < operation.startAddress) return false;
+  const unsigned offset = static_cast<unsigned>(address - operation.startAddress);
+  return offset < operation.length && offset < EE871::PersistentOperationResult::CAPACITY &&
+         (operation.possibleEffectMask & static_cast<uint16_t>(1U << offset)) != 0U;
+}
+
+bool persistentOperationBlocksMaintenance(const EE871::PersistentOperationResult& operation) {
+  return (operation.possibleEffectMask & static_cast<uint16_t>(~operation.matchedMask)) != 0U ||
+         persistentAddressMayHaveChanged(operation, EE871::cmd::CUSTOM_BUS_ADDRESS);
+}
+
+void printPersistentOperationBytes(const char* label, const uint8_t* bytes,
+                                   uint8_t length, uint16_t validMask) {
+  std::printf("  %s:", label);
+  for (unsigned i = 0; i < length && i < EE871::PersistentOperationResult::CAPACITY; ++i) {
+    if ((validMask & static_cast<uint16_t>(1U << i)) != 0U) {
+      std::printf(" %02X", static_cast<unsigned>(bytes[i]));
+    } else {
+      std::printf(" --");
+    }
+  }
+  std::printf("\n");
+}
+
+void printPersistentOperation() {
+  const auto operation = device.getLastPersistentOperation();
+  const bool blocked = device.persistentConfigDirty() || persistentOperationBlocksMaintenance(operation);
+  std::printf("=== Persistent Operation ===\n");
+  std::printf("  Operation: %s\n", persistentOperationName(operation.operation));
+  if (operation.length > 0U) {
+    std::printf("  Target: 0x%02X..0x%02X (length=%u)\n",
+          static_cast<unsigned>(operation.startAddress),
+          static_cast<unsigned>(operation.startAddress) + operation.length - 1U,
+          static_cast<unsigned>(operation.length));
+  } else {
+    std::printf("  Target: <none>\n");
+  }
+  std::printf("  Effect: %s\n", persistentEffectName(operation.effect()));
+  std::printf("  Requested valid mask: 0x%04X\n", static_cast<unsigned>(operation.requestedValidMask));
+  std::printf("  Attempted mask: 0x%04X\n", static_cast<unsigned>(operation.attemptedMask));
+  std::printf("  Possible effect mask: 0x%04X\n", static_cast<unsigned>(operation.possibleEffectMask));
+  std::printf("  Acknowledged mask: 0x%04X\n", static_cast<unsigned>(operation.acknowledgedMask));
+  std::printf("  Observed valid mask: 0x%04X\n", static_cast<unsigned>(operation.observedValidMask));
+  std::printf("  Matched mask: 0x%04X\n", static_cast<unsigned>(operation.matchedMask));
+  printPersistentOperationBytes("Requested bytes", operation.requested,
+                                operation.length, operation.requestedValidMask);
+  printPersistentOperationBytes("Observed bytes", operation.observed,
+                                operation.length, operation.observedValidMask);
+  std::printf("  Operation result: %s (code=%u, detail=%ld)\n", errToStr(operation.result.code),
+        static_cast<unsigned>(operation.result.code), static_cast<long>(operation.result.detail));
+  std::printf("  Operation result message: %s\n",
+        (operation.result.msg != nullptr && operation.result.msg[0] != '\0') ? operation.result.msg : "<none>");
+  std::printf("  Maintenance admission: %s\n", blocked ? "blocked" : "open");
+  std::printf("  Latest operation only; matched evidence verifies register bytes.\n");
+  if (persistentAddressMayHaveChanged(operation, EE871::cmd::CUSTOM_BUS_ADDRESS)) {
+    std::printf("  Stored address evidence does not establish active address; application chooses candidate session.\n");
+  }
+  if (persistentAddressMayHaveChanged(operation, EE871::cmd::CUSTOM_AUTO_ADJUST)) {
+    std::printf("  Adjustment request evidence does not establish calibration completion or success.\n");
+  }
+}
+
+bool allowMaintenanceWrite() {
+  const auto operation = device.getLastPersistentOperation();
+  if (device.persistentConfigDirty() || persistentOperationBlocksMaintenance(operation)) {
+    printStatus(EE871::Status::Error(EE871::Err::BUSY,
+        "Maintenance blocked by persistent evidence; inspect operation and dirty"));
+    return false;
+  }
+  return true;
+}
+
 bool ensureProbeOk() {
   auto st = device.probe();
   if (!st.ok()) {
@@ -627,6 +728,7 @@ void printHelp() {
   printHelpItem("recover", "Attempt recovery");
   printHelpItem("drv", "Show driver state and health");
   printHelpItem("dirty", "Show persistent dirty-state diagnostics");
+  printHelpItem("operation", "Show latest persistent operation evidence (cache only)");
   printHelpItem("resync", "Verify persistent config; clear dirty on success");
   printHelpItem("read", "Read CO2 average");
   printHelpItem("cfg / settings", "Show driver state and feature flags");
@@ -1931,6 +2033,8 @@ void processCommand(const char* input) {
     printStatus(st);
   } else if (std::strcmp(trimmed, "dirty") == 0) {
     printPersistentDirtyState("=== Persistent Config Dirty State ===");
+  } else if (std::strcmp(trimmed, "operation") == 0) {
+    printPersistentOperation();
   } else if (std::strcmp(trimmed, "resync") == 0) {
     std::printf("=== Persistent Config Resync ===\n");
     std::printf("Before:\n");
@@ -2043,6 +2147,9 @@ void processCommand(const char* input) {
       uint8_t value = 0;
       if (!parseU8Token(tok.argv[2], addr) || !parseU8Token(tok.argv[3], value)) {
         logWarn("Invalid address/value");
+        return;
+      }
+      if (!allowMaintenanceWrite()) {
         return;
       }
       if (!ensureProbeOk()) {
@@ -2250,6 +2357,9 @@ void processCommand(const char* input) {
     for (size_t i = 0; i < maxLen; ++i) {
       out[i] = static_cast<uint8_t>(text[i]);
     }
+    if (!allowMaintenanceWrite()) {
+      return;
+    }
     auto st = device.writePartName(out);
     printStatus(st);
     if (st.ok()) {
@@ -2278,6 +2388,9 @@ void processCommand(const char* input) {
       return;
     }
     logInfo("Writing stored bus address %ld; session address unchanged...", val);
+    if (!allowMaintenanceWrite()) {
+      return;
+    }
     auto st = device.writeBusAddress(static_cast<uint8_t>(val));
     printStatus(st);
   } else if (std::strcmp(trimmed, "interval") == 0) {
@@ -2298,6 +2411,9 @@ void processCommand(const char* input) {
       return;
     }
     logInfo("Writing interval %ld deciseconds...", val);
+    if (!allowMaintenanceWrite()) {
+      return;
+    }
     auto st = device.writeMeasurementInterval(static_cast<uint16_t>(val));
     printStatus(st);
   } else if (std::strcmp(trimmed, "factor") == 0) {
@@ -2315,6 +2431,9 @@ void processCommand(const char* input) {
       logWarn("factor must be -128..127");
       return;
     }
+    if (!allowMaintenanceWrite()) {
+      return;
+    }
     auto st = device.writeCo2IntervalFactor(static_cast<int8_t>(val));
     printStatus(st);
   } else if (std::strcmp(trimmed, "filter") == 0) {
@@ -2330,6 +2449,9 @@ void processCommand(const char* input) {
     splitTokens(trimmed, tok);
     if (tok.argc < 2 || !parseIntToken(tok.argv[1], val) || val < 0L || val > 255L) {
       logWarn("filter must be 0..255");
+      return;
+    }
+    if (!allowMaintenanceWrite()) {
       return;
     }
     auto st = device.writeCo2Filter(static_cast<uint8_t>(val));
@@ -2351,6 +2473,9 @@ void processCommand(const char* input) {
       logWarn("mode must be a number 0..255");
       return;
     }
+    if (!allowMaintenanceWrite()) {
+      return;
+    }
     auto st = device.writeOperatingMode(static_cast<uint8_t>(val));
     printStatus(st);
   } else if (std::strcmp(trimmed, "offset") == 0) {
@@ -2369,6 +2494,9 @@ void processCommand(const char* input) {
       return;
     }
     logInfo("Writing CO2 offset %ld...", val);
+    if (!allowMaintenanceWrite()) {
+      return;
+    }
     auto st = device.writeCo2Offset(static_cast<int16_t>(val));
     printStatus(st);
   } else if (std::strcmp(trimmed, "gain") == 0) {
@@ -2386,6 +2514,9 @@ void processCommand(const char* input) {
     splitTokens(trimmed, tok);
     if (tok.argc < 2 || !parseIntToken(tok.argv[1], val) || val < 0L || val > 65535L) {
       logWarn("gain must be 0..65535");
+      return;
+    }
+    if (!allowMaintenanceWrite()) {
       return;
     }
     auto st = device.writeCo2Gain(static_cast<uint16_t>(val));
@@ -2409,6 +2540,9 @@ void processCommand(const char* input) {
     }
   } else if (std::strcmp(trimmed, "autoadj start") == 0) {
     logInfo("Requesting auto adjustment; use autoadj to check status...");
+    if (!allowMaintenanceWrite()) {
+      return;
+    }
     auto st = device.startAutoAdjust();
     printStatus(st);
   } else if (std::strcmp(trimmed, "buscheck") == 0) {

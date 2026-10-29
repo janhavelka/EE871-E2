@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Cache-only `getLastPersistentOperation()` returns a fixed-size
+  `PersistentOperationResult` for the latest raw or typed mutation, preserving
+  up to 16 requested/observed bytes, explicit validity and per-byte attempt,
+  possible-effect, ACK and matching-readback evidence, plus the original
+  returned status. The outer operation owns the record; partial pairs and
+  part-name writes retain earlier progress. Recovery, end/begin and coherence
+  resync preserve it. Existing pending-target tracking and dirty-state write
+  compatibility remain unchanged; callers retain history across operations.
+- Manual `operation` diagnostics in both bring-up CLIs expose the cached
+  evidence without E2 traffic. Application maintenance admission blocks dirty
+  state, possible effects without matching readback, and possible address
+  changes requiring an explicit candidate-session decision. Resync cannot
+  certify original intent or reopen unresolved admission. Address readback
+  does not prove activation; auto-adjust status does not prove completed
+  calibration. Existing HIL confirmations and campaign failure latch remain.
+  The opted-in persistent plan requires fresh open application admission from
+  `operation` before every destructive send; missing, malformed or blocked
+  admission prevents the send and latches the campaign failure.
+  No hardware writes, address behavior or calibration outcomes were validated
+  for this software addition.
 - Optional task-context `Config::delayMs` and `Config::yield` callbacks for
   post-write quiet waits, appended after existing configuration members.
   `longDelaySliceMs` defaults to 10 ms and accepts 1..50 ms; delay precedes

@@ -36,6 +36,37 @@ static void assertSameStatus(const Status& expected, const Status& actual) {
   TEST_ASSERT_EQUAL_STRING(expected.msg, actual.msg);
 }
 
+static void assertSamePersistentOperation(const PersistentOperationResult& expected,
+                                           const PersistentOperationResult& actual) {
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(expected.operation),
+                          static_cast<uint8_t>(actual.operation));
+  TEST_ASSERT_EQUAL_UINT8(expected.startAddress, actual.startAddress);
+  TEST_ASSERT_EQUAL_UINT8(expected.length, actual.length);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(expected.requested, actual.requested,
+                                PersistentOperationResult::CAPACITY);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(expected.observed, actual.observed,
+                                PersistentOperationResult::CAPACITY);
+  TEST_ASSERT_EQUAL_HEX16(expected.requestedValidMask, actual.requestedValidMask);
+  TEST_ASSERT_EQUAL_HEX16(expected.attemptedMask, actual.attemptedMask);
+  TEST_ASSERT_EQUAL_HEX16(expected.possibleEffectMask, actual.possibleEffectMask);
+  TEST_ASSERT_EQUAL_HEX16(expected.acknowledgedMask, actual.acknowledgedMask);
+  TEST_ASSERT_EQUAL_HEX16(expected.observedValidMask, actual.observedValidMask);
+  TEST_ASSERT_EQUAL_HEX16(expected.matchedMask, actual.matchedMask);
+  assertSameStatus(expected.result, actual.result);
+}
+
+static void assertPersistentOperation(const EE871::EE871& dev,
+                                       PersistentOperation operation,
+                                       uint8_t address, uint8_t length,
+                                       const Status& result) {
+  const PersistentOperationResult evidence = dev.getLastPersistentOperation();
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(operation),
+                          static_cast<uint8_t>(evidence.operation));
+  TEST_ASSERT_EQUAL_HEX8(address, evidence.startAddress);
+  TEST_ASSERT_EQUAL_UINT8(length, evidence.length);
+  assertSameStatus(result, evidence.result);
+}
+
 static void assertDirtyWithOriginalError(const EE871::EE871& dev, const Status& st) {
   TEST_ASSERT_TRUE(dev.persistentConfigDirty());
   assertSameStatus(st, dev.persistentConfigDirtyError());
@@ -1864,6 +1895,52 @@ void test_interval_high_byte_write_failure_sets_dirty() {
                           fake.memory(cmd::CUSTOM_INTERVAL_H));
 }
 
+void test_interval_partial_write_resync_proves_coherence_not_requested_value() {
+  FakeE2Transport fake;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+
+  // The low byte can apply even though the complete interval request fails.
+  // 0x00BC (188) remains in range, unlike the requested 0x02BC (700).
+  fake.failNextWriteToAddress(cmd::CUSTOM_INTERVAL_H);
+  const Status failedWrite = dev.writeMeasurementInterval(700);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NACK),
+                          static_cast<uint8_t>(failedWrite.code));
+  TEST_ASSERT_EQUAL_STRING("Address byte NACK", failedWrite.msg);
+  assertDirtyWithOriginalError(dev, failedWrite);
+  TEST_ASSERT_EQUAL_UINT8(0xBC, fake.memory(cmd::CUSTOM_INTERVAL_L));
+  TEST_ASSERT_EQUAL_UINT8(0x00, fake.memory(cmd::CUSTOM_INTERVAL_H));
+  const PersistentOperationResult failedEvidence = dev.getLastPersistentOperation();
+  assertPersistentOperation(dev, PersistentOperation::MEASUREMENT_INTERVAL,
+                            cmd::CUSTOM_INTERVAL_L, 2, failedWrite);
+  TEST_ASSERT_EQUAL_HEX16(3, failedEvidence.requestedValidMask);
+  TEST_ASSERT_EQUAL_HEX8(0xBC, failedEvidence.requested[0]);
+  TEST_ASSERT_EQUAL_HEX8(0x02, failedEvidence.requested[1]);
+  TEST_ASSERT_EQUAL_HEX16(3, failedEvidence.attemptedMask);
+  TEST_ASSERT_EQUAL_HEX16(1, failedEvidence.possibleEffectMask);
+  TEST_ASSERT_EQUAL_HEX16(1, failedEvidence.acknowledgedMask);
+  TEST_ASSERT_EQUAL_HEX16(0, failedEvidence.observedValidMask);
+  TEST_ASSERT_EQUAL_HEX16(0, failedEvidence.matchedMask);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(PersistentEffect::POSSIBLE),
+                          static_cast<uint8_t>(failedEvidence.effect()));
+
+  TEST_ASSERT_TRUE(dev.recover().ok());
+  assertDirtyWithOriginalError(dev, failedWrite);
+  assertSamePersistentOperation(failedEvidence, dev.getLastPersistentOperation());
+  uint16_t currentInterval = 0;
+  TEST_ASSERT_TRUE(dev.readMeasurementInterval(currentInterval).ok());
+  TEST_ASSERT_EQUAL_UINT16(188, currentInterval);
+  TEST_ASSERT_NOT_EQUAL(700, currentInterval);
+
+  // Resync promises coherent current state, not retrospective request success.
+  TEST_ASSERT_TRUE(dev.resyncPersistentConfig().ok());
+  TEST_ASSERT_FALSE(dev.persistentConfigDirty());
+  TEST_ASSERT_TRUE(dev.persistentConfigDirtyError().ok());
+  TEST_ASSERT_TRUE(dev.readMeasurementInterval(currentInterval).ok());
+  TEST_ASSERT_EQUAL_UINT16(188, currentInterval);
+  assertSamePersistentOperation(failedEvidence, dev.getLastPersistentOperation());
+}
+
 void test_interval_verify_failure_sets_dirty_and_unrelated_read_does_not_clear() {
   FakeE2Transport fake;
   EE871::EE871 dev;
@@ -2639,6 +2716,332 @@ void test_high_byte_retry_preserves_latch_and_sticky_low_event() {
   }
 }
 
+static Status callEvidenceMutation(EE871::EE871& dev, uint8_t operation,
+                                  const uint8_t* partName) {
+  switch (operation) {
+    case 0: return dev.customWrite(0xFD, 0x5A);
+    case 1: return dev.writeMeasurementInterval(700);
+    case 2: return dev.writePartName(partName);
+    case 3: return dev.writeBusAddress(3);
+    case 4: return dev.writeCo2IntervalFactor(-2);
+    case 5: return dev.writeCo2Filter(42);
+    case 6: return dev.writeOperatingMode(3);
+    case 7: return dev.startAutoAdjust();
+    case 8: return dev.writeCo2Offset(-321);
+    default: return dev.writeCo2Gain(0x1234);
+  }
+}
+
+static constexpr PersistentOperation EVIDENCE_OPERATIONS[] = {
+    PersistentOperation::CUSTOM_WRITE, PersistentOperation::MEASUREMENT_INTERVAL,
+    PersistentOperation::PART_NAME, PersistentOperation::BUS_ADDRESS,
+    PersistentOperation::CO2_INTERVAL_FACTOR, PersistentOperation::CO2_FILTER,
+    PersistentOperation::OPERATING_MODE, PersistentOperation::AUTO_ADJUST,
+    PersistentOperation::CO2_OFFSET, PersistentOperation::CO2_GAIN};
+static constexpr uint8_t EVIDENCE_ADDRESSES[] = {
+    0xFD, cmd::CUSTOM_INTERVAL_L, cmd::CUSTOM_PART_NAME_START, cmd::CUSTOM_BUS_ADDRESS,
+    cmd::CUSTOM_CO2_INTERVAL_FACTOR, cmd::CUSTOM_FILTER_CO2, cmd::CUSTOM_OPERATING_MODE,
+    cmd::CUSTOM_AUTO_ADJUST, cmd::CUSTOM_CO2_OFFSET_L, cmd::CUSTOM_CO2_GAIN_L};
+static constexpr uint8_t EVIDENCE_LENGTHS[] = {1, 2, 16, 1, 1, 1, 1, 1, 2, 2};
+static constexpr uint16_t EVIDENCE_MASKS[] = {1, 3, 0xFFFF, 1, 1, 1, 1, 1, 3, 3};
+static constexpr uint8_t EVIDENCE_PART_NAME[16] = {
+    'E', 'E', '8', '7', '1', '-', 'E', '2', 0, 0, 0, 0, 0, 0, 0x80, 0xFF};
+
+void test_persistent_operation_success_preserves_outer_api_and_all_requested_bytes() {
+  static_assert(PersistentOperationResult::CAPACITY == cmd::CUSTOM_PART_NAME_LEN);
+  for (uint8_t operation = 0; operation < 10; ++operation) {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    const Status st = callEvidenceMutation(dev, operation, EVIDENCE_PART_NAME);
+    TEST_ASSERT_TRUE(st.ok());
+    assertPersistentOperation(dev, EVIDENCE_OPERATIONS[operation], EVIDENCE_ADDRESSES[operation],
+                              EVIDENCE_LENGTHS[operation], st);
+    const PersistentOperationResult evidence = dev.getLastPersistentOperation();
+    TEST_ASSERT_EQUAL_HEX16(EVIDENCE_MASKS[operation], evidence.requestedValidMask);
+    TEST_ASSERT_EQUAL_HEX16(EVIDENCE_MASKS[operation], evidence.attemptedMask);
+    TEST_ASSERT_EQUAL_HEX16(EVIDENCE_MASKS[operation], evidence.possibleEffectMask);
+    TEST_ASSERT_EQUAL_HEX16(EVIDENCE_MASKS[operation], evidence.acknowledgedMask);
+    TEST_ASSERT_EQUAL_HEX16(EVIDENCE_MASKS[operation], evidence.observedValidMask);
+    TEST_ASSERT_EQUAL_HEX16(EVIDENCE_MASKS[operation], evidence.matchedMask);
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(PersistentEffect::VERIFIED),
+                            static_cast<uint8_t>(evidence.effect()));
+    for (uint8_t i = 0; i < evidence.length; ++i) {
+      TEST_ASSERT_EQUAL_UINT8(fake.memory(evidence.startAddress + i), evidence.requested[i]);
+      TEST_ASSERT_EQUAL_UINT8(evidence.requested[i], evidence.observed[i]);
+    }
+    if (operation == 2) {
+      TEST_ASSERT_EQUAL_UINT8_ARRAY(EVIDENCE_PART_NAME, evidence.requested, 16);
+    }
+    // Stored-address readback does not change the application's active session.
+    TEST_ASSERT_EQUAL_UINT8(0, dev.getConfig().deviceAddress);
+    TEST_ASSERT_FALSE(dev.persistentConfigDirty());
+  }
+}
+
+void test_persistent_operation_guards_record_no_effect_and_replace_stale_evidence() {
+  for (uint8_t operation = 0; operation < 10; ++operation) {
+    EE871::EE871 dev;
+    const Status st = callEvidenceMutation(dev, operation, EVIDENCE_PART_NAME);
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
+                            static_cast<uint8_t>(st.code));
+    assertPersistentOperation(dev, EVIDENCE_OPERATIONS[operation], EVIDENCE_ADDRESSES[operation],
+                              EVIDENCE_LENGTHS[operation], st);
+    const PersistentOperationResult evidence = dev.getLastPersistentOperation();
+    TEST_ASSERT_EQUAL_HEX16(operation == 2 ? 0 : EVIDENCE_MASKS[operation], evidence.requestedValidMask);
+    TEST_ASSERT_EQUAL_HEX16(0, evidence.attemptedMask);
+    TEST_ASSERT_EQUAL_HEX16(0, evidence.possibleEffectMask);
+    TEST_ASSERT_EQUAL_HEX16(0, evidence.acknowledgedMask);
+    TEST_ASSERT_EQUAL_HEX16(0, evidence.observedValidMask);
+    TEST_ASSERT_EQUAL_HEX16(0, evidence.matchedMask);
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(PersistentEffect::NONE),
+                            static_cast<uint8_t>(evidence.effect()));
+    TEST_ASSERT_FALSE(dev.persistentConfigDirty());
+  }
+  for (uint8_t guard = 0; guard < 4; ++guard) {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    TEST_ASSERT_TRUE(dev.writeCo2Filter(42).ok());
+    const uint32_t elapsed = fake.elapsedUs();
+    const uint32_t successes = dev.totalSuccess();
+    const Status st = guard == 0 ? dev.writeMeasurementInterval(149)
+                    : guard == 1 ? dev.writeBusAddress(8)
+                    : guard == 2 ? dev.writeOperatingMode(4)
+                                 : dev.writePartName(nullptr);
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(guard == 3 ? Err::INVALID_PARAM : Err::OUT_OF_RANGE),
+                            static_cast<uint8_t>(st.code));
+    const uint8_t operation = guard == 0 ? 1 : guard == 1 ? 3 : guard == 2 ? 6 : 2;
+    assertPersistentOperation(dev, EVIDENCE_OPERATIONS[operation], EVIDENCE_ADDRESSES[operation],
+                              EVIDENCE_LENGTHS[operation], st);
+    const PersistentOperationResult evidence = dev.getLastPersistentOperation();
+    TEST_ASSERT_EQUAL_HEX16(guard == 3 ? 0 : EVIDENCE_MASKS[operation], evidence.requestedValidMask);
+    TEST_ASSERT_EQUAL_HEX16(0, evidence.attemptedMask);
+    TEST_ASSERT_EQUAL_HEX16(0, evidence.possibleEffectMask);
+    TEST_ASSERT_EQUAL_HEX16(0, evidence.acknowledgedMask);
+    TEST_ASSERT_EQUAL_HEX16(0, evidence.observedValidMask);
+    TEST_ASSERT_EQUAL_HEX16(0, evidence.matchedMask);
+    TEST_ASSERT_EQUAL_UINT32(elapsed, fake.elapsedUs());
+    TEST_ASSERT_EQUAL_UINT32(successes, dev.totalSuccess());
+    TEST_ASSERT_EQUAL_UINT32(0, dev.totalFailures());
+    TEST_ASSERT_FALSE(dev.persistentConfigDirty());
+  }
+}
+
+void test_persistent_operation_capability_guards_never_attempt_mutation() {
+  for (uint8_t operation = 1; operation < 10; ++operation) {
+    FakeE2Transport fake;
+    fake.setMemory(cmd::CUSTOM_OPERATING_FUNCTIONS, 0);
+    fake.setMemory(cmd::CUSTOM_OPERATING_MODE_SUPPORT, 0);
+    fake.setMemory(cmd::CUSTOM_SPECIAL_FEATURES, 0);
+    fake.setMemory(cmd::CUSTOM_ADJUSTMENT_SUPPORT, 0);
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    const uint32_t elapsed = fake.elapsedUs();
+    const Status st = callEvidenceMutation(dev, operation, EVIDENCE_PART_NAME);
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_SUPPORTED), static_cast<uint8_t>(st.code));
+    assertPersistentOperation(dev, EVIDENCE_OPERATIONS[operation], EVIDENCE_ADDRESSES[operation],
+                              EVIDENCE_LENGTHS[operation], st);
+    const PersistentOperationResult evidence = dev.getLastPersistentOperation();
+    TEST_ASSERT_EQUAL_HEX16(operation == 2 ? 0 : EVIDENCE_MASKS[operation], evidence.requestedValidMask);
+    TEST_ASSERT_EQUAL_HEX16(0, evidence.attemptedMask);
+    TEST_ASSERT_EQUAL_HEX16(0, evidence.possibleEffectMask);
+    TEST_ASSERT_EQUAL_HEX16(0, evidence.observedValidMask);
+    TEST_ASSERT_EQUAL_UINT32(0, fake.controlCount(0x10));
+    TEST_ASSERT_EQUAL_UINT32(0, dev.totalFailures());
+    TEST_ASSERT_FALSE(dev.persistentConfigDirty());
+    // Calibration support is intentionally queried on demand; cached guards are bus-silent.
+    if (operation < 8) TEST_ASSERT_EQUAL_UINT32(elapsed, fake.elapsedUs());
+  }
+}
+
+void test_persistent_operation_partial_pairs_and_names_keep_outer_progress() {
+  for (uint8_t operation : {uint8_t{8}, uint8_t{9}}) {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    fake.failNextWriteToAddress(EVIDENCE_ADDRESSES[operation] + 1);
+    const Status st = callEvidenceMutation(dev, operation, EVIDENCE_PART_NAME);
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NACK), static_cast<uint8_t>(st.code));
+    assertPersistentOperation(dev, EVIDENCE_OPERATIONS[operation], EVIDENCE_ADDRESSES[operation], 2, st);
+    const PersistentOperationResult evidence = dev.getLastPersistentOperation();
+    TEST_ASSERT_EQUAL_HEX16(3, evidence.requestedValidMask);
+    TEST_ASSERT_EQUAL_HEX16(3, evidence.attemptedMask);
+    TEST_ASSERT_EQUAL_HEX16(1, evidence.possibleEffectMask);
+    TEST_ASSERT_EQUAL_HEX16(1, evidence.acknowledgedMask);
+    TEST_ASSERT_EQUAL_HEX16(1, evidence.observedValidMask);
+    TEST_ASSERT_EQUAL_HEX16(1, evidence.matchedMask);
+    TEST_ASSERT_EQUAL_UINT8(operation == 8 ? 0xBF : 0x34, evidence.requested[0]);
+    TEST_ASSERT_EQUAL_UINT8(operation == 8 ? 0xFE : 0x12, evidence.requested[1]);
+    TEST_ASSERT_EQUAL_UINT8(evidence.requested[0], evidence.observed[0]);
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(PersistentEffect::POSSIBLE),
+                            static_cast<uint8_t>(evidence.effect()));
+    assertDirtyWithOriginalError(dev, st);
+  }
+  const uint8_t failureOffsets[] = {0, 1, 8, 15};
+  const uint16_t prefixMasks[] = {0, 1, 0xFF, 0x7FFF};
+  const uint16_t attemptedMasks[] = {1, 3, 0x1FF, 0xFFFF};
+  for (uint8_t scenario = 0; scenario < 4; ++scenario) {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    fake.failNextWriteToAddress(cmd::CUSTOM_PART_NAME_START + failureOffsets[scenario]);
+    const Status st = dev.writePartName(EVIDENCE_PART_NAME);
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NACK), static_cast<uint8_t>(st.code));
+    assertPersistentOperation(dev, PersistentOperation::PART_NAME, cmd::CUSTOM_PART_NAME_START, 16, st);
+    const PersistentOperationResult evidence = dev.getLastPersistentOperation();
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(EVIDENCE_PART_NAME, evidence.requested, 16);
+    TEST_ASSERT_EQUAL_HEX16(0xFFFF, evidence.requestedValidMask);
+    TEST_ASSERT_EQUAL_HEX16(attemptedMasks[scenario], evidence.attemptedMask);
+    TEST_ASSERT_EQUAL_HEX16(prefixMasks[scenario], evidence.possibleEffectMask);
+    TEST_ASSERT_EQUAL_HEX16(prefixMasks[scenario], evidence.acknowledgedMask);
+    TEST_ASSERT_EQUAL_HEX16(prefixMasks[scenario], evidence.observedValidMask);
+    TEST_ASSERT_EQUAL_HEX16(prefixMasks[scenario], evidence.matchedMask);
+    if (failureOffsets[scenario] != 0) {
+      TEST_ASSERT_EQUAL_UINT8_ARRAY(EVIDENCE_PART_NAME, evidence.observed, failureOffsets[scenario]);
+      assertDirtyWithOriginalError(dev, st);
+    } else {
+      TEST_ASSERT_FALSE(dev.persistentConfigDirty());
+    }
+    TEST_ASSERT_EQUAL_UINT32(failureOffsets[scenario] + 1U, fake.controlCount(0x10));
+  }
+}
+
+void test_persistent_operation_interval_readback_keeps_validated_byte_evidence() {
+  for (uint8_t fault = 0; fault < 3; ++fault) {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    if (fault == 0) fake.dropNextWriteCommitToAddress(cmd::CUSTOM_INTERVAL_H);
+    if (fault == 1) fake.corruptReadPecAfterNextWrite(cmd::CUSTOM_INTERVAL_L);
+    if (fault == 2) fake.corruptReadPecAfterNextWrite(cmd::CUSTOM_INTERVAL_H);
+    const Status st = dev.writeMeasurementInterval(700);
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fault == 0 ? Err::E2_ERROR : Err::PEC_MISMATCH),
+                            static_cast<uint8_t>(st.code));
+    assertPersistentOperation(dev, PersistentOperation::MEASUREMENT_INTERVAL, cmd::CUSTOM_INTERVAL_L, 2, st);
+    const PersistentOperationResult evidence = dev.getLastPersistentOperation();
+    TEST_ASSERT_EQUAL_HEX16(3, evidence.requestedValidMask);
+    TEST_ASSERT_EQUAL_HEX16(3, evidence.attemptedMask);
+    TEST_ASSERT_EQUAL_HEX16(3, evidence.possibleEffectMask);
+    TEST_ASSERT_EQUAL_HEX16(3, evidence.acknowledgedMask);
+    TEST_ASSERT_EQUAL_HEX16(fault == 0 ? 3 : fault == 1 ? 0 : 1, evidence.observedValidMask);
+    TEST_ASSERT_EQUAL_HEX16(fault == 1 ? 0 : 1, evidence.matchedMask);
+    TEST_ASSERT_EQUAL_UINT8(0xBC, evidence.requested[0]);
+    TEST_ASSERT_EQUAL_UINT8(0x02, evidence.requested[1]);
+    if (fault != 1) TEST_ASSERT_EQUAL_UINT8(0xBC, evidence.observed[0]);
+    if (fault == 0) {
+      TEST_ASSERT_EQUAL_UINT8(0, evidence.observed[1]);
+      TEST_ASSERT_EQUAL_INT32(188, st.detail);
+    }
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(PersistentEffect::ACKNOWLEDGED),
+                            static_cast<uint8_t>(evidence.effect()));
+    assertDirtyWithOriginalError(dev, st);
+  }
+}
+
+void test_persistent_operation_raw_interval_retains_outer_request_and_complement_validity() {
+  for (uint8_t byte = 0; byte < 2; ++byte) {
+    for (bool failComplement : {false, true}) {
+      FakeE2Transport fake;
+      EE871::EE871 dev;
+      TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+      if (failComplement) fake.nackNextReadMainCommand(cmd::MAIN_CUSTOM_PTR);
+      const uint8_t address = byte == 0 ? cmd::CUSTOM_INTERVAL_L : cmd::CUSTOM_INTERVAL_H;
+      const uint8_t value = byte == 0 ? 0xBC : 0x02;
+      const Status st = dev.customWrite(address, value);
+      TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(failComplement ? Err::NACK : Err::OK),
+                              static_cast<uint8_t>(st.code));
+      assertPersistentOperation(dev, PersistentOperation::CUSTOM_WRITE, cmd::CUSTOM_INTERVAL_L, 2, st);
+      const PersistentOperationResult evidence = dev.getLastPersistentOperation();
+      TEST_ASSERT_EQUAL_UINT8(value, evidence.requested[byte]);
+      TEST_ASSERT_EQUAL_HEX16(failComplement ? (byte == 0 ? 1 : 2) : 3, evidence.requestedValidMask);
+      TEST_ASSERT_EQUAL_HEX16(failComplement ? 0 : 3, evidence.attemptedMask);
+      TEST_ASSERT_EQUAL_HEX16(failComplement ? 0 : 3, evidence.possibleEffectMask);
+      TEST_ASSERT_EQUAL_HEX16(failComplement ? 0 : 3, evidence.acknowledgedMask);
+      TEST_ASSERT_EQUAL_HEX16(failComplement ? 0 : 3, evidence.observedValidMask);
+      TEST_ASSERT_EQUAL_HEX16(failComplement ? 0 : 3, evidence.matchedMask);
+      TEST_ASSERT_EQUAL_UINT32(failComplement ? 0 : 2, fake.controlCount(0x10));
+      TEST_ASSERT_FALSE(dev.persistentConfigDirty());
+    }
+  }
+}
+
+void test_persistent_operation_diagnostic_is_bus_silent_and_health_neutral_in_every_state() {
+  for (uint8_t scenario = 0; scenario < 4; ++scenario) {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    if (scenario != 0) {
+      Config cfg = fake.makeConfig(scenario == 3 ? 1 : 5);
+      cfg.readNackRetries = 1;
+      TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+      dev.tick(1234);
+      fake.nackNextReadMainCommand(cmd::MAIN_STATUS);
+      uint8_t status = 0;
+      TEST_ASSERT_TRUE(dev.readStatus(status).ok());
+      TEST_ASSERT_TRUE(dev.writeCo2Filter(42).ok());
+      if (scenario >= 2) {
+        fake.setDevicePresent(false);
+        TEST_ASSERT_FALSE(dev.writeCo2Filter(43).ok());
+      }
+    }
+    const DriverState expectedStates[] = {
+        DriverState::UNINIT, DriverState::READY, DriverState::DEGRADED, DriverState::OFFLINE};
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(expectedStates[scenario]),
+                            static_cast<uint8_t>(dev.state()));
+    const SettingsSnapshot before = dev.getSettings();
+    const uint32_t elapsed = fake.elapsedUs();
+    const PersistentOperationResult evidence = dev.getLastPersistentOperation();
+    for (uint8_t repeat = 0; repeat < 3; ++repeat) {
+      assertSamePersistentOperation(evidence, dev.getLastPersistentOperation());
+    }
+    // A returned copy is caller-owned; changing it cannot rewrite the cache.
+    PersistentOperationResult edited = dev.getLastPersistentOperation();
+    edited.requested[0] = static_cast<uint8_t>(edited.requested[0] ^ 0xFF);
+    edited.result = Status::Error(Err::INVALID_PARAM, "caller copy");
+    edited.possibleEffectMask = 1;
+    edited.length = 0xFF;
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(PersistentEffect::POSSIBLE),
+                            static_cast<uint8_t>(edited.effect()));
+    edited.length = 0;
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(PersistentEffect::POSSIBLE),
+                            static_cast<uint8_t>(edited.effect()));
+    assertSamePersistentOperation(evidence, dev.getLastPersistentOperation());
+    const SettingsSnapshot after = dev.getSettings();
+    TEST_ASSERT_EQUAL_UINT32(elapsed, fake.elapsedUs());
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(before.state), static_cast<uint8_t>(after.state));
+    TEST_ASSERT_EQUAL(before.initialized, after.initialized);
+    TEST_ASSERT_EQUAL_UINT32(before.nowMs, after.nowMs);
+    TEST_ASSERT_EQUAL_UINT32(before.lastOkMs, after.lastOkMs);
+    TEST_ASSERT_EQUAL_UINT32(before.lastErrorMs, after.lastErrorMs);
+    TEST_ASSERT_EQUAL_UINT8(before.consecutiveFailures, after.consecutiveFailures);
+    TEST_ASSERT_EQUAL_UINT32(before.totalSuccess, after.totalSuccess);
+    TEST_ASSERT_EQUAL_UINT32(before.totalFailures, after.totalFailures);
+    assertSameStatus(before.lastError, after.lastError);
+    TEST_ASSERT_EQUAL(before.persistentConfigDirty, after.persistentConfigDirty);
+    assertSameStatus(before.persistentConfigDirtyError, after.persistentConfigDirtyError);
+    TEST_ASSERT_EQUAL_UINT32(before.readRetry.controlNacks, after.readRetry.controlNacks);
+    TEST_ASSERT_EQUAL_UINT32(before.readRetry.retries, after.readRetry.retries);
+    TEST_ASSERT_EQUAL_UINT32(before.readRetry.recovered, after.readRetry.recovered);
+    TEST_ASSERT_EQUAL_UINT32(before.readRetry.exhausted, after.readRetry.exhausted);
+    TEST_ASSERT_EQUAL_UINT8(before.readRetry.lastControlByte, after.readRetry.lastControlByte);
+    TEST_ASSERT_EQUAL_UINT8(before.readRetry.lastRetriesUsed, after.readRetry.lastRetriesUsed);
+    TEST_ASSERT_EQUAL(before.readRetry.cleanupBlocked, after.readRetry.cleanupBlocked);
+    TEST_ASSERT_EQUAL(before.readRetry.retryVetoed, after.readRetry.retryVetoed);
+    TEST_ASSERT_EQUAL(before.readRetry.lastRecovered, after.readRetry.lastRecovered);
+    assertSameStatus(before.readRetry.lastError, after.readRetry.lastError);
+    assertSameStatus(before.readRetry.lastCleanupError, after.readRetry.lastCleanupError);
+    if (scenario == 0) {
+      TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(PersistentOperation::NONE),
+                              static_cast<uint8_t>(evidence.operation));
+      TEST_ASSERT_EQUAL_UINT8(0, evidence.length);
+      TEST_ASSERT_EQUAL_HEX16(0, evidence.requestedValidMask);
+      TEST_ASSERT_EQUAL_HEX16(0, evidence.attemptedMask);
+      TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(PersistentEffect::NONE),
+                              static_cast<uint8_t>(evidence.effect()));
+    }
+  }
+}
+
 static Status callSinglePersistentWrite(EE871::EE871& dev, uint8_t operation) {
   switch (operation) {
     case 0: return dev.writeCo2Filter(42);
@@ -2652,8 +3055,11 @@ void test_single_persistent_write_failures_retain_uncertainty() {
   const uint8_t targets[] = {
       cmd::CUSTOM_FILTER_CO2, cmd::CUSTOM_OPERATING_MODE, cmd::CUSTOM_BUS_ADDRESS, 0xFD};
   const uint8_t values[] = {42, 1, 3, 0x5A};
+  const PersistentOperation operations[] = {
+      PersistentOperation::CO2_FILTER, PersistentOperation::OPERATING_MODE,
+      PersistentOperation::BUS_ADDRESS, PersistentOperation::CUSTOM_WRITE};
   for (uint8_t operation = 0; operation < 4; ++operation) {
-    for (uint8_t fault = 0; fault < 5; ++fault) {
+    for (uint8_t fault = 0; fault < 6; ++fault) {
       FakeE2Transport fake;
       Config cfg = fake.makeConfig();
       EE871::EE871 dev;
@@ -2663,12 +3069,28 @@ void test_single_persistent_write_failures_retain_uncertainty() {
       if (fault == 2) fake.stretchClockReleaseAfter(38, cfg.flashStretchTimeoutUs + 1U);
       if (fault == 3) fake.stretchClockReleaseAfter(37, cfg.bitTimeoutUs + 1U);
       if (fault == 4) fake.stretchClockReleaseAfter(32, cfg.bitTimeoutUs + 1U);
+      // Write frame (38 clocks), pointer frame (38), then read frame STOP (29).
+      if (fault == 5) fake.stretchClockReleaseAfter(105, cfg.bitTimeoutUs + 1U);
       const uint32_t failuresBefore = dev.totalFailures();
       const Status st = callSinglePersistentWrite(dev, operation);
       const Err expected = fault == 0 ? Err::E2_ERROR
                            : fault == 1 ? Err::PEC_MISMATCH : Err::TIMEOUT;
       TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(expected), static_cast<uint8_t>(st.code));
       assertDirtyWithOriginalError(dev, st);
+      assertPersistentOperation(dev, operations[operation], targets[operation], 1, st);
+      const PersistentOperationResult evidence = dev.getLastPersistentOperation();
+      TEST_ASSERT_EQUAL_UINT8(values[operation], evidence.requested[0]);
+      TEST_ASSERT_EQUAL_HEX16(1, evidence.requestedValidMask);
+      TEST_ASSERT_EQUAL_HEX16(1, evidence.attemptedMask);
+      TEST_ASSERT_EQUAL_HEX16(1, evidence.possibleEffectMask);
+      TEST_ASSERT_EQUAL_HEX16(fault <= 2 || fault == 5 ? 1 : 0, evidence.acknowledgedMask);
+      TEST_ASSERT_EQUAL_HEX16(fault == 0 ? 1 : 0, evidence.observedValidMask);
+      TEST_ASSERT_EQUAL_HEX16(0, evidence.matchedMask);
+      if (fault == 0) TEST_ASSERT_EQUAL_UINT8(0, evidence.observed[0]);
+      TEST_ASSERT_EQUAL_UINT8(
+          static_cast<uint8_t>(fault <= 2 || fault == 5 ? PersistentEffect::ACKNOWLEDGED
+                                          : PersistentEffect::POSSIBLE),
+          static_cast<uint8_t>(evidence.effect()));
       TEST_ASSERT_EQUAL_UINT32(failuresBefore + (fault == 0 ? 0U : 1U), dev.totalFailures());
       TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fault == 0 ? DriverState::READY
                                                                            : DriverState::DEGRADED),
@@ -2686,22 +3108,39 @@ void test_single_persistent_write_success_and_definite_rejection_stay_clean() {
   const uint8_t targets[] = {
       cmd::CUSTOM_FILTER_CO2, cmd::CUSTOM_OPERATING_MODE, cmd::CUSTOM_BUS_ADDRESS, 0xFD};
   const uint8_t values[] = {42, 1, 3, 0x5A};
+  const PersistentOperation operations[] = {
+      PersistentOperation::CO2_FILTER, PersistentOperation::OPERATING_MODE,
+      PersistentOperation::BUS_ADDRESS, PersistentOperation::CUSTOM_WRITE};
   for (uint8_t operation = 0; operation < 4; ++operation) {
-    for (uint8_t fault = 0; fault < 5; ++fault) {
+    for (uint8_t fault = 0; fault < 6; ++fault) {
       FakeE2Transport fake;
       Config cfg = fake.makeConfig();
       EE871::EE871 dev;
       TEST_ASSERT_TRUE(dev.begin(cfg).ok());
       if (fault == 1) fake.setDevicePresent(false);
       if (fault == 2) fake.failNextWriteToAddress(targets[operation]);
-      if (fault >= 3) fake.nackNextWritePec();
+      if (fault == 3 || fault == 4) fake.nackNextWritePec();
       if (fault == 4) fake.stretchClockReleaseAfter(38, cfg.flashStretchTimeoutUs + 1U);
+      if (fault == 5) fake.nackNextWriteData();
       const Status st = callSinglePersistentWrite(dev, operation);
       TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fault == 0 ? Err::OK : Err::NACK),
                               static_cast<uint8_t>(st.code));
-      if (fault >= 3) TEST_ASSERT_EQUAL_STRING("PEC NACK", st.msg);
+      if (fault == 3 || fault == 4) TEST_ASSERT_EQUAL_STRING("PEC NACK", st.msg);
+      if (fault == 5) TEST_ASSERT_EQUAL_STRING("Data byte NACK", st.msg);
       TEST_ASSERT_FALSE(dev.persistentConfigDirty());
       TEST_ASSERT_TRUE(dev.persistentConfigDirtyError().ok());
+      assertPersistentOperation(dev, operations[operation], targets[operation], 1, st);
+      const PersistentOperationResult evidence = dev.getLastPersistentOperation();
+      TEST_ASSERT_EQUAL_UINT8(values[operation], evidence.requested[0]);
+      TEST_ASSERT_EQUAL_HEX16(1, evidence.requestedValidMask);
+      TEST_ASSERT_EQUAL_HEX16(1, evidence.attemptedMask);
+      TEST_ASSERT_EQUAL_HEX16(fault == 0 ? 1 : 0, evidence.possibleEffectMask);
+      TEST_ASSERT_EQUAL_HEX16(fault == 0 ? 1 : 0, evidence.acknowledgedMask);
+      TEST_ASSERT_EQUAL_HEX16(fault == 0 ? 1 : 0, evidence.observedValidMask);
+      TEST_ASSERT_EQUAL_HEX16(fault == 0 ? 1 : 0, evidence.matchedMask);
+      TEST_ASSERT_EQUAL_UINT8(
+          static_cast<uint8_t>(fault == 0 ? PersistentEffect::VERIFIED : PersistentEffect::NONE),
+          static_cast<uint8_t>(evidence.effect()));
       TEST_ASSERT_EQUAL_UINT8(fault == 0 ? values[operation] : 0, fake.memory(targets[operation]));
       TEST_ASSERT_EQUAL_UINT32(fault == 0 ? 0U : 1U, dev.totalFailures());
       TEST_ASSERT_TRUE(fake.masterSclReleased());
@@ -2723,6 +3162,76 @@ void test_uncertain_interval_pec_ack_requires_resync() {
   TEST_ASSERT_EQUAL_UINT32(1, dev.totalFailures());
 }
 
+void test_final_pec_sample_controls_uncertainty_when_clock_low_fails() {
+  for (bool nack : {false, true}) {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
+    if (nack) fake.nackNextWritePec();
+    fake.holdSclHighAfterNextWritePecAck();
+    const Status st = dev.writeCo2Filter(42);
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::BUS_STUCK),
+                            static_cast<uint8_t>(st.code));
+    TEST_ASSERT_EQUAL_STRING("SCL did not go low", st.msg);
+    TEST_ASSERT_EQUAL_UINT32(1, dev.totalFailures());
+    TEST_ASSERT_EQUAL(!nack, dev.persistentConfigDirty());
+    assertPersistentOperation(dev, PersistentOperation::CO2_FILTER, cmd::CUSTOM_FILTER_CO2, 1, st);
+    const PersistentOperationResult evidence = dev.getLastPersistentOperation();
+    TEST_ASSERT_EQUAL_HEX16(1, evidence.attemptedMask);
+    TEST_ASSERT_EQUAL_HEX16(nack ? 0 : 1, evidence.possibleEffectMask);
+    TEST_ASSERT_EQUAL_HEX16(nack ? 0 : 1, evidence.acknowledgedMask);
+    TEST_ASSERT_EQUAL_HEX16(0, evidence.observedValidMask);
+    TEST_ASSERT_EQUAL_HEX16(0, evidence.matchedMask);
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(nack ? PersistentEffect::NONE : PersistentEffect::ACKNOWLEDGED),
+        static_cast<uint8_t>(evidence.effect()));
+    if (!nack) assertDirtyWithOriginalError(dev, st);
+  }
+}
+
+void test_persistent_operation_rejection_keeps_earlier_pending_target_and_cause() {
+  for (bool offline : {false, true}) {
+    FakeE2Transport fake;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(beginFakeDevice(dev, fake, offline ? 1 : 5).ok());
+    fake.corruptReadPecAfterNextWrite(cmd::CUSTOM_FILTER_CO2);
+    const Status first = dev.writeCo2Filter(42);
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::PEC_MISMATCH), static_cast<uint8_t>(first.code));
+    const uint32_t elapsed = fake.elapsedUs();
+    if (!offline) fake.nackNextWritePec();
+    const Status rejected = dev.customWrite(0xFD, 0x5A);
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(offline ? Err::PEC_MISMATCH : Err::NACK),
+                            static_cast<uint8_t>(rejected.code));
+    if (offline) {
+      TEST_ASSERT_EQUAL_STRING("Driver offline; call recover()", rejected.msg);
+      TEST_ASSERT_EQUAL_INT32(first.detail, rejected.detail);
+      TEST_ASSERT_EQUAL_UINT32(elapsed, fake.elapsedUs());
+    }
+    assertPersistentOperation(dev, PersistentOperation::CUSTOM_WRITE, 0xFD, 1, rejected);
+    const PersistentOperationResult evidence = dev.getLastPersistentOperation();
+    TEST_ASSERT_EQUAL_HEX16(1, evidence.requestedValidMask);
+    TEST_ASSERT_EQUAL_HEX16(offline ? 0 : 1, evidence.attemptedMask);
+    TEST_ASSERT_EQUAL_HEX16(0, evidence.possibleEffectMask);
+    TEST_ASSERT_EQUAL_HEX16(0, evidence.acknowledgedMask);
+    TEST_ASSERT_EQUAL_HEX16(0, evidence.observedValidMask);
+    TEST_ASSERT_EQUAL_HEX16(0, evidence.matchedMask);
+    assertDirtyWithOriginalError(dev, first);
+    TEST_ASSERT_TRUE(dev.recover().ok());
+    fake.corruptNextCustomReadPec(cmd::CUSTOM_FILTER_CO2);
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::PEC_MISMATCH),
+                            static_cast<uint8_t>(dev.resyncPersistentConfig().code));
+    assertDirtyWithOriginalError(dev, first);
+    if (offline) TEST_ASSERT_TRUE(dev.recover().ok());
+    // The rejected target must not enter the pending set.
+    fake.corruptNextCustomReadPec(0xFD);
+    TEST_ASSERT_TRUE(dev.resyncPersistentConfig().ok());
+    uint8_t ignored = 0;
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::PEC_MISMATCH),
+                            static_cast<uint8_t>(dev.customRead(0xFD, ignored).code));
+    assertSamePersistentOperation(evidence, dev.getLastPersistentOperation());
+  }
+}
+
 void test_resync_preserves_all_pending_targets_until_entire_pass_succeeds() {
   FakeE2Transport fake;
   EE871::EE871 dev;
@@ -2730,23 +3239,36 @@ void test_resync_preserves_all_pending_targets_until_entire_pass_succeeds() {
   fake.dropNextWriteCommitToAddress(0x00);
   const Status first = dev.customWrite(0x00, 0x12);
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::E2_ERROR), static_cast<uint8_t>(first.code));
+  const PersistentOperationResult firstEvidence = dev.getLastPersistentOperation();
+  assertPersistentOperation(dev, PersistentOperation::CUSTOM_WRITE, 0x00, 1, first);
   fake.corruptReadPecAfterNextWrite(0xFF);
   const Status second = dev.customWrite(0xFF, 0x34);
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::PEC_MISMATCH), static_cast<uint8_t>(second.code));
+  assertPersistentOperation(dev, PersistentOperation::CUSTOM_WRITE, 0xFF, 1, second);
+  TEST_ASSERT_EQUAL_HEX8(0x12, firstEvidence.requested[0]);
+  assertSameStatus(first, firstEvidence.result);
   assertDirtyWithOriginalError(dev, first);
 
   // Neither a successful rewrite nor a partial resync resolves earlier targets.
   TEST_ASSERT_TRUE(dev.customWrite(0x00, 0x12).ok());
+  TEST_ASSERT_TRUE(dev.writeCo2Filter(42).ok());
+  assertDirtyWithOriginalError(dev, first);
+  const PersistentOperationResult latestEvidence = dev.getLastPersistentOperation();
+  assertPersistentOperation(dev, PersistentOperation::CO2_FILTER, cmd::CUSTOM_FILTER_CO2, 1, Status::Ok());
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(PersistentEffect::VERIFIED),
+                          static_cast<uint8_t>(latestEvidence.effect()));
   const uint8_t failures[] = {0x00, 0xFF, 0x00};
   for (uint8_t target : failures) {
     fake.corruptNextCustomReadPec(target);
     const Status st = dev.resyncPersistentConfig();
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::PEC_MISMATCH), static_cast<uint8_t>(st.code));
     assertDirtyWithOriginalError(dev, first);
+    assertSamePersistentOperation(latestEvidence, dev.getLastPersistentOperation());
   }
   TEST_ASSERT_TRUE(dev.resyncPersistentConfig().ok());
   TEST_ASSERT_FALSE(dev.persistentConfigDirty());
   TEST_ASSERT_TRUE(dev.persistentConfigDirtyError().ok());
+  assertSamePersistentOperation(latestEvidence, dev.getLastPersistentOperation());
 
   // A completed resync clears the target set as well as the public diagnostic.
   fake.corruptNextCustomReadPec(0xFF);
@@ -2763,6 +3285,7 @@ void test_pending_single_write_survives_offline_recovery_and_reinitialization() 
   TEST_ASSERT_TRUE(dev.begin(cfg).ok());
   fake.corruptReadPecAfterNextWrite(cmd::CUSTOM_FILTER_CO2);
   const Status first = dev.writeCo2Filter(42);
+  const PersistentOperationResult evidence = dev.getLastPersistentOperation();
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::PEC_MISMATCH), static_cast<uint8_t>(first.code));
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::OFFLINE), static_cast<uint8_t>(dev.state()));
   assertDirtyWithOriginalError(dev, first);
@@ -2771,6 +3294,7 @@ void test_pending_single_write_survives_offline_recovery_and_reinitialization() 
   TEST_ASSERT_EQUAL_UINT32(elapsed, fake.elapsedUs());
   TEST_ASSERT_TRUE(dev.recover().ok());
   assertDirtyWithOriginalError(dev, first);
+  assertSamePersistentOperation(evidence, dev.getLastPersistentOperation());
   fake.corruptNextCustomReadPec(cmd::CUSTOM_FILTER_CO2);
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::PEC_MISMATCH),
                           static_cast<uint8_t>(dev.resyncPersistentConfig().code));
@@ -2778,12 +3302,15 @@ void test_pending_single_write_survives_offline_recovery_and_reinitialization() 
 
   dev.end();
   assertDirtyWithOriginalError(dev, first);
+  assertSamePersistentOperation(evidence, dev.getLastPersistentOperation());
   fake.setDevicePresent(false);
   TEST_ASSERT_FALSE(dev.begin(cfg).ok());
   assertDirtyWithOriginalError(dev, first);
+  assertSamePersistentOperation(evidence, dev.getLastPersistentOperation());
   fake.setDevicePresent(true);
   TEST_ASSERT_TRUE(dev.begin(cfg).ok());
   assertDirtyWithOriginalError(dev, first);
+  assertSamePersistentOperation(evidence, dev.getLastPersistentOperation());
   fake.corruptNextCustomReadPec(cmd::CUSTOM_FILTER_CO2);
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::PEC_MISMATCH),
                           static_cast<uint8_t>(dev.resyncPersistentConfig().code));
@@ -2791,6 +3318,7 @@ void test_pending_single_write_survives_offline_recovery_and_reinitialization() 
   TEST_ASSERT_TRUE(dev.recover().ok());
   TEST_ASSERT_TRUE(dev.resyncPersistentConfig().ok());
   TEST_ASSERT_FALSE(dev.persistentConfigDirty());
+  assertSamePersistentOperation(evidence, dev.getLastPersistentOperation());
 }
 
 void test_resync_validates_pending_address_and_mode_values() {
@@ -2801,16 +3329,19 @@ void test_resync_validates_pending_address_and_mode_values() {
     TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
     fake.corruptReadPecAfterNextWrite(target);
     const Status first = dev.customWrite(target, 0xFF);
+    const PersistentOperationResult evidence = dev.getLastPersistentOperation();
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::PEC_MISMATCH), static_cast<uint8_t>(first.code));
     const Status st = dev.resyncPersistentConfig();
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::OUT_OF_RANGE), static_cast<uint8_t>(st.code));
     TEST_ASSERT_EQUAL_INT32(0xFF, st.detail);
     assertDirtyWithOriginalError(dev, first);
+    assertSamePersistentOperation(evidence, dev.getLastPersistentOperation());
     TEST_ASSERT_EQUAL_UINT32(1, dev.totalFailures());
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::READY), static_cast<uint8_t>(dev.state()));
     fake.setMemory(target, target == cmd::CUSTOM_BUS_ADDRESS ? 7 : 3);
     TEST_ASSERT_TRUE(dev.resyncPersistentConfig().ok());
     TEST_ASSERT_FALSE(dev.persistentConfigDirty());
+    assertSamePersistentOperation(evidence, dev.getLastPersistentOperation());
   }
 }
 
@@ -2838,6 +3369,12 @@ void test_auto_adjust_preflight_prevents_invalid_or_duplicate_requests() {
     EE871::EE871 dev;
     TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
     const Status st = dev.startAutoAdjust();
+    assertPersistentOperation(dev, PersistentOperation::AUTO_ADJUST, cmd::CUSTOM_AUTO_ADJUST, 1, st);
+    const PersistentOperationResult evidence = dev.getLastPersistentOperation();
+    TEST_ASSERT_EQUAL_UINT8(1, evidence.requested[0]);
+    TEST_ASSERT_EQUAL_HEX16(1, evidence.requestedValidMask);
+    TEST_ASSERT_EQUAL_HEX16(0, evidence.attemptedMask);
+    TEST_ASSERT_EQUAL_HEX16(0, evidence.possibleEffectMask);
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(state == 1 ? Err::BUSY : Err::OUT_OF_RANGE),
                             static_cast<uint8_t>(st.code));
     TEST_ASSERT_EQUAL_UINT32(0, fake.controlCount(0x10));
@@ -2867,6 +3404,11 @@ void test_auto_adjust_preflight_transfer_failure_does_not_write_or_dirty() {
     if (fault == 1) fake.corruptNextCustomReadPec(cmd::CUSTOM_AUTO_ADJUST);
     if (fault == 2) fake.stretchClockReleaseAfter(2, cfg.bitTimeoutUs + 1U);
     const Status st = dev.startAutoAdjust();
+    assertPersistentOperation(dev, PersistentOperation::AUTO_ADJUST, cmd::CUSTOM_AUTO_ADJUST, 1, st);
+    const PersistentOperationResult evidence = dev.getLastPersistentOperation();
+    TEST_ASSERT_EQUAL_HEX16(0, evidence.attemptedMask);
+    TEST_ASSERT_EQUAL_HEX16(0, evidence.possibleEffectMask);
+    TEST_ASSERT_EQUAL_HEX16(0, evidence.observedValidMask);
     const Err expected = fault == 0 ? Err::NACK : fault == 1 ? Err::PEC_MISMATCH : Err::TIMEOUT;
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(expected), static_cast<uint8_t>(st.code));
     TEST_ASSERT_EQUAL_UINT32(0, fake.controlCount(0x10));
@@ -2882,6 +3424,13 @@ void test_uncertain_auto_adjust_resync_waits_for_idle_before_reading_calibration
   TEST_ASSERT_TRUE(beginFakeDevice(dev, fake).ok());
   fake.corruptReadPecAfterNextWrite(cmd::CUSTOM_AUTO_ADJUST);
   const Status first = dev.startAutoAdjust();
+  const PersistentOperationResult evidence = dev.getLastPersistentOperation();
+  assertPersistentOperation(dev, PersistentOperation::AUTO_ADJUST, cmd::CUSTOM_AUTO_ADJUST, 1, first);
+  TEST_ASSERT_EQUAL_HEX16(1, evidence.attemptedMask);
+  TEST_ASSERT_EQUAL_HEX16(1, evidence.possibleEffectMask);
+  TEST_ASSERT_EQUAL_HEX16(1, evidence.acknowledgedMask);
+  TEST_ASSERT_EQUAL_HEX16(0, evidence.observedValidMask);
+  TEST_ASSERT_EQUAL_HEX16(0, evidence.matchedMask);
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::PEC_MISMATCH), static_cast<uint8_t>(first.code));
   TEST_ASSERT_EQUAL_UINT8(1, fake.memory(cmd::CUSTOM_AUTO_ADJUST));
   assertDirtyWithOriginalError(dev, first);
@@ -2889,6 +3438,7 @@ void test_uncertain_auto_adjust_resync_waits_for_idle_before_reading_calibration
 
   fake.corruptNextCustomReadPec(cmd::CUSTOM_CO2_OFFSET_L);
   const Status busy = dev.resyncPersistentConfig();
+  assertSamePersistentOperation(evidence, dev.getLastPersistentOperation());
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::BUSY), static_cast<uint8_t>(busy.code));
   assertDirtyWithOriginalError(dev, first);
   TEST_ASSERT_EQUAL_UINT32(1, dev.totalFailures());
@@ -2901,6 +3451,8 @@ void test_uncertain_auto_adjust_resync_waits_for_idle_before_reading_calibration
   TEST_ASSERT_TRUE(dev.resyncPersistentConfig().ok());
   TEST_ASSERT_FALSE(dev.persistentConfigDirty());
   TEST_ASSERT_EQUAL_UINT32(1, fake.controlCount(0x10));
+  // Later idle/coherent values never certify that this one-shot request completed.
+  assertSamePersistentOperation(evidence, dev.getLastPersistentOperation());
 }
 
 void test_resync_retains_pending_fields_when_their_support_disappears() {
@@ -2925,9 +3477,11 @@ void test_resync_retains_pending_fields_when_their_support_disappears() {
       TEST_ASSERT_TRUE(dev.recover().ok());
     }
     assertDirtyWithOriginalError(dev, first);
+    const PersistentOperationResult evidence = dev.getLastPersistentOperation();
     const Status st = dev.resyncPersistentConfig();
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_SUPPORTED), static_cast<uint8_t>(st.code));
     assertDirtyWithOriginalError(dev, first);
+    assertSamePersistentOperation(evidence, dev.getLastPersistentOperation());
     if (target == 0) {
       fake.setMemory(cmd::CUSTOM_ADJUSTMENT_SUPPORT, cmd::ADJUSTMENT_CO2_MASK);
     } else {
@@ -2937,6 +3491,7 @@ void test_resync_retains_pending_fields_when_their_support_disappears() {
     }
     TEST_ASSERT_TRUE(dev.resyncPersistentConfig().ok());
     TEST_ASSERT_FALSE(dev.persistentConfigDirty());
+    assertSamePersistentOperation(evidence, dev.getLastPersistentOperation());
   }
 }
 
@@ -3427,6 +3982,7 @@ int main() {
   RUN_TEST(test_adjacent_register_pairs_assemble_in_low_high_order);
   RUN_TEST(test_interval_low_byte_write_failure_does_not_dirty);
   RUN_TEST(test_interval_high_byte_write_failure_sets_dirty);
+  RUN_TEST(test_interval_partial_write_resync_proves_coherence_not_requested_value);
   RUN_TEST(test_interval_verify_failure_sets_dirty_and_unrelated_read_does_not_clear);
   RUN_TEST(test_co2_offset_high_byte_failure_sets_dirty);
   RUN_TEST(test_co2_offset_low_byte_verify_failure_sets_dirty);
@@ -3438,7 +3994,16 @@ int main() {
   RUN_TEST(test_dirty_state_survives_offline);
   RUN_TEST(test_single_persistent_write_failures_retain_uncertainty);
   RUN_TEST(test_single_persistent_write_success_and_definite_rejection_stay_clean);
+  RUN_TEST(test_persistent_operation_success_preserves_outer_api_and_all_requested_bytes);
+  RUN_TEST(test_persistent_operation_guards_record_no_effect_and_replace_stale_evidence);
+  RUN_TEST(test_persistent_operation_capability_guards_never_attempt_mutation);
+  RUN_TEST(test_persistent_operation_partial_pairs_and_names_keep_outer_progress);
+  RUN_TEST(test_persistent_operation_interval_readback_keeps_validated_byte_evidence);
+  RUN_TEST(test_persistent_operation_raw_interval_retains_outer_request_and_complement_validity);
+  RUN_TEST(test_persistent_operation_diagnostic_is_bus_silent_and_health_neutral_in_every_state);
+  RUN_TEST(test_persistent_operation_rejection_keeps_earlier_pending_target_and_cause);
   RUN_TEST(test_uncertain_interval_pec_ack_requires_resync);
+  RUN_TEST(test_final_pec_sample_controls_uncertainty_when_clock_low_fails);
   RUN_TEST(test_resync_preserves_all_pending_targets_until_entire_pass_succeeds);
   RUN_TEST(test_pending_single_write_survives_offline_recovery_and_reinitialization);
   RUN_TEST(test_resync_validates_pending_address_and_mode_values);

@@ -1,6 +1,11 @@
 # Prompt 04 — Add bounded persistent-operation evidence
 
-**Finding:** CAP-4. **Status: NOT IMPLEMENTED.** Optional additive capability.
+**Finding:** CAP-4. **Status: IMPLEMENTED (software scope).** Selected
+additive capability. The implementation adds one latest-operation cache and
+explicit CLI maintenance admission while retaining existing multi-target dirty
+tracking and core write compatibility. See the [index](README.md) for regression
+references and the implementation handoff for final checks, commit and CI.
+
 Invoking this prompt selects a small latest-operation evidence contract plus
 explicit application maintenance admission. Main already retains persistent
 uncertainty; this is not a repair for nonexistent dirty tracking. Complete the

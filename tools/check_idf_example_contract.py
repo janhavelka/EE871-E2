@@ -6,6 +6,7 @@ import re
 import sys
 
 from source_scan import strip_cpp_comments, strip_cpp_non_code
+from check_cli_contract import persistent_cli_errors
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 ARDUINO_MAIN = ROOT / "examples" / "01_basic_bringup_cli" / "main.cpp"
@@ -61,6 +62,7 @@ IDF_REQUIRED_PATTERNS = {
     "checked fast command dispatch": r'std::strcmp\(\s*trimmed\s*,\s*"co2fastsample"\s*\)\s*==\s*0\s*\)\s*\{\s*printCo2Sample\(true\)',
     "checked average command dispatch": r'std::strcmp\(\s*trimmed\s*,\s*"co2avgsample"\s*\)\s*==\s*0\s*\)\s*\{\s*printCo2Sample\(false\)',
     "dirty command dispatch": r'std::strcmp\(\s*trimmed\s*,\s*"dirty"\s*\)\s*==\s*0',
+    "operation command dispatch": r'std::strcmp\(\s*trimmed\s*,\s*"operation"\s*\)\s*==\s*0\s*\)\s*\{\s*printPersistentOperation\(\s*\)',
     "resync command dispatch": r'std::strcmp\(\s*trimmed\s*,\s*"resync"\s*\)\s*==\s*0',
     "dirty accessor": r"persistentConfigDirty",
     "dirty error accessor": r"persistentConfigDirtyError",
@@ -78,6 +80,7 @@ PROCESS_COMMAND_PATTERNS = {
     "checked fast command dispatch",
     "checked average command dispatch",
     "dirty command dispatch",
+    "operation command dispatch",
     "resync command dispatch",
     "resync before after output",
     "library test dispatch",
@@ -139,6 +142,9 @@ def main() -> int:
         scope = process_command if label in PROCESS_COMMAND_PATTERNS else idf
         if re.search(pattern, scope) is None:
             fail(f"IDF CLI missing {label}")
+
+    for error in persistent_cli_errors(idf, process_command):
+        fail(error)
 
     scanner = extract_section(idf, "void scanAddresses", "struct TimingResult")
     scanner_code = strip_cpp_non_code(scanner)

@@ -104,6 +104,52 @@ CI evidence.
 The remaining decision and tables preserve the historical audit baseline;
 their then-missing CAP-2 description is superseded by this disposition.
 
+## CAP-4 disposition after the audit - 2026-10-29
+
+**CAP-4 is implemented in the selected software scope.** The selected
+additive contract is cache-only `getLastPersistentOperation()` returning a
+fixed-size `PersistentOperationResult`. It retains the latest outer mutation's
+complete target, up to 16 requested and observed bytes, explicit validity and
+per-byte attempt, possible-effect, sampled-ACK and matching-readback evidence,
+plus the exact returned status. Internal byte writes accumulate that outer
+record. The transport helper owns PEC/ACK classification, including sampled
+final NACKs followed by cleanup failure and partial PEC uncertainty.
+
+The existing all-pending-target bitmap and sticky first error remain the sole
+owner of unresolved configuration. Core raw and typed writes remain permitted
+while dirty. Latest evidence survives recovery, end/begin and resync, and the
+next outer mutation, including rejection, replaces it. Coherent current values
+can differ from requested values; successful resync must not certify the
+original intent. Address readback proves only stored `0xC0`, and auto-adjust
+status cannot certify that an uncertain one-shot ran or succeeded.
+
+The real consumer is the `operation` diagnostic in both bring-up CLIs, with
+application maintenance admission blocking dirty state, possible unmatched
+effects, and possible address effects pending an explicit candidate-session
+decision. There is no diagnostic reset/admit command or automatic replay.
+Prompt 01's host baseline/admission owner and campaign failure latch remain
+independent. The persistent plan requires a fresh open `operation` admission
+before each destructive send; blocked or malformed admission latches failure.
+Exposing core evidence alone does not close HIL-1.
+
+`test_interval_partial_write_resync_proves_coherence_not_requested_value`
+demonstrates the existing distinction between current coherence and requested
+intent. `test_final_pec_sample_controls_uncertainty_when_clock_low_fails` checks
+phase evidence, while
+`test_persistent_operation_partial_pairs_and_names_keep_outer_progress` covers
+partial targets. The CLI executable regression
+`test_persistent_operation_cli_preserves_evidence_and_gates_without_io`
+checks the real consumer. The [prompt index](prompts/README.md) records further
+regression symbols; exact checks and final commit/CI evidence belong in the
+implementation handoff.
+`test_main_operation_evidence_blocks_sends_despite_clean_resync` and
+`test_main_requires_fresh_operation_admission_for_each_write` cover host send
+admission and its retained failure latch.
+No hardware access, persistent sensor writes, address activation, calibration
+outcomes or branch retirement are claimed. The remaining decision and tables
+retain the historical audit baseline; their then-missing CAP-4 description is
+superseded by this disposition.
+
 ## Decision
 
 [Executable software prompts](prompts/README.md) now map HIL-1 and CAP-1..5 to

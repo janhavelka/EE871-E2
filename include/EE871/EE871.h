@@ -38,6 +38,63 @@ struct ReadRetryDiagnostics {
   bool lastRecovered = false; ///< Latest NACK-bearing frame succeeded after a retry.
 };
 
+/// Outer public persistent mutation; nested byte writes keep this identity.
+enum class PersistentOperation : uint8_t {
+  NONE, CUSTOM_WRITE, MEASUREMENT_INTERVAL, PART_NAME, BUS_ADDRESS,
+  CO2_INTERVAL_FACTOR, CO2_FILTER, OPERATING_MODE, AUTO_ADJUST, CO2_OFFSET, CO2_GAIN
+};
+
+/// Aggregate evidence about the requested register bytes, not physical outcomes.
+enum class PersistentEffect : uint8_t {
+  NONE,         ///< No possible effect: no attempt or definite pre-acceptance rejection.
+  POSSIBLE,     ///< Possible effect or only partial target progress.
+  ACKNOWLEDGED, ///< Every target byte received a final PEC ACK; readback is incomplete/different.
+  VERIFIED      ///< Every target byte was successfully read back matching its request.
+};
+
+/// Latest outer persistent operation, with fixed capacity for the 16-byte part name.
+///
+/// Masks are relative to startAddress; only bits below length are meaningful.
+/// Possible effects include acknowledged and matched bytes. A sampled PEC ACK
+/// survives a later clock-low/STOP error; a definite PEC NACK proves no effect
+/// for that byte even if cleanup fails. Observations require a complete successful
+/// read frame (PEC and STOP included). result preserves the original code/detail.
+/// VERIFIED certifies only bytes read: C0 does not establish active-address timing,
+/// and D9 does not establish that calibration ran or completed successfully.
+///
+/// Only the next public mutation replaces this record, including rejected calls.
+/// Reads, recover(), resyncPersistentConfig(), and end()/begin() retain it. Resync
+/// proves current coherence, never retrospective intent. The independent pending
+/// bitmap/first dirty error remains the sole owner of unresolved configuration.
+/// Applications retain baseline/intent across operations and own maintenance
+/// admission, candidate address sessions, and reconciliation; no automatic replay.
+struct PersistentOperationResult {
+  static constexpr size_t CAPACITY = 16; ///< Largest supported typed target.
+  PersistentOperation operation = PersistentOperation::NONE; ///< Outer API identity.
+  uint8_t startAddress = 0; ///< First target register, including paired raw interval writes.
+  uint8_t length = 0; ///< Target span; zero before any mutation call.
+  uint8_t requested[CAPACITY] = {}; ///< Requested bytes, valid only under requestedValidMask.
+  uint8_t observed[CAPACITY] = {}; ///< Readback bytes, valid only under observedValidMask.
+  uint16_t requestedValidMask = 0; ///< Raw interval complement becomes valid after its read.
+  uint16_t attemptedMask = 0; ///< Persistent frames started; excludes local/OFFLINE rejection.
+  uint16_t possibleEffectMask = 0; ///< PEC started without a definite final PEC NACK.
+  uint16_t acknowledgedMask = 0; ///< Final PEC ACK was actually sampled.
+  uint16_t observedValidMask = 0; ///< Successfully validated readback bytes.
+  uint16_t matchedMask = 0; ///< Valid readback equals the valid requested byte.
+  Status result = Status::Ok(); ///< Exact outer result; default OK is not an operation.
+
+  /// Summarize the masks; partial target progress remains POSSIBLE.
+  /// @return Strongest evidence established for the whole target span.
+  PersistentEffect effect() const {
+    if (possibleEffectMask == 0) return PersistentEffect::NONE;
+    if (length == 0 || length > CAPACITY) return PersistentEffect::POSSIBLE;
+    const uint16_t all = static_cast<uint16_t>((uint32_t{1} << length) - 1U);
+    if (matchedMask == all) return PersistentEffect::VERIFIED;
+    if (acknowledgedMask == all) return PersistentEffect::ACKNOWLEDGED;
+    return PersistentEffect::POSSIBLE;
+  }
+};
+
 /// @brief Fixed-size evidence from an explicit checked MV3/MV4 sample read.
 ///
 /// A step is attempted when its existing typed API is invoked, even if a
@@ -311,6 +368,12 @@ public:
   /// failure that created the dirty condition.
   /// @return Stored error status, or Status::Ok() when not dirty.
   Status persistentConfigDirtyError() const { return _persistentConfigDirtyError; }
+
+  /// Copy the latest persistent operation without bus I/O or diagnostic/state changes.
+  /// Core writes remain permitted while dirty for compatibility; applications own
+  /// admission. This bounded record never replaces all-target dirty tracking.
+  /// @return Latest outer mutation evidence, or operation NONE before any call.
+  PersistentOperationResult getLastPersistentOperation() const { return _lastPersistentOperation; }
 
   // =========================================================================
   // E2 Protocol Helpers
@@ -785,10 +848,15 @@ private:
   Status _readControlByteTracked(uint8_t controlByte, uint8_t& data);
 
   Status _writeCommandRaw(uint8_t controlByte, uint8_t addressByte, uint8_t dataByte,
-                          bool* writeMayHaveApplied = nullptr);
-  Status _writeCommandTracked(uint8_t controlByte, uint8_t addressByte, uint8_t dataByte,
-                              bool* writeMayHaveApplied = nullptr);
-  Status _customWriteDirect(uint8_t address, uint8_t value, bool* writeMayHaveApplied = nullptr);
+                          PersistentEffect* effect = nullptr);
+  Status _writeCommandTracked(uint8_t controlByte, uint8_t addressByte, uint8_t dataByte);
+  Status _customWriteDirect(uint8_t address, uint8_t value);
+  Status _writeMeasurementInterval(uint16_t intervalDeciSeconds);
+  Status _writeCo2AdjustmentPair(uint8_t lowAddress, uint16_t value);
+  Status _readPersistentBack(uint8_t address, uint8_t* data, uint8_t length);
+  void _beginPersistentOperation(PersistentOperation operation, uint8_t address,
+                                  const uint8_t* requested, uint8_t length);
+  Status _finishPersistentOperation(const Status& st);
   Status _busResetRaw();
   Status _validateIdentityRaw();
   Status _requireCo2AdjustmentSupport(uint8_t address);
@@ -832,6 +900,7 @@ private:
   uint32_t _totalFailures = 0;
   uint32_t _totalSuccess = 0;
   ReadRetryDiagnostics _readRetry;
+  PersistentOperationResult _lastPersistentOperation;
   bool _persistentConfigDirty = false;
   Status _persistentConfigDirtyError = Status::Ok();
   // One bit per custom address; retained with dirty diagnostics across sessions.

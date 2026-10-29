@@ -423,6 +423,45 @@ Only a complete successful readback clears dirty state. Budget up to 256
 pending-target pointer/read pairs, plus baseline, capability and status checks;
 this is a maintenance API.
 
+`getLastPersistentOperation()` returns a cache-only `PersistentOperationResult`
+for the latest outer mutation call, including calls rejected before a write.
+`PersistentOperation` identifies the raw or typed public operation;
+`startAddress` and `length` identify its affected custom-memory range. Fixed
+16-byte `requested` and `observed` arrays retain complete part-name intent and
+partial results without allocation. Each bit in the following masks describes
+the byte at `startAddress + bit_index`:
+
+| Mask | Evidence |
+| --- | --- |
+| `requestedValidMask` | The requested byte is known. A raw interval-byte write obtains its companion byte before requesting the whole pair. |
+| `attemptedMask` | A direct write procedure attempted that byte. Reads and volatile pointer updates do not count. |
+| `possibleEffectMask` | PEC transmission started and no definite final PEC NACK proved rejection; includes acknowledged bytes. |
+| `acknowledgedMask` | The final PEC ACK was sampled, even if the following clock-low phase or STOP failed. |
+| `observedValidMask` | A post-write read frame completed successfully, including PEC and STOP. |
+| `matchedMask` | A valid observed byte matched the requested byte. |
+
+`result` preserves the operation's exact returned `Status`, including detail
+and message. `effect()` summarizes the masks as `NONE`, `POSSIBLE`,
+`ACKNOWLEDGED` or `VERIFIED`. All target bytes must match for `VERIFIED`, and
+all must have a sampled final ACK for `ACKNOWLEDGED`; partial progress remains
+`POSSIBLE`. `NONE` can mean no write attempt or a definitely
+rejected attempt; inspect `attemptedMask` to distinguish them. A low-byte
+success followed by high-byte rejection remains a partial operation, with its
+earlier evidence intact. A mismatching readback remains distinct from the
+requested value. Matching bytes verify only what was read, not atomicity,
+physical calibration success or future retention.
+
+This is one operation's history, not the unresolved-state owner. The next
+outer mutation replaces the record; internal byte helpers do not. Ordinary
+reads, `recover()`, `end()`/`begin()` and `resyncPersistentConfig()` retain it.
+The pending-target bitmap and original dirty error remain independent: a later
+successful or rejected operation cannot erase earlier pending targets. Existing
+raw and typed core writes remain permitted while dirty, so applications must
+retain their own baseline, intent and admission decision across operations.
+Cached precondition and range rejections do not touch the bus; on-demand
+calibration-support and auto-adjust-status checks can read before rejecting,
+but do not attempt the mutation.
+
 `startAutoAdjust()` validates status before writing and returns `BUSY` when
 adjustment is already running. Resync of an uncertain adjustment also requires
 idle status before reading calibration. Resync establishes readable/coherent
@@ -431,10 +470,18 @@ that a failed calibration request ran or succeeded. Applications must compare
 against their own expected baseline before trusting the outcome. Unrelated
 reads and later successful writes do not clear earlier uncertainty.
 
+For address writes, matching `0xC0` readback verifies only the stored byte. The
+driver does not establish when the active address changes or switch its active
+session automatically; the application must choose and validate a candidate
+session explicitly. For auto-adjust, matching `0xD9` running status is evidence
+about the request/status only. Later idle status does not prove that an
+uncertain one-shot request ran or succeeded, and no helper replays it.
+
 The bring-up CLIs expose this through safe diagnostic commands:
 
 ```text
 dirty
+operation
 resync
 ```
 
@@ -442,7 +489,20 @@ resync
 code/detail/message, and whether resync is needed. `resync` prints dirty state
 before and after calling `resyncPersistentConfig()`; it does not perform
 arbitrary writes and does not clear dirty state unless the core API reports
-successful verified resync. Normal safe commands such as `probe`, `status`,
+successful current-state coherence. `operation` prints the latest operation,
+requested/observed byte evidence and its original result without bus traffic,
+health updates or state changes.
+
+Both CLIs admit maintenance writes only while persistent state is clean and
+the retained operation has no possibly affected byte lacking matching
+readback. Any possible address-write effect also blocks further mutations
+until an application-owned candidate-session decision. `recover` and `resync`
+do not erase this evidence or silently reopen admission; there is no diagnostic
+reset/admit command. The HIL runner requires a fresh `operation` response with
+open admission immediately before each opted-in destructive send, alongside
+its clean diagnostics and current target baseline. Its runtime confirmation
+and separate campaign failure latch remain required; clean later diagnostics
+never cancel that latch. Normal safe commands such as `probe`, `status`,
 `read`, `selftest`, `stress`, and `stress_mix` should not create persistent
 dirty state.
 
@@ -468,7 +528,8 @@ on the same `EE871` instance recursively.
 
 - Lifecycle: `begin`, `tick`, `end`
 - Diagnostics: `probe`, `recover`, `resyncPersistentConfig`, `busReset`,
-  `checkBusIdle`, `persistentConfigDirty`, `persistentConfigDirtyError`
+  `checkBusIdle`, `persistentConfigDirty`, `persistentConfigDirtyError`,
+  `getLastPersistentOperation`
 - Identification: `readGroup`, `readSubgroup`, `readFirmwareVersion`, `readE2SpecVersion`
 - Measurements: `readStatus`, raw `readCo2Fast` / `readCo2Average`, checked
   `readCo2FastSample` / `readCo2AverageSample`, `readErrorCode`

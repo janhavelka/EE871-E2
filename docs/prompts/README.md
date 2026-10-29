@@ -1,7 +1,7 @@
 # EE871-E2 software implementation prompts
 
-**Status: PARTIALLY IMPLEMENTED.** Prompts 01, 02 and 03 implement HIL-1,
-CAP-1 and CAP-2. Prompts 04..06 remain NOT IMPLEMENTED and were not selected.
+**Status: PARTIALLY IMPLEMENTED.** Prompts 01 through 04 implement HIL-1,
+CAP-1, CAP-2 and CAP-4. Prompts 05 and 06 remain NOT IMPLEMENTED and were not selected.
 These executable instructions were prepared on 2026-10-25 after source/test review of clean,
 fetched `main` at `d37b586e35e553af2a65197282d6d478e554733b`.
 The underlying [retained branch audit](../RETAINED_BRANCH_AUDIT.md) compares
@@ -17,7 +17,7 @@ to overwrite subsequent fixes.
 | HIL-1: stale clean state admits persistent writes after failed preflight | [01 — Persistent HIL admission](01_persistent_hil_admission.md) | Required defect correction; host-side implementation only. | IMPLEMENTED: current target baseline and fresh clean diagnostics gate every destructive send; campaign failures remain latched. |
 | CAP-1: checked value/status sample result | [02 — Checked CO2 samples](02_checked_co2_samples.md) | Selected additive feature; raw APIs retain their existing contract. | IMPLEMENTED: explicit MV3/MV4 then status/optional detail, per-step evidence, manual Arduino/IDF callers; no product-range or freshness claim. |
 | CAP-2: cooperative long waits | [03 — Cooperative maintenance waits](03_cooperative_maintenance_waits.md) | Selected additive callbacks; existing finite waits retain their settings. | IMPLEMENTED: optional sliced delay/yield only after persistent transfer, exact requested totals and native/Arduino adapters; no physical scheduler claim. |
-| CAP-4: richer persistent operation evidence/admission | [04 — Persistent operation evidence](04_persistent_operation_evidence.md) | Optional fixed-size evidence and application admission; invoking it selects the feature. Current dirty tracking already exists. | NOT IMPLEMENTED |
+| CAP-4: richer persistent operation evidence/admission | [04 — Persistent operation evidence](04_persistent_operation_evidence.md) | Selected fixed-size latest-operation evidence and application admission; existing dirty tracking remains authoritative. | IMPLEMENTED: bounded outer-operation evidence, cache-only CLI diagnostics and explicit CLI/HIL admission; no physical outcome claim. |
 | CAP-3: programmatic operation timing bounds | [05 — Requested-delay bounds](05_requested_delay_bounds.md) | Optional additive pure API and real example consumer; invoking it selects the feature. Current manual bounds are not automatically incorrect. | NOT IMPLEMENTED |
 | CAP-5: permissive absent startup in older branch | [06 — Software closeout](06_software_closeout.md) | Integrated closeout preserves strict startup; no new feature or mandatory duplicate test batch. | NOT IMPLEMENTED |
 
@@ -74,6 +74,39 @@ failure/dirty behavior and legacy aggregate initialization. Protocol and fixed
 retry timing remain separate. Arduino and native IDF adapters install real
 task-context callbacks; host recorders do not measure scheduler or watchdog
 latency on devices. Exact local/CI evidence belongs in the execution handoff.
+
+Prompt 04 adds cache-only `getLastPersistentOperation()` and
+`PersistentOperationResult`, with one outer mutation boundary and 16-byte
+requested/observed evidence. The existing bitmap and first dirty error retain
+all unresolved targets; core writes remain permitted while dirty. Native
+regression `test_interval_partial_write_resync_proves_coherence_not_requested_value`
+demonstrates that coherence-only resync can succeed while the original request
+remains unverified. `test_final_pec_sample_controls_uncertainty_when_clock_low_fails`
+checks that a sampled PEC ACK/NACK remains authoritative after a later failure;
+`test_persistent_operation_partial_pairs_and_names_keep_outer_progress` and
+`test_persistent_operation_interval_readback_keeps_validated_byte_evidence`
+cover partial outer operations and successful earlier read frames.
+`test_persistent_operation_raw_interval_retains_outer_request_and_complement_validity`
+checks the raw-to-paired interval boundary, while
+`test_persistent_operation_diagnostic_is_bus_silent_and_health_neutral_in_every_state`
+checks cache-only access. Pending-target, lifecycle, capability, malformed
+address/mode and auto-adjust regressions retain the existing guarantees.
+
+Both CLIs provide `operation` and gate maintenance on dirty state, possible
+unmatched bytes and possible address effects.
+`test_persistent_operation_cli_preserves_evidence_and_gates_without_io`
+executes both CLI helpers and compares evidence/admission output;
+`test_persistent_cli_contract_rejects_unguarded_mutations_and_bus_calls` checks
+all ten guard sites and diagnostic purity. Recovery/resync cannot certify
+intent or silently admit another write; no reset/admit or replay command was
+added. Prompt 01's host campaign latch remains independent. Runner
+integration requires and consumes a fresh open `operation` admission before
+each destructive runner send.
+`test_main_operation_evidence_blocks_sends_despite_clean_resync` and
+`test_main_requires_fresh_operation_admission_for_each_write` exercise the
+real host sender and preserve the campaign latch. Exact local/CI results
+belong in the execution handoff. Physical
+write outcomes, address activation and calibration remain unqualified.
 
 For the required defect fix and closeout, execute **01, then 06**. For the optional full
 software feature set, execute **01 → 02 → 03 → 04 → 05 → 06**. Prompt 05 must

@@ -88,6 +88,7 @@ class MaintenanceAdmission:
 
     targets: dict[str, MaintenanceTarget] = field(default_factory=dict)
     clean: bool = False
+    application_admitted: bool = False
     failure: str | None = None
 
     def latch_failure(self, reason: str) -> None:
@@ -102,6 +103,10 @@ class MaintenanceAdmission:
             return
 
         parsed = row["parsed"]
+        if spec.command == "operation":
+            self.application_admitted = parsed.get("maintenance_admission_open") is True
+            if not self.application_admitted:
+                self.latch_failure("operation: application maintenance admission not open")
         if spec.command in ("dirty", "resync"):
             self.clean = (parsed.get("persistent_config_dirty") is False
                           and parsed.get("resync_needed") is False)
@@ -129,6 +134,8 @@ class MaintenanceAdmission:
             self.latch_failure(f"{target}: successful current maintenance baseline missing")
         elif not self.clean:
             self.latch_failure(f"{target}: fresh clean maintenance diagnostics missing")
+        elif not self.application_admitted:
+            self.latch_failure(f"{target}: fresh application maintenance admission missing")
         if self.failure is not None:
             return None, f"not sent: maintenance admission blocked by {self.failure}"
 
@@ -146,6 +153,7 @@ class MaintenanceAdmission:
             return None, f"not sent: {self.failure}"
         evidence.expected = value
         self.clean = False
+        self.application_admitted = False
         return f"{target} {value}", None
 
     def expected_values(self) -> dict[str, int]:
@@ -409,6 +417,14 @@ def parse_response(command: str, text: str) -> dict[str, Any]:
     parsed.update(parse_health(text))
     parsed.update(parse_dirty(diagnostic_section(command, text)))
     parsed.update(parse_measurements(text))
+    if command == "operation":
+        section = last_header_section(strip_ansi(text), "=== Persistent Operation ===")
+        lines = [line.strip() for line in section.splitlines()
+                 if line.strip().lower().startswith("maintenance admission:")]
+        if len(lines) == 1:
+            match = re.fullmatch(r"Maintenance admission:[ \t]+(open|blocked)", lines[0], re.IGNORECASE)
+            if match:
+                parsed["maintenance_admission_open"] = match.group(1).lower() == "open"
     parsed["command"] = command
     return parsed
 
@@ -532,6 +548,9 @@ def validate_parsed(
                 reviews.append("persistent dirty flag not parsed")
             if "persistent_config_dirty_error" not in parsed:
                 reviews.append("persistent dirty error not parsed")
+        elif validator == "maintenance_open":
+            if parsed.get("maintenance_admission_open") is not True:
+                failures.append("application maintenance admission blocked or missing; inspect operation evidence")
         elif validator == "interval_read":
             if "measurement_interval_ds" not in parsed:
                 reviews.append("measurement interval not parsed")
@@ -694,17 +713,18 @@ def classify_response(
         expected_header = {
             "dirty": "=== persistent config dirty state ===",
             "resync": "=== persistent config resync ===",
+            "operation": "=== persistent operation ===",
         }.get(spec.command)
         headers = [match.group(1).lower() for match in HEADER_RE.finditer(clean)]
         if headers != ([expected_header] if expected_header else []):
             return RESULT_FAIL, "missing, duplicate or unexpected maintenance response section"
-        # These typed commands emit exactly one status (dirty emits none).
+        # Typed commands emit one current status; cache-only diagnostics emit none.
         # Last-match parsing alone could otherwise hide an earlier failure.
         status_lines = [line.strip() for line in clean.splitlines()
                         if line.strip().lower().startswith("status:")]
-        if spec.command == "dirty":
+        if spec.command in ("dirty", "operation"):
             if status_lines:
-                return RESULT_FAIL, "unexpected status in maintenance dirty response"
+                return RESULT_FAIL, "unexpected status in maintenance diagnostic response"
         elif len(status_lines) != 1 or not re.fullmatch(
             r"Status:[ \t]+[A-Z][A-Z0-9_]* \(code=\d+, detail=-?\d+\)", status_lines[0], re.IGNORECASE,
         ):
@@ -752,6 +772,8 @@ def response_has_completion(command: str, text: str) -> bool:
         return "=== Driver Health ===" in clean and "persistentConfigDirty" in clean
     if command == "dirty":
         return "persistentConfigDirty" in clean and "resyncNeeded" in clean
+    if command == "operation":
+        return "=== Persistent Operation ===" in clean and "Maintenance admission:" in clean
     if command == "resync":
         return "=== Persistent Config Resync ===" in clean and "After:" in clean and "resyncNeeded" in clean
     if command == "version":
@@ -983,7 +1005,16 @@ def maintenance_specs(args: argparse.Namespace) -> list[CommandSpec]:
                 CommandSpec("dirty", "Capture dirty state after CO2 gain write.", group="maintenance-calibration", expected_any=("persistentConfigDirty",), validators=("dirty_clean",), requires_opt_in="--include-persistent-writes"),
             ]
         )
-    return specs
+    plan = []
+    for spec in specs:
+        if spec.destructive:
+            plan.append(CommandSpec(
+                "operation", "Check cache-only application admission immediately before write.",
+                group=spec.group, expected_any=("Maintenance admission:",),
+                validators=("maintenance_open",), requires_opt_in="--include-persistent-writes",
+            ))
+        plan.append(spec)
+    return plan
 
 
 def operator_fault_specs(args: argparse.Namespace) -> list[CommandSpec]:

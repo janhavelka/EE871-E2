@@ -88,6 +88,8 @@ class MaintenanceSerial:
     def response(self, command):
         if command == "dirty":
             body = "=== Persistent Config Dirty State ===\n" + self.CLEAN
+        elif command == "operation":
+            body = "=== Persistent Operation ===\nMaintenance admission: open\n"
         elif command == "drv":
             body = ("=== Driver Health ===\nState: READY\nOnline: yes\n"
                     "Consecutive failures: 0\nTotal success: 42\nTotal failures: 0\n"
@@ -165,6 +167,44 @@ class HilRunnerParserTest(unittest.TestCase):
         self.assertEqual(runner.RESULT_FAIL, failed["result"])
         self.assertEqual("prompt", failed["wait_reason"])
         self.assertIn("NACK", failed["reason"])
+
+    def test_main_operation_evidence_blocks_sends_despite_clean_resync(self):
+        open_row = MaintenanceSerial().response("operation")
+        blocked = open_row.replace("admission: open", "admission: blocked")
+        invalid_rows = [blocked, open_row.replace("open", "unknown"),
+                        open_row.replace("Maintenance admission: open", ""),
+                        open_row.replace("> ", "Maintenance admission: blocked\n> "),
+                        open_row.replace("=== Persistent Operation ===", "=== Driver Health ==="),
+                        open_row + open_row]
+        for response in invalid_rows:
+            with self.subTest(response=response):
+                ser, summary, code = self.run_maintenance(
+                    ["--maintenance-interval", "160", "--write-co2-offset", "10"],
+                    {"operation": [response, open_row]},
+                )
+                self.assertEqual(1, code)
+                self.assertNotIn("interval 160", ser.sent)
+                self.assertNotIn("offset 10", ser.sent)
+                rows = [row for row in summary["commands"] if row["command"] == "operation"]
+                self.assertEqual(runner.RESULT_FAIL, rows[0]["result"])
+                if rows[0]["wait_reason"] == "prompt":
+                    self.assertIn("resync", ser.sent)
+                    self.assertEqual(runner.RESULT_PASS, rows[1]["result"])
+                else:
+                    self.assertEqual("timeout", rows[0]["wait_reason"])
+                    self.assertEqual("operation", ser.sent[-1])
+
+    def test_main_requires_fresh_operation_admission_for_each_write(self):
+        open_row = MaintenanceSerial().response("operation")
+        ser, summary, code = self.run_maintenance(
+            ["--maintenance-interval", "160", "--write-co2-offset", "10", "--write-co2-gain", "33000"],
+            {"operation": [open_row, open_row.replace("admission: open", "admission: blocked"), open_row]},
+        )
+        self.assertEqual(1, code)
+        self.assertEqual(1, ser.sent.count("interval 160"))
+        self.assertNotIn("offset 10", ser.sent)
+        self.assertNotIn("gain 33000", ser.sent)
+        self.assertIn("operation", summary["parsed_state"]["maintenance"]["failure"])
 
     def test_main_dynamic_interval_needs_current_not_niche_baseline(self):
         for niche, explicit in ((False, False), (True, False), (True, True)):
@@ -1129,11 +1169,13 @@ After:
                                   "--maintenance-interval", "160", "--write-co2-offset", "10"])
         specs = runner.maintenance_specs(args)
         dirty = next(spec for spec in specs if spec.command == "dirty")
+        operation = next(spec for spec in specs if spec.command == "operation")
         baseline = next(spec for spec in specs if spec.command == "interval")
         other_baseline = next(spec for spec in specs if spec.command == "offset")
         write = next(spec for spec in specs if spec.command == "interval 160")
         fixture = MaintenanceSerial()
-        for observed in ([], [dirty], [baseline], [dirty, other_baseline]):
+        for observed in ([], [dirty], [baseline], [dirty, baseline],
+                         [dirty, operation], [dirty, operation, other_baseline]):
             with self.subTest(observed=[spec.command for spec in observed]):
                 admission = runner.MaintenanceAdmission()
                 for spec in observed:
@@ -1142,7 +1184,7 @@ After:
                 self.assertIsNone(command)
                 self.assertTrue(reason)
         admission = runner.MaintenanceAdmission()
-        for spec in (dirty, baseline):
+        for spec in (dirty, baseline, operation):
             self.observe_maintenance(admission, spec, fixture.response(spec.command))
         self.assertEqual(("interval 160", None), admission.prepare(write))
         # An admitted mutation consumes the diagnostic observation.
@@ -1156,9 +1198,10 @@ After:
         admission = runner.MaintenanceAdmission()
         fixture = MaintenanceSerial()
         dirty = next(spec for spec in specs if spec.command == "dirty")
+        operation = next(spec for spec in specs if spec.command == "operation")
         baseline = next(spec for spec in specs if spec.command == "interval")
         write = next(spec for spec in specs if spec.destructive)
-        for spec in (dirty, baseline):
+        for spec in (dirty, baseline, operation):
             self.observe_maintenance(admission, spec, fixture.response(spec.command))
         # Even another valid observation cannot replace the captured original value.
         fixture.values["interval"] = 170

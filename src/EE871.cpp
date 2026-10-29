@@ -691,67 +691,113 @@ Status EE871::customRead(uint8_t address, uint8_t* buf, size_t len) {
 }
 
 Status EE871::customWrite(uint8_t address, uint8_t value) {
-  if (!_initialized) {
-    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+  const bool intervalByte = address == cmd::CUSTOM_INTERVAL_L || address == cmd::CUSTOM_INTERVAL_H;
+  _beginPersistentOperation(PersistentOperation::CUSTOM_WRITE,
+                            intervalByte ? cmd::CUSTOM_INTERVAL_L : address,
+                            intervalByte ? nullptr : &value, intervalByte ? 2 : 1);
+  if (intervalByte) {
+    const uint8_t index = address - cmd::CUSTOM_INTERVAL_L;
+    _lastPersistentOperation.requested[index] = value;
+    _lastPersistentOperation.requestedValidMask = static_cast<uint16_t>(1U << index);
   }
-  if (address == cmd::CUSTOM_INTERVAL_L || address == cmd::CUSTOM_INTERVAL_H) {
+  if (!_initialized) {
+    return _finishPersistentOperation(Status::Error(Err::NOT_INITIALIZED, "Driver not initialized"));
+  }
+  if (intervalByte) {
     uint8_t other = 0;
     const uint8_t otherAddr = (address == cmd::CUSTOM_INTERVAL_L)
                                   ? cmd::CUSTOM_INTERVAL_H
                                   : cmd::CUSTOM_INTERVAL_L;
     Status st = customRead(otherAddr, other);
     if (!st.ok()) {
-      return st;
+      return _finishPersistentOperation(st);
     }
+    _lastPersistentOperation.requested[otherAddr - cmd::CUSTOM_INTERVAL_L] = other;
+    _lastPersistentOperation.requestedValidMask = 0x03;
     const uint16_t interval = (address == cmd::CUSTOM_INTERVAL_L)
                                   ? static_cast<uint16_t>(value) |
                                         (static_cast<uint16_t>(other) << 8)
                                   : static_cast<uint16_t>(other) |
                                         (static_cast<uint16_t>(value) << 8);
-    return writeMeasurementInterval(interval);
+    return _finishPersistentOperation(_writeMeasurementInterval(interval));
   }
 
-  return _customWriteDirect(address, value);
+  return _finishPersistentOperation(_customWriteDirect(address, value));
 }
 
-Status EE871::_customWriteDirect(uint8_t address, uint8_t value, bool* writeMayHaveApplied) {
-  if (writeMayHaveApplied != nullptr) {
-    *writeMayHaveApplied = false;
-  }
-  if (!_initialized) {
-    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
-  }
-
-  const uint8_t control = cmd::makeControlWrite(cmd::MAIN_CUSTOM_WRITE, _config.deviceAddress);
-  bool mayHaveApplied = false;
-  Status st = _writeCommandTracked(control, address, value, &mayHaveApplied);
-  if (writeMayHaveApplied != nullptr) {
-    *writeMayHaveApplied = mayHaveApplied;
-  }
-  if (!st.ok()) {
-    if (mayHaveApplied) {
-      _markPersistentConfigDirty(st, address);
+void EE871::_beginPersistentOperation(PersistentOperation operation, uint8_t address,
+                                      const uint8_t* requested, uint8_t length) {
+  _lastPersistentOperation = PersistentOperationResult{};
+  _lastPersistentOperation.operation = operation;
+  _lastPersistentOperation.startAddress = address;
+  _lastPersistentOperation.length = length;
+  if (requested != nullptr) {
+    for (uint8_t i = 0; i < length; ++i) {
+      _lastPersistentOperation.requested[i] = requested[i];
+      _lastPersistentOperation.requestedValidMask |= static_cast<uint16_t>(uint32_t{1} << i);
     }
+  }
+}
+
+Status EE871::_finishPersistentOperation(const Status& st) {
+  _lastPersistentOperation.result = st;
+  // One outer boundary owns both the result and the whole pending target span.
+  // A later operation replaces evidence, never an earlier pending target/error.
+  if (!st.ok() && _lastPersistentOperation.possibleEffectMask != 0) {
+    _markPersistentConfigDirty(st, _lastPersistentOperation.startAddress,
+                               _lastPersistentOperation.length);
+  }
+  return st;
+}
+
+Status EE871::_readPersistentBack(uint8_t address, uint8_t* data, uint8_t length) {
+  Status st = setCustomPointer(address);
+  if (!st.ok()) return st;
+  for (uint8_t i = 0; i < length; ++i) {
+    st = readControlByte(cmd::MAIN_CUSTOM_PTR, data[i]);
+    if (!st.ok()) return st;
+    // A changed output alone is not evidence: the read must pass PEC and STOP.
+    const uint8_t index = address + i - _lastPersistentOperation.startAddress;
+    const uint16_t bit = static_cast<uint16_t>(uint32_t{1} << index);
+    _lastPersistentOperation.observed[index] = data[i];
+    _lastPersistentOperation.observedValidMask |= bit;
+    if ((_lastPersistentOperation.requestedValidMask & bit) != 0 &&
+        data[i] == _lastPersistentOperation.requested[index]) {
+      _lastPersistentOperation.matchedMask |= bit;
+    }
+  }
+  return Status::Ok();
+}
+
+Status EE871::_customWriteDirect(uint8_t address, uint8_t value) {
+  const uint8_t control = cmd::makeControlWrite(cmd::MAIN_CUSTOM_WRITE, _config.deviceAddress);
+  Status st = _writeCommandTracked(control, address, value);
+  if (!st.ok()) {
     return st;
   }
 
   waitAfterWriteMs(_config, _config.writeDelayMs);
 
   uint8_t verify = 0;
-  st = customRead(address, verify);
+  st = _readPersistentBack(address, &verify, 1);
   if (!st.ok()) {
-    _markPersistentConfigDirty(st, address);
     return st;
   }
   if (verify != value) {
-    st = Status::Error(Err::E2_ERROR, "Write verify failed", verify);
-    _markPersistentConfigDirty(st, address);
-    return st;
+    return Status::Error(Err::E2_ERROR, "Write verify failed", verify);
   }
   return Status::Ok();
 }
 
 Status EE871::writeMeasurementInterval(uint16_t intervalDeciSeconds) {
+  const uint8_t requested[2] = {static_cast<uint8_t>(intervalDeciSeconds),
+                                static_cast<uint8_t>(intervalDeciSeconds >> 8)};
+  _beginPersistentOperation(PersistentOperation::MEASUREMENT_INTERVAL,
+                            cmd::CUSTOM_INTERVAL_L, requested, 2);
+  return _finishPersistentOperation(_writeMeasurementInterval(intervalDeciSeconds));
+}
+
+Status EE871::_writeMeasurementInterval(uint16_t intervalDeciSeconds) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
   }
@@ -770,34 +816,26 @@ Status EE871::writeMeasurementInterval(uint16_t intervalDeciSeconds) {
   const uint8_t low = static_cast<uint8_t>(intervalDeciSeconds & 0xFF);
   const uint8_t high = static_cast<uint8_t>(intervalDeciSeconds >> 8);
 
-  bool lowMayHaveApplied = false;
-  Status st = _writeCommandTracked(control, cmd::CUSTOM_INTERVAL_L, low, &lowMayHaveApplied);
+  Status st = _writeCommandTracked(control, cmd::CUSTOM_INTERVAL_L, low);
   if (!st.ok()) {
-    if (lowMayHaveApplied) {
-      _markPersistentConfigDirty(st, cmd::CUSTOM_INTERVAL_L, 2);
-    }
     return st;
   }
   st = _writeCommandTracked(control, cmd::CUSTOM_INTERVAL_H, high);
   if (!st.ok()) {
-    _markPersistentConfigDirty(st, cmd::CUSTOM_INTERVAL_L, 2);
     return st;
   }
 
   waitAfterWriteMs(_config, _config.intervalWriteDelayMs);
 
   uint8_t verifyBuf[2] = {0};
-  st = customRead(cmd::CUSTOM_INTERVAL_L, verifyBuf, 2);
+  st = _readPersistentBack(cmd::CUSTOM_INTERVAL_L, verifyBuf, 2);
   if (!st.ok()) {
-    _markPersistentConfigDirty(st, cmd::CUSTOM_INTERVAL_L, 2);
     return st;
   }
   const uint16_t verify = static_cast<uint16_t>(verifyBuf[0]) |
                           (static_cast<uint16_t>(verifyBuf[1]) << 8);
   if (verify != intervalDeciSeconds) {
-    Status err = Status::Error(Err::E2_ERROR, "Interval verify failed", verify);
-    _markPersistentConfigDirty(err, cmd::CUSTOM_INTERVAL_L, 2);
-    return err;
+    return Status::Error(Err::E2_ERROR, "Interval verify failed", verify);
   }
   return Status::Ok();
 }
@@ -961,26 +999,29 @@ Status EE871::readPartName(uint8_t* buf) {
 }
 
 Status EE871::writePartName(const uint8_t* buf) {
+  _beginPersistentOperation(PersistentOperation::PART_NAME, cmd::CUSTOM_PART_NAME_START,
+                            nullptr, cmd::CUSTOM_PART_NAME_LEN);
   if (!_initialized) {
-    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+    return _finishPersistentOperation(Status::Error(Err::NOT_INITIALIZED, "Driver not initialized"));
   }
   if (buf == nullptr) {
-    return Status::Error(Err::INVALID_PARAM, "Null buffer");
+    return _finishPersistentOperation(Status::Error(Err::INVALID_PARAM, "Null buffer"));
   }
   if (!hasPartName()) {
-    return Status::Error(Err::NOT_SUPPORTED, "Part name not supported");
+    return _finishPersistentOperation(Status::Error(Err::NOT_SUPPORTED, "Part name not supported"));
   }
+  // Preserve precondition rejection without accessing the caller's buffer.
   for (uint8_t i = 0; i < cmd::CUSTOM_PART_NAME_LEN; ++i) {
-    bool mayHaveApplied = false;
-    Status st = _customWriteDirect(cmd::CUSTOM_PART_NAME_START + i, buf[i], &mayHaveApplied);
+    _lastPersistentOperation.requested[i] = buf[i];
+  }
+  _lastPersistentOperation.requestedValidMask = 0xFFFF;
+  for (uint8_t i = 0; i < cmd::CUSTOM_PART_NAME_LEN; ++i) {
+    Status st = _customWriteDirect(cmd::CUSTOM_PART_NAME_START + i, buf[i]);
     if (!st.ok()) {
-      if (i > 0 || mayHaveApplied) {
-        _markPersistentConfigDirty(st, cmd::CUSTOM_PART_NAME_START, cmd::CUSTOM_PART_NAME_LEN);
-      }
-      return st;
+      return _finishPersistentOperation(st);
     }
   }
-  return Status::Ok();
+  return _finishPersistentOperation(Status::Ok());
 }
 
 // ============================================================================
@@ -993,16 +1034,17 @@ Status EE871::readBusAddress(uint8_t& address) {
 }
 
 Status EE871::writeBusAddress(uint8_t address) {
+  _beginPersistentOperation(PersistentOperation::BUS_ADDRESS, cmd::CUSTOM_BUS_ADDRESS, &address, 1);
   if (!_initialized) {
-    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+    return _finishPersistentOperation(Status::Error(Err::NOT_INITIALIZED, "Driver not initialized"));
   }
   if (address > cmd::BUS_ADDRESS_MAX) {
-    return Status::Error(Err::OUT_OF_RANGE, "Address must be 0-7", address);
+    return _finishPersistentOperation(Status::Error(Err::OUT_OF_RANGE, "Address must be 0-7", address));
   }
   if (!hasAddressConfig()) {
-    return Status::Error(Err::NOT_SUPPORTED, "Address config not supported");
+    return _finishPersistentOperation(Status::Error(Err::NOT_SUPPORTED, "Address config not supported"));
   }
-  return customWrite(cmd::CUSTOM_BUS_ADDRESS, address);
+  return _finishPersistentOperation(_customWriteDirect(cmd::CUSTOM_BUS_ADDRESS, address));
 }
 
 // ============================================================================
@@ -1032,13 +1074,16 @@ Status EE871::readCo2IntervalFactor(int8_t& factor) {
 }
 
 Status EE871::writeCo2IntervalFactor(int8_t factor) {
+  const uint8_t raw = static_cast<uint8_t>(factor);
+  _beginPersistentOperation(PersistentOperation::CO2_INTERVAL_FACTOR,
+                            cmd::CUSTOM_CO2_INTERVAL_FACTOR, &raw, 1);
   if (!_initialized) {
-    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+    return _finishPersistentOperation(Status::Error(Err::NOT_INITIALIZED, "Driver not initialized"));
   }
   if (!hasSpecificInterval()) {
-    return Status::Error(Err::NOT_SUPPORTED, "Specific interval not supported");
+    return _finishPersistentOperation(Status::Error(Err::NOT_SUPPORTED, "Specific interval not supported"));
   }
-  return customWrite(cmd::CUSTOM_CO2_INTERVAL_FACTOR, static_cast<uint8_t>(factor));
+  return _finishPersistentOperation(_customWriteDirect(cmd::CUSTOM_CO2_INTERVAL_FACTOR, raw));
 }
 
 // ============================================================================
@@ -1051,13 +1096,14 @@ Status EE871::readCo2Filter(uint8_t& filter) {
 }
 
 Status EE871::writeCo2Filter(uint8_t filter) {
+  _beginPersistentOperation(PersistentOperation::CO2_FILTER, cmd::CUSTOM_FILTER_CO2, &filter, 1);
   if (!_initialized) {
-    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+    return _finishPersistentOperation(Status::Error(Err::NOT_INITIALIZED, "Driver not initialized"));
   }
   if (!hasFilterConfig()) {
-    return Status::Error(Err::NOT_SUPPORTED, "Filter config not supported");
+    return _finishPersistentOperation(Status::Error(Err::NOT_SUPPORTED, "Filter config not supported"));
   }
-  return customWrite(cmd::CUSTOM_FILTER_CO2, filter);
+  return _finishPersistentOperation(_customWriteDirect(cmd::CUSTOM_FILTER_CO2, filter));
 }
 
 Status EE871::readOperatingMode(uint8_t& mode) {
@@ -1087,24 +1133,25 @@ Status EE871::readOperatingMode(uint8_t& mode) {
 }
 
 Status EE871::writeOperatingMode(uint8_t mode) {
+  _beginPersistentOperation(PersistentOperation::OPERATING_MODE, cmd::CUSTOM_OPERATING_MODE, &mode, 1);
   if (!_initialized) {
-    return Status::Error(Err::NOT_INITIALIZED, "Driver not initialized");
+    return _finishPersistentOperation(Status::Error(Err::NOT_INITIALIZED, "Driver not initialized"));
   }
   // Only bits 0 and 1 are valid.
   if (mode > 0x03) {
-    return Status::Error(Err::OUT_OF_RANGE, "Invalid mode bits", mode);
+    return _finishPersistentOperation(Status::Error(Err::OUT_OF_RANGE, "Invalid mode bits", mode));
   }
   if (!hasLowPowerMode() && !hasE2Priority()) {
-    return Status::Error(Err::NOT_SUPPORTED, "Operating mode not supported");
+    return _finishPersistentOperation(Status::Error(Err::NOT_SUPPORTED, "Operating mode not supported"));
   }
   // Check if requested mode bits are supported
   if ((mode & cmd::OPERATING_MODE_MEASUREMODE_MASK) && !hasLowPowerMode()) {
-    return Status::Error(Err::NOT_SUPPORTED, "Low power mode not supported");
+    return _finishPersistentOperation(Status::Error(Err::NOT_SUPPORTED, "Low power mode not supported"));
   }
   if ((mode & cmd::OPERATING_MODE_E2_PRIORITY_MASK) && !hasE2Priority()) {
-    return Status::Error(Err::NOT_SUPPORTED, "E2 priority not supported");
+    return _finishPersistentOperation(Status::Error(Err::NOT_SUPPORTED, "E2 priority not supported"));
   }
-  return customWrite(cmd::CUSTOM_OPERATING_MODE, mode);
+  return _finishPersistentOperation(_customWriteDirect(cmd::CUSTOM_OPERATING_MODE, mode));
 }
 
 // ============================================================================
@@ -1131,16 +1178,18 @@ Status EE871::readAutoAdjustStatus(bool& running) {
 }
 
 Status EE871::startAutoAdjust() {
+  const uint8_t request = 0x01;
+  _beginPersistentOperation(PersistentOperation::AUTO_ADJUST, cmd::CUSTOM_AUTO_ADJUST, &request, 1);
   bool running = false;
   Status st = readAutoAdjustStatus(running);
   if (!st.ok()) {
-    return st;
+    return _finishPersistentOperation(st);
   }
   if (running) {
-    return Status::Error(Err::BUSY, "Auto adjustment already running");
+    return _finishPersistentOperation(Status::Error(Err::BUSY, "Auto adjustment already running"));
   }
   // Writing 1 starts auto adjustment (cannot be stopped)
-  return customWrite(cmd::CUSTOM_AUTO_ADJUST, 0x01);
+  return _finishPersistentOperation(_customWriteDirect(cmd::CUSTOM_AUTO_ADJUST, request));
 }
 
 // ============================================================================
@@ -1163,25 +1212,10 @@ Status EE871::readCo2Offset(int16_t& offset) {
 }
 
 Status EE871::writeCo2Offset(int16_t offset) {
-  Status st = _requireCo2AdjustmentSupport(cmd::CUSTOM_ADJUSTMENT_SUPPORT);
-  if (!st.ok()) {
-    return st;
-  }
   const uint16_t raw = static_cast<uint16_t>(offset);
-  bool lowMayHaveApplied = false;
-  st = _customWriteDirect(cmd::CUSTOM_CO2_OFFSET_L,
-                         static_cast<uint8_t>(raw & 0xFF), &lowMayHaveApplied);
-  if (!st.ok()) {
-    if (lowMayHaveApplied) {
-      _markPersistentConfigDirty(st, cmd::CUSTOM_CO2_OFFSET_L, 2);
-    }
-    return st;
-  }
-  st = _customWriteDirect(cmd::CUSTOM_CO2_OFFSET_H, static_cast<uint8_t>(raw >> 8));
-  if (!st.ok()) {
-    _markPersistentConfigDirty(st, cmd::CUSTOM_CO2_OFFSET_L, 2);
-  }
-  return st;
+  const uint8_t requested[2] = {static_cast<uint8_t>(raw), static_cast<uint8_t>(raw >> 8)};
+  _beginPersistentOperation(PersistentOperation::CO2_OFFSET, cmd::CUSTOM_CO2_OFFSET_L, requested, 2);
+  return _finishPersistentOperation(_writeCo2AdjustmentPair(cmd::CUSTOM_CO2_OFFSET_L, raw));
 }
 
 Status EE871::readCo2Gain(uint16_t& gain) {
@@ -1199,24 +1233,21 @@ Status EE871::readCo2Gain(uint16_t& gain) {
 }
 
 Status EE871::writeCo2Gain(uint16_t gain) {
+  const uint8_t requested[2] = {static_cast<uint8_t>(gain), static_cast<uint8_t>(gain >> 8)};
+  _beginPersistentOperation(PersistentOperation::CO2_GAIN, cmd::CUSTOM_CO2_GAIN_L, requested, 2);
+  return _finishPersistentOperation(_writeCo2AdjustmentPair(cmd::CUSTOM_CO2_GAIN_L, gain));
+}
+
+Status EE871::_writeCo2AdjustmentPair(uint8_t lowAddress, uint16_t value) {
   Status st = _requireCo2AdjustmentSupport(cmd::CUSTOM_ADJUSTMENT_SUPPORT);
   if (!st.ok()) {
     return st;
   }
-  bool lowMayHaveApplied = false;
-  st = _customWriteDirect(cmd::CUSTOM_CO2_GAIN_L,
-                         static_cast<uint8_t>(gain & 0xFF), &lowMayHaveApplied);
-  if (!st.ok()) {
-    if (lowMayHaveApplied) {
-      _markPersistentConfigDirty(st, cmd::CUSTOM_CO2_GAIN_L, 2);
-    }
-    return st;
-  }
-  st = _customWriteDirect(cmd::CUSTOM_CO2_GAIN_H, static_cast<uint8_t>(gain >> 8));
-  if (!st.ok()) {
-    _markPersistentConfigDirty(st, cmd::CUSTOM_CO2_GAIN_L, 2);
-  }
-  return st;
+  // Offset and gain commit/verify each byte separately. The interval pair has
+  // a different commit boundary and deliberately does not use this helper.
+  st = _customWriteDirect(lowAddress, static_cast<uint8_t>(value));
+  if (!st.ok()) return st;
+  return _customWriteDirect(lowAddress + 1, static_cast<uint8_t>(value >> 8));
 }
 
 Status EE871::readCo2CalPoints(uint16_t& lower, uint16_t& upper) {
@@ -1565,9 +1596,9 @@ Status EE871::_readControlByteTracked(uint8_t controlByte, uint8_t& data) {
 }
 
 Status EE871::_writeCommandRaw(uint8_t controlByte, uint8_t addressByte, uint8_t dataByte,
-                               bool* writeMayHaveApplied) {
-  if (writeMayHaveApplied != nullptr) {
-    *writeMayHaveApplied = false;
+                               PersistentEffect* effect) {
+  if (effect != nullptr) {
+    *effect = PersistentEffect::NONE;
   }
 
   Status st = e2Start(_config);
@@ -1622,8 +1653,8 @@ Status EE871::_writeCommandRaw(uint8_t controlByte, uint8_t addressByte, uint8_t
   elapsedUs = 0;
   // Once PEC transmission starts, a timeout cannot prove the device rejected
   // the write. Conservatively retain uncertainty until a definite PEC NACK.
-  if (writeMayHaveApplied != nullptr) {
-    *writeMayHaveApplied = true;
+  if (effect != nullptr) {
+    *effect = PersistentEffect::POSSIBLE;
   }
   st = writeByte(_config, pec, &elapsedUs);
   if (!st.ok()) {
@@ -1631,8 +1662,8 @@ Status EE871::_writeCommandRaw(uint8_t controlByte, uint8_t addressByte, uint8_t
   }
   bool ackSampled = false;
   st = readAck(_config, acked, &elapsedUs, &ackSampled);
-  if (ackSampled && !acked && writeMayHaveApplied != nullptr) {
-    *writeMayHaveApplied = false;
+  if (ackSampled && effect != nullptr) {
+    *effect = acked ? PersistentEffect::ACKNOWLEDGED : PersistentEffect::NONE;
   }
   if (!st.ok()) {
     return finishWithStop(_config, st, controlByte);
@@ -1644,15 +1675,19 @@ Status EE871::_writeCommandRaw(uint8_t controlByte, uint8_t addressByte, uint8_t
   return finishWithStop(_config, Status::Ok(), controlByte);
 }
 
-Status EE871::_writeCommandTracked(uint8_t controlByte, uint8_t addressByte, uint8_t dataByte,
-                                   bool* writeMayHaveApplied) {
+Status EE871::_writeCommandTracked(uint8_t controlByte, uint8_t addressByte, uint8_t dataByte) {
   if (_driverState == DriverState::OFFLINE) {
-    if (writeMayHaveApplied != nullptr) {
-      *writeMayHaveApplied = false;
-    }
     return _offlineStatus();
   }
-  Status st = _writeCommandRaw(controlByte, addressByte, dataByte, writeMayHaveApplied);
+  PersistentEffect effect = PersistentEffect::NONE;
+  Status st = _writeCommandRaw(controlByte, addressByte, dataByte, &effect);
+  if (controlByte == cmd::makeControlWrite(cmd::MAIN_CUSTOM_WRITE, _config.deviceAddress)) {
+    const uint8_t index = addressByte - _lastPersistentOperation.startAddress;
+    const uint16_t bit = static_cast<uint16_t>(uint32_t{1} << index);
+    _lastPersistentOperation.attemptedMask |= bit;
+    if (effect != PersistentEffect::NONE) _lastPersistentOperation.possibleEffectMask |= bit;
+    if (effect == PersistentEffect::ACKNOWLEDGED) _lastPersistentOperation.acknowledgedMask |= bit;
+  }
   return _updateHealth(st);
 }
 

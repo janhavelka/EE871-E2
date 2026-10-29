@@ -224,7 +224,9 @@ bypass the live prompt.
 Use a bench sensor with recorded original settings. Immediately before each
 interval, offset or gain write, the runner requires a complete successful
 baseline for that target from the current maintenance preflight and fresh clean
-dirty/resync diagnostics. This applies to explicitly supplied values too. A
+dirty/resync diagnostics. A fresh cache-only `operation` response must also
+report open application admission immediately before every destructive send.
+This applies to explicitly supplied values too. A
 value cached by an earlier safe or niche read cannot supply the baseline. The
 default interval rewrite uses only the current preflight baseline.
 
@@ -238,8 +240,9 @@ Contradictory diagnostics cannot authorize a write.
 
 The baseline stays separate from the requested value and later observations.
 Each admitted write consumes the clean diagnostic observation; another write
-requires a successful clean check after it. The first failed or incomplete
-maintenance baseline, write, readback, dirty or resync response latches a
+requires a successful clean check and a new open `operation` response after it.
+The first failed or incomplete maintenance baseline, write, readback, dirty,
+resync or operation-admission response latches a
 campaign failure. Later clean diagnostics or successful reads cannot reopen
 write admission. The original result and the reason for each blocked send stay
 in the artifacts. Read-only diagnostics may continue while framing remains
@@ -249,6 +252,46 @@ A successful requested-value write is not restoration. The runner does not
 automatically restore settings or reconcile uncertain writes. Those require
 an operator-owned decision outside this runner, using the recorded baseline,
 requested value and actual readback evidence.
+
+Both bring-up CLIs provide a manual `operation` command for the latest
+`PersistentOperationResult`. It is cache-only: it does not touch E2, update
+health/retry counters, reset state, resync or write. The record identifies the
+outer raw or typed operation and complete target range, with up to 16 requested
+and observed bytes, validity/progress masks, an effect summary and the exact
+original result. Each mask bit refers to its relative target byte. A valid
+observation requires a successful read frame; a matching byte proves only the
+stored value read. An acknowledged write alone is not verified.
+
+Its `Persistent Operation` section prints `Operation`, `Target`, `Effect`,
+the six masks, `Requested bytes` and `Observed bytes` (`--` marks invalid
+bytes), `Operation result` and its message, and the current
+`Maintenance admission: open|blocked`. The original operation result is
+diagnostic history, not the outcome of a new bus operation.
+
+For maintenance admission, the runner requires one current `Persistent
+Operation` section and one `Maintenance admission: open` line inside it.
+Blocked, malformed, duplicate or missing admission cannot authorize a send.
+Later open admission, successful resync or clean diagnostics cannot clear an
+existing campaign failure. Only the opted-in persistent plan adds this
+pre-write diagnostic; default, extended, niche and soak plans are unchanged.
+
+CLI maintenance admission blocks dirty configuration and any retained possible
+effect without matching readback. A possible write to stored address `0xC0`
+also blocks later mutations, even with matching readback, because the active
+address transition requires an explicit application-owned candidate-session
+decision. The diagnostic does not make that decision or provide a reset/admit
+command. Recovery and coherence resync retain the operation record, so they
+cannot silently reopen admission after an uncertain write. Existing runtime
+confirmation and the host campaign failure latch remain separate requirements.
+
+The latest record survives ordinary reads, recovery, end/begin and resync, but
+the next outer core mutation, including a rejected call, replaces it. Core
+writes still permit accumulating multiple pending targets; the record is not
+a history or a replacement for the existing dirty bitmap. The application must
+keep its baseline, requested values and admission decision across operations.
+`operation` adds no HIL campaign or automatic restoration procedure. This
+software evidence does not qualify physical persistent writes, address
+activation or calibration outcomes.
 
 Typed offset/gain commands now check `0x03` for CO2 adjustment support before
 accessing calibration. Unsupported or malformed capability bytes return

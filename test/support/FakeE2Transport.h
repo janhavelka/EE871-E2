@@ -47,7 +47,9 @@ public:
     _corruptNextCustomReadAddress = 0;
     _failNextWriteEnabled = false;
     _failNextWriteAddress = 0;
+    _nackNextWriteData = false;
     _nackNextWritePec = false;
+    _holdSclHighAfterWritePecAck = false;
     _pecAcked = false;
     _corruptWriteVerifyEnabled = false;
     _corruptWriteVerifyAddress = 0;
@@ -178,7 +180,9 @@ public:
     _failNextWriteEnabled = true;
   }
 
+  void nackNextWriteData() { _nackNextWriteData = true; }
   void nackNextWritePec() { _nackNextWritePec = true; }
+  void holdSclHighAfterNextWritePecAck() { _holdSclHighAfterWritePecAck = true; }
 
   void corruptReadPecAfterNextWrite(uint8_t address) {
     _corruptWriteVerifyAddress = address;
@@ -233,6 +237,12 @@ private:
   }
 
   void setScl(bool level) {
+    if (!level && _holdSclHighAfterWritePecAck &&
+        mainCommand() == EE871::cmd::MAIN_CUSTOM_WRITE &&
+        _phase == Phase::ACK_PEC && !_skipNextFalling) {
+      _holdSclHighAfterWritePecAck = false;
+      _sclStuckHigh = true;
+    }
     const bool wasHigh = readScl();
     _masterSclReleased = level;
     if (level && _clockReleasesUntilStretch > 0U) {
@@ -447,6 +457,11 @@ private:
     if (!_devicePresent) {
       return false;
     }
+    if (_phase == Phase::ACK_DATA &&
+        mainCommand() == EE871::cmd::MAIN_CUSTOM_WRITE && _nackNextWriteData) {
+      _nackNextWriteData = false;
+      return false;
+    }
     if (_phase == Phase::ACK_PEC &&
         mainCommand() == EE871::cmd::MAIN_CUSTOM_WRITE && _nackNextWritePec) {
       _nackNextWritePec = false;
@@ -608,7 +623,9 @@ private:
   uint8_t _corruptNextCustomReadAddress = 0;
   bool _failNextWriteEnabled = false;
   uint8_t _failNextWriteAddress = 0;
+  bool _nackNextWriteData = false;
   bool _nackNextWritePec = false;
+  bool _holdSclHighAfterWritePecAck = false;
   bool _pecAcked = false;
   bool _corruptWriteVerifyEnabled = false;
   uint8_t _corruptWriteVerifyAddress = 0;
