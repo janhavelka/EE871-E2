@@ -104,7 +104,7 @@ struct PersistentOperationResult {
   uint8_t requested[CAPACITY] = {}; ///< Requested bytes, valid only under requestedValidMask.
   uint8_t observed[CAPACITY] = {}; ///< Readback bytes, valid only under observedValidMask.
   uint16_t requestedValidMask = 0; ///< Raw interval complement becomes valid after its read.
-  uint16_t attemptedMask = 0; ///< Persistent frames started; excludes local/OFFLINE rejection.
+  uint16_t attemptedMask = 0; ///< Direct write procedure attempted; includes START failure, excludes local/OFFLINE rejection.
   uint16_t possibleEffectMask = 0; ///< PEC started without a definite final PEC NACK.
   uint16_t acknowledgedMask = 0; ///< Final PEC ACK was actually sampled.
   uint16_t observedValidMask = 0; ///< Successfully validated readback bytes.

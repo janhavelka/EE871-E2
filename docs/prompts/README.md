@@ -208,6 +208,17 @@ documentation commit is distinct and identified in the final handoff.
 Hardware access, physical timing/write/calibration qualification, branch
 retirement and a new release remain outside this closeout.
 
+An independent re-audit of Prompts 04–06 at
+`1b2582996d80717a2f60b5a18942f303a04031ca` found no behavioral defect. A focused
+host fake confirmed that failed START returns BUS_STUCK with `attemptedMask=1`,
+`possibleEffectMask=0`, zero write frames and no dirty state. The public header
+now describes an attempted direct write procedure, matching the existing
+implementation and README. Native 134/134, Python 100/100, all listed local
+contracts/version/builds, Doxygen and whitespace checks passed again.
+[All six jobs passed at the audited SHA](https://github.com/janhavelka/EE871-E2/actions/runs/40917558364),
+including both native-IDF targets; local IDF remains NOT RUN. The subsequent
+correction changes documentation only, including the header comment.
+
 ## Original selection and execution rules
 
 For the required defect fix and closeout, execute **01, then 06**. For the optional full

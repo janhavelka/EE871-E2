@@ -69,6 +69,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Clarified that persistent-operation `attemptedMask` includes a direct write
+  procedure whose START fails before a frame is sent. Possible-effect evidence
+  remains separate; driver behavior is unchanged.
 - HIL persistent-write admission requires fresh clean diagnostics and a complete
   successful current target baseline for interval, offset and gain writes,
   including explicit values. Baselines remain separate from requested values;
