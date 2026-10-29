@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- HIL persistent-write admission requires fresh clean diagnostics and a complete
+  successful current target baseline for interval, offset and gain writes,
+  including explicit values. Baselines remain separate from requested values;
+  failed or incomplete maintenance responses latch a campaign failure so later
+  clean rows cannot admit more writes. Host regressions assert actual serial
+  sends, including stale niche values and failed preflight. The runner does not
+  restore settings or reconcile uncertain writes automatically.
 - Example health percentages use a 64-bit sum of lifetime counters, preventing
   the display from wrapping when the combined count exceeds `UINT32_MAX`.
 - HIL capture checks reject missing, truncated or duplicate health records,

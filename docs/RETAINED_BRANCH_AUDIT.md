@@ -6,6 +6,32 @@ Reviewed on 2026-10-23 against `main` at
 branch. Evidence describes that baseline, before this documentation commit.
 No implementation was changed and no branch was merged or deleted.
 
+## HIL-1 disposition after the audit — 2026-10-29
+
+**HIL-1 is implemented in the host runner.** A single maintenance admission
+owner requires a complete successful current target baseline and fresh clean
+diagnostics before interval, offset or gain writes, including explicit values.
+It preserves baselines separately from expected values and latches the first
+maintenance failure; later clean or successful rows cannot reopen admission.
+
+The real-main host regression
+`test_main_failed_interval_baseline_blocks_explicit_serial_write` first
+reproduced the unsafe `interval 160` send on the unchanged runner. Coverage in
+`test/test_hil_runner_parser.py` also includes
+`test_main_dynamic_interval_needs_current_not_niche_baseline`,
+`test_main_each_target_requires_complete_successful_baseline`,
+`test_main_maintenance_failure_stays_latched_after_clean_diagnostics`, and
+`test_main_authorized_write_has_separate_baseline_and_expected_evidence`.
+No hardware validation is claimed. A successful requested-value write is not
+restoration; uncertain writes require operator-owned reconciliation outside
+the runner. CAP-1..5 and branch retirement were not selected by this fix.
+
+The remaining assessment and reproduction describe the reviewed historical
+baseline, including its helper names and then-missing admission. Use the tests
+above on current HEAD; see the [prompt index](prompts/README.md) for current
+per-finding outcomes. Implementation SHA and exact terminal CI evidence belong
+in the implementation handoff, not this commit's own contents.
+
 ## Decision
 
 [Executable software prompts](prompts/README.md) now map HIL-1 and CAP-1..5 to

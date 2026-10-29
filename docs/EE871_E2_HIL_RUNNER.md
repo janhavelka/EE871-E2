@@ -1,6 +1,6 @@
 # EE871-E2 HIL and Soak Tools
 
-Last updated: 2026-09-11
+Last updated: 2026-10-29
 
 `tools/ee871_hil_runner.py` drives the example serial CLI and records
 repeatable hardware-in-the-loop evidence. Its default plan avoids persistent
@@ -179,9 +179,26 @@ bypass the live prompt.
 | `--write-co2-offset <-32768..32767>` | CO2 offset. |
 | `--write-co2-gain <0..65535>` | CO2 gain. |
 
-Use a bench sensor with recorded original settings. The plan checks `dirty`
-and `resync` around writes and blocks maintenance writes when clean state has
-not been established.
+Use a bench sensor with recorded original settings. Immediately before each
+interval, offset or gain write, the runner requires a complete successful
+baseline for that target from the current maintenance preflight and fresh clean
+dirty/resync diagnostics. This applies to explicitly supplied values too. A
+value cached by an earlier safe or niche read cannot supply the baseline. The
+default interval rewrite uses only the current preflight baseline.
+
+The baseline stays separate from the requested value and later observations.
+Each admitted write consumes the clean diagnostic observation; another write
+requires a successful clean check after it. The first failed or incomplete
+maintenance baseline, write, readback, dirty or resync response latches a
+campaign failure. Later clean diagnostics or successful reads cannot reopen
+write admission. The original result and the reason for each blocked send stay
+in the artifacts. Read-only diagnostics may continue while framing remains
+synchronized; a framing timeout stops the remaining plan.
+
+A successful requested-value write is not restoration. The runner does not
+automatically restore settings or reconcile uncertain writes. Those require
+an operator-owned decision outside this runner, using the recorded baseline,
+requested value and actual readback evidence.
 
 Typed offset/gain commands now check `0x03` for CO2 adjustment support before
 accessing calibration. Unsupported or malformed capability bytes return
@@ -212,7 +229,9 @@ Each HIL invocation creates a timestamped directory containing:
 
 - `serial_transcript.txt`: serial responses and command results.
 - `summary.json`: metadata, parsed state, counts, verdict, and compact command
-  ledger; abnormal rows retain bounded excerpts.
+  ledger; abnormal rows retain bounded excerpts. For maintenance,
+  `parsed_state.maintenance` keeps target baselines and expected values separate
+  from later observations and retains the first campaign failure.
 - `summary.md`: readable summary and artifact index.
 
 Record the exact firmware/library commits, retry settings, board, sensor
@@ -230,7 +249,10 @@ out of maintained documentation.
 | INCOMPLETE | Dry run, skipped steps, no results, or remaining incomplete outcomes. | 3 |
 
 Host parser tests cover status precedence, split prompt framing, health/dirty
-and stress parsing, scheduled control-NACK policy, and persistent confirmation:
+and stress parsing, scheduled control-NACK policy, and persistent confirmation.
+Host serial fakes also exercise the real runner loop to check target baselines,
+stale-value rejection, latched maintenance failures, and the actual sent command
+list. These tests do not qualify a physical sensor or serial link:
 
 ```powershell
 python -m unittest discover -s test -p "*hil_runner_parser.py"

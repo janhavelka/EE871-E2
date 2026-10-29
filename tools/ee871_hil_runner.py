@@ -13,13 +13,13 @@ import re
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 
-SCRIPT_VERSION = "1.3"
+SCRIPT_VERSION = "1.4"
 DEFAULT_BAUD = 115200
 DEFAULT_TIMEOUT_S = 8.0
 DEFAULT_COMMAND_TIMEOUT_S = 20.0
@@ -64,6 +64,93 @@ class CommandSpec:
     requires_opt_in: str | None = None
     notes: str = ""
     dynamic: str | None = None
+    baseline_target: str | None = None
+
+
+# Only these typed targets belong to the opted-in maintenance campaign.
+MAINTENANCE_TARGETS = {
+    "interval": ("measurement_interval_ds", 150, 36000),
+    "offset": ("co2_offset_ppm", -32768, 32767),
+    "gain": ("co2_gain", 0, 65535),
+}
+
+
+@dataclass
+class MaintenanceTarget:
+    baseline: int
+    expected: int | None = None
+
+
+@dataclass
+class MaintenanceAdmission:
+    """One run's admission evidence; ordinary parsed state cannot authorize writes."""
+
+    targets: dict[str, MaintenanceTarget] = field(default_factory=dict)
+    clean: bool = False
+    failure: str | None = None
+
+    def latch_failure(self, reason: str) -> None:
+        if self.failure is None:
+            self.failure = reason
+
+    def observe(self, spec: CommandSpec, row: dict[str, Any]) -> None:
+        if not spec.group.startswith("maintenance"):
+            return
+        if row["result"] != RESULT_PASS or row["wait_reason"] != "prompt":
+            self.latch_failure(f"{spec.command}: {row['reason'] or 'incomplete response'}")
+            return
+
+        parsed = row["parsed"]
+        if spec.command in ("dirty", "resync"):
+            self.clean = (parsed.get("persistent_config_dirty") is False
+                          and parsed.get("resync_needed") is False)
+            if not self.clean:
+                self.latch_failure(f"{spec.command}: clean diagnostics not established")
+        if spec.baseline_target is not None:
+            target = spec.baseline_target
+            key, minimum, maximum = MAINTENANCE_TARGETS[target]
+            value = parsed.get(key)
+            if type(value) is not int or not minimum <= value <= maximum:
+                self.latch_failure(f"{target}: baseline must be {minimum}..{maximum}")
+            else:
+                # Later observations/readbacks must never replace the baseline.
+                self.targets.setdefault(target, MaintenanceTarget(value))
+
+    def prepare(self, spec: CommandSpec) -> tuple[str | None, str | None]:
+        """Resolve and admit one send, consuming its clean diagnostic observation."""
+        if not spec.destructive:
+            return spec.command, None
+        target = spec.command.split()[0]
+        evidence = self.targets.get(target)
+        if not spec.group.startswith("maintenance") or target not in MAINTENANCE_TARGETS:
+            self.latch_failure(f"{spec.command}: unsupported persistent target")
+        elif evidence is None:
+            self.latch_failure(f"{target}: successful current maintenance baseline missing")
+        elif not self.clean:
+            self.latch_failure(f"{target}: fresh clean maintenance diagnostics missing")
+        if self.failure is not None:
+            return None, f"not sent: maintenance admission blocked by {self.failure}"
+
+        if spec.dynamic == "interval_current" and target == "interval":
+            value = evidence.baseline
+        else:
+            match = re.fullmatch(r"(interval|offset|gain) (-?\d+)", spec.command)
+            if match is None or spec.dynamic is not None:
+                self.latch_failure(f"{spec.command}: invalid persistent command")
+                return None, f"not sent: {self.failure}"
+            value = int(match.group(2))
+        _, minimum, maximum = MAINTENANCE_TARGETS[target]
+        if not minimum <= value <= maximum:
+            self.latch_failure(f"{target}: requested value must be {minimum}..{maximum}")
+            return None, f"not sent: {self.failure}"
+        evidence.expected = value
+        self.clean = False
+        return f"{target} {value}", None
+
+    def expected_values(self) -> dict[str, int]:
+        """A validation view, separate from the latest observed parsed values."""
+        return {f"expected_{MAINTENANCE_TARGETS[target][0]}": evidence.expected
+                for target, evidence in self.targets.items() if evidence.expected is not None}
 
 
 def strip_ansi(text: str) -> str:
@@ -133,9 +220,9 @@ def parse_status(text: str) -> dict[str, Any]:
     clean = strip_ansi(text)
     statuses: list[dict[str, Any]] = []
     for match in re.finditer(
-        r"\bStatus:\s*([A-Z][A-Z0-9_]*)\s*\(code=(\d+),\s*detail=(-?\d+)\)",
+        r"^[ \t]*Status:[ \t]*([A-Z][A-Z0-9_]*)[ \t]*\(code=(\d+),[ \t]*detail=(-?\d+)\)",
         clean,
-        re.IGNORECASE,
+        re.IGNORECASE | re.MULTILINE,
     ):
         statuses.append(
             {
@@ -263,13 +350,13 @@ def parse_health(text: str) -> dict[str, Any]:
 def parse_dirty(text: str) -> dict[str, Any]:
     clean = strip_ansi(text)
     parsed: dict[str, Any] = {}
-    matches = list(re.finditer(r"\bpersistentConfigDirty:\s*(yes|no|true|false|0|1)", clean, re.IGNORECASE))
+    matches = list(re.finditer(r"^[ \t]*persistentConfigDirty:[ \t]*(yes|no|true|false|0|1)", clean, re.IGNORECASE | re.MULTILINE))
     if matches:
         parsed["persistent_config_dirty"] = parse_boolish(matches[-1].group(1))
     matches = list(re.finditer(
-        r"\bpersistentConfigDirtyError:\s*([A-Z][A-Z0-9_]*)\s*\(code=(\d+),\s*detail=(-?\d+)\)",
+        r"^[ \t]*persistentConfigDirtyError:[ \t]*([A-Z][A-Z0-9_]*)[ \t]*\(code=(\d+),[ \t]*detail=(-?\d+)\)",
         clean,
-        re.IGNORECASE,
+        re.IGNORECASE | re.MULTILINE,
     ))
     if matches:
         match = matches[-1]
@@ -278,10 +365,10 @@ def parse_dirty(text: str) -> dict[str, Any]:
             "code": int(match.group(2)),
             "detail": int(match.group(3)),
         }
-    matches = list(re.finditer(r"\bpersistentConfigDirtyError message:\s*([^\r\n]+)", clean, re.IGNORECASE))
+    matches = list(re.finditer(r"^[ \t]*persistentConfigDirtyError message:[ \t]*([^\r\n]+)", clean, re.IGNORECASE | re.MULTILINE))
     if matches:
         parsed["persistent_config_dirty_error_message"] = matches[-1].group(1).strip()
-    matches = list(re.finditer(r"\bresyncNeeded:\s*(yes|no|true|false|0|1)", clean, re.IGNORECASE))
+    matches = list(re.finditer(r"^[ \t]*resyncNeeded:[ \t]*(yes|no|true|false|0|1)", clean, re.IGNORECASE | re.MULTILINE))
     if matches:
         parsed["resync_needed"] = parse_boolish(matches[-1].group(1))
     return parsed
@@ -296,13 +383,13 @@ def parse_measurements(text: str) -> dict[str, Any]:
     match = last_match(r"\bCO2 fast:\s*(\d+)\s*ppm", clean, re.IGNORECASE)
     if match:
         parsed["co2_fast_ppm"] = int(match.group(1))
-    match = last_match(r"\bInterval:\s*(\d+)\s*deciseconds", clean, re.IGNORECASE)
+    match = last_match(r"^[ \t]*Interval:[ \t]*(\d+)[ \t]*deciseconds", clean, re.IGNORECASE | re.MULTILINE)
     if match:
         parsed["measurement_interval_ds"] = int(match.group(1))
-    match = last_match(r"\bCO2 offset:\s*(-?\d+)\s*ppm", clean, re.IGNORECASE)
+    match = last_match(r"^[ \t]*CO2 offset:[ \t]*(-?\d+)[ \t]*ppm", clean, re.IGNORECASE | re.MULTILINE)
     if match:
         parsed["co2_offset_ppm"] = int(match.group(1))
-    match = last_match(r"\bCO2 gain:\s*(\d+)", clean, re.IGNORECASE)
+    match = last_match(r"^[ \t]*CO2 gain:[ \t]*(\d+)", clean, re.IGNORECASE | re.MULTILINE)
     if match:
         parsed["co2_gain"] = int(match.group(1))
     match = last_match(r"\bBus address:\s*(\d+)", clean, re.IGNORECASE)
@@ -318,10 +405,16 @@ def parse_response(command: str, text: str) -> dict[str, Any]:
     parsed.update(parse_selftest(text))
     parsed.update(parse_stress(text))
     parsed.update(parse_health(text))
-    parsed.update(parse_dirty(text))
+    parsed.update(parse_dirty(resync_after(text) if command == "resync" else text))
     parsed.update(parse_measurements(text))
     parsed["command"] = command
     return parsed
+
+
+def resync_after(text: str) -> str:
+    """Never fill missing current resync fields from its Before diagnostics."""
+    parts = re.split(r"(?m)^After:[ \t]*\r?$", strip_ansi(text))
+    return parts[1] if len(parts) == 2 else ""
 
 
 def command_count(command: str) -> int | None:
@@ -506,6 +599,15 @@ def capture_integrity_errors(command: str, text: str) -> list[str]:
     elif command == "dirty":
         clean = last_header_section(clean, "=== Persistent Config Dirty State ===")
         fields = dirty_fields
+    elif command == "resync":
+        clean = resync_after(clean)
+        fields = dirty_fields
+    elif command == "interval":
+        fields = {"Interval:": r"\d+ deciseconds(?: \(\d+\.\d s\))?"}
+    elif command == "offset":
+        fields = {"CO2 offset:": r"-?\d+ ppm"}
+    elif command == "gain":
+        fields = {"CO2 gain:": r"\d+(?: \(factor=\d+\.\d{4}\))?"}
     elif command in ("co2fast", "co2avg", "read"):
         fields = {"CO2 fast:" if command == "co2fast" else "CO2 avg:": r"\d+ ppm"}
     elif command == "status":
@@ -530,7 +632,7 @@ def capture_integrity_errors(command: str, text: str) -> list[str]:
     lines = [line.strip() for line in clean.splitlines()]
     errors = []
     for prefix, value_pattern in fields.items():
-        candidates = [line for line in lines if line.startswith(prefix)]
+        candidates = [line for line in lines if line.lower().startswith(prefix.lower())]
         separator = r"[ \t]*" if prefix.endswith(":") else r"[ \t]+"
         pattern = re.escape(prefix.rstrip()) + separator + value_pattern
         if len(candidates) != 1 or not re.fullmatch(pattern, candidates[0], re.IGNORECASE):
@@ -544,7 +646,7 @@ def capture_integrity_errors(command: str, text: str) -> list[str]:
             errors.append("incomplete or duplicate raw status byte")
         elif not errors:
             status_byte = int(re.search(r"0x([0-9a-f]{2})", raw_status[0], re.IGNORECASE).group(1), 16)
-            has_error = next(line for line in lines if line.startswith("hasCo2Error():")).endswith("YES")
+            has_error = next(line for line in lines if line.lower().startswith("hasco2error():")).upper().endswith("YES")
             if bool(status_byte & 0x08) != has_error:
                 errors.append("raw CO2 status disagrees with decoded flag")
     if command.startswith("stress_mix") and not errors:
@@ -576,6 +678,28 @@ def classify_response(
     failures, reviews = validate_parsed(spec, parsed, state)
     if failures:
         return RESULT_FAIL, "; ".join(failures)
+    if spec.group.startswith("maintenance"):
+        # These typed commands emit exactly one status (dirty emits none).
+        # Last-match parsing alone could otherwise hide an earlier failure.
+        status_lines = [line.strip() for line in clean.splitlines()
+                        if line.strip().lower().startswith("status:")]
+        if spec.command == "dirty":
+            if status_lines or clean.count("=== Persistent Config Dirty State ===") != 1:
+                return RESULT_FAIL, "incomplete or duplicate maintenance dirty response"
+        elif len(status_lines) != 1 or not re.fullmatch(
+            r"Status:[ \t]+[A-Z][A-Z0-9_]* \(code=\d+, detail=-?\d+\)", status_lines[0], re.IGNORECASE,
+        ):
+            return RESULT_FAIL, "incomplete or duplicate maintenance status"
+        if spec.command == "resync" and (
+            clean.count("=== Persistent Config Resync ===") != 1
+            or len(re.findall(r"(?m)^Before:[ \t]*\r?$", clean)) != 1
+        ):
+            return RESULT_FAIL, "incomplete or duplicate maintenance resync response"
+        if spec.command in MAINTENANCE_TARGETS:
+            key, minimum, maximum = MAINTENANCE_TARGETS[spec.command]
+            value = parsed.get(key)
+            if type(value) is not int or not minimum <= value <= maximum:
+                return RESULT_FAIL, f"{spec.command} value must be {minimum}..{maximum}"
     if not expected_tokens_present(clean, spec):
         return RESULT_OPERATOR, "expected output token missing"
     if reviews:
@@ -787,7 +911,7 @@ def niche_specs() -> list[CommandSpec]:
 def maintenance_specs(args: argparse.Namespace) -> list[CommandSpec]:
     specs = [
         CommandSpec("dirty", "Confirm clean dirty state before persistent writes.", group="maintenance", expected_any=("persistentConfigDirty",), validators=("dirty_clean",), requires_opt_in="--include-persistent-writes"),
-        CommandSpec("interval", "Read measurement interval before write.", group="maintenance", expected_any=("Interval:",), validators=("status_ok", "interval_read"), requires_opt_in="--include-persistent-writes"),
+        CommandSpec("interval", "Read measurement interval before write.", group="maintenance", expected_any=("Interval:",), validators=("status_ok", "interval_read"), requires_opt_in="--include-persistent-writes", baseline_target="interval"),
     ]
     if args.maintenance_interval is None:
         specs.append(
@@ -800,7 +924,7 @@ def maintenance_specs(args: argparse.Namespace) -> list[CommandSpec]:
                 destructive=True,
                 requires_opt_in="--include-persistent-writes --confirm-persistent-writes",
                 dynamic="interval_current",
-                notes="Uses the interval value parsed from the previous interval read.",
+                notes="Uses the successful current maintenance baseline, not cached observations.",
             )
         )
     else:
@@ -826,7 +950,7 @@ def maintenance_specs(args: argparse.Namespace) -> list[CommandSpec]:
     if args.write_co2_offset is not None:
         specs.extend(
             [
-                CommandSpec("offset", "Read CO2 offset before write.", group="maintenance-calibration", expected_any=("CO2 offset:",), validators=("status_ok", "offset_read"), requires_opt_in="--include-persistent-writes"),
+                CommandSpec("offset", "Read CO2 offset before write.", group="maintenance-calibration", expected_any=("CO2 offset:",), validators=("status_ok", "offset_read"), requires_opt_in="--include-persistent-writes", baseline_target="offset"),
                 CommandSpec(f"offset {args.write_co2_offset}", "Write persistent CO2 offset.", group="maintenance-calibration", expected_any=("Status:",), validators=("status_ok",), destructive=True, requires_opt_in="--include-persistent-writes --confirm-persistent-writes"),
                 CommandSpec("offset", "Read CO2 offset after write.", group="maintenance-calibration", expected_any=("CO2 offset:",), validators=("status_ok", "offset_read", "offset_expected"), requires_opt_in="--include-persistent-writes"),
                 CommandSpec("dirty", "Capture dirty state after CO2 offset write.", group="maintenance-calibration", expected_any=("persistentConfigDirty",), validators=("dirty_clean",), requires_opt_in="--include-persistent-writes"),
@@ -835,7 +959,7 @@ def maintenance_specs(args: argparse.Namespace) -> list[CommandSpec]:
     if args.write_co2_gain is not None:
         specs.extend(
             [
-                CommandSpec("gain", "Read CO2 gain before write.", group="maintenance-calibration", expected_any=("CO2 gain:",), validators=("status_ok", "gain_read"), requires_opt_in="--include-persistent-writes"),
+                CommandSpec("gain", "Read CO2 gain before write.", group="maintenance-calibration", expected_any=("CO2 gain:",), validators=("status_ok", "gain_read"), requires_opt_in="--include-persistent-writes", baseline_target="gain"),
                 CommandSpec(f"gain {args.write_co2_gain}", "Write persistent CO2 gain.", group="maintenance-calibration", expected_any=("Status:",), validators=("status_ok",), destructive=True, requires_opt_in="--include-persistent-writes --confirm-persistent-writes"),
                 CommandSpec("gain", "Read CO2 gain after write.", group="maintenance-calibration", expected_any=("CO2 gain:",), validators=("status_ok", "gain_read", "gain_expected"), requires_opt_in="--include-persistent-writes"),
                 CommandSpec("dirty", "Capture dirty state after CO2 gain write.", group="maintenance-calibration", expected_any=("persistentConfigDirty",), validators=("dirty_clean",), requires_opt_in="--include-persistent-writes"),
@@ -903,25 +1027,6 @@ def confirm_persistent_runtime(args: argparse.Namespace) -> None:
         raise SystemExit(2)
 
 
-def resolve_dynamic_command(spec: CommandSpec, state: dict[str, Any]) -> tuple[str | None, str | None]:
-    if spec.dynamic == "interval_current":
-        interval = state.get("measurement_interval_ds")
-        if isinstance(interval, int):
-            return f"interval {interval}", None
-        return None, "cannot rewrite current interval because previous interval read was not parsed"
-    return spec.command, None
-
-
-def maintenance_write_block_reason(spec: CommandSpec, state: dict[str, Any]) -> str | None:
-    if not spec.destructive or not spec.group.startswith("maintenance"):
-        return None
-    if state.get("persistent_config_dirty") is not False:
-        return "not sent: persistent dirty state was not parsed as clean before maintenance write"
-    if state.get("resync_needed") is not False:
-        return "not sent: resync-needed state was not parsed as clean before maintenance write"
-    return None
-
-
 def result_row(
     spec: CommandSpec,
     command: str,
@@ -951,13 +1056,10 @@ def result_row(
     }
 
 
-def dry_run_row(spec: CommandSpec, state: dict[str, Any]) -> dict[str, Any]:
-    command, reason = resolve_dynamic_command(spec, state)
-    if reason:
-        return result_row(spec, spec.command, RESULT_SKIP, f"dry-run unresolved dynamic command: {reason}", 0.0, "", "dry-run", {})
+def dry_run_row(spec: CommandSpec) -> dict[str, Any]:
     if spec.operator_required:
-        return result_row(spec, command or spec.command, RESULT_OPERATOR, "operator evidence required; dry-run did not execute", 0.0, "", "dry-run", {})
-    return result_row(spec, command or spec.command, RESULT_SKIP, "dry-run did not execute serial command", 0.0, "", "dry-run", {})
+        return result_row(spec, spec.command, RESULT_OPERATOR, "operator evidence required; dry-run did not execute", 0.0, "", "dry-run", {})
+    return result_row(spec, spec.command, RESULT_SKIP, "dry-run did not execute serial command", 0.0, "", "dry-run", {})
 
 
 def run_operator_step(spec: CommandSpec) -> dict[str, Any]:
@@ -1033,23 +1135,6 @@ def update_state(state: dict[str, Any], row: dict[str, Any]) -> None:
         state["last_selftest"] = parsed["selftest"]
     if "stress" in parsed:
         state["last_stress"] = parsed["stress"]
-
-
-def record_persistent_write_expectation(row: dict[str, Any], state: dict[str, Any]) -> None:
-    if row.get("result") != RESULT_PASS or not row.get("destructive"):
-        return
-    command = str(row.get("command", ""))
-    match = re.fullmatch(r"interval\s+(\d+)", command)
-    if match:
-        state["expected_measurement_interval_ds"] = int(match.group(1))
-        return
-    match = re.fullmatch(r"offset\s+(-?\d+)", command)
-    if match:
-        state["expected_co2_offset_ppm"] = int(match.group(1))
-        return
-    match = re.fullmatch(r"gain\s+(\d+)", command)
-    if match:
-        state["expected_co2_gain"] = int(match.group(1))
 
 
 def verdict(results: list[dict[str, Any]], dry_run: bool) -> str:
@@ -1327,12 +1412,13 @@ def main(argv: list[str] | None = None) -> int:
     meta = metadata(args, log_dir, git_status, git_branch, git_commit)
     results: list[dict[str, Any]] = []
     state: dict[str, Any] = {}
+    admission = MaintenanceAdmission()
     initial_output = ""
 
     try:
         if args.dry_run:
             for spec in plan:
-                row = dry_run_row(spec, state)
+                row = dry_run_row(spec)
                 results.append(row)
                 update_state(state, row)
         else:
@@ -1351,20 +1437,15 @@ def main(argv: list[str] | None = None) -> int:
                     if spec.operator_required or not spec.send:
                         row = run_operator_step(spec)
                     else:
-                        reason = maintenance_write_block_reason(spec, state)
-                        command: str | None
+                        command, reason = admission.prepare(spec)
                         if reason:
-                            command = spec.command
+                            row = result_row(spec, spec.command, RESULT_FAIL, reason, 0.0, "", "not-sent", {})
                         else:
-                            command, reason = resolve_dynamic_command(spec, state)
-                        if reason:
-                            result = RESULT_SKIP if reason.startswith("not sent:") else RESULT_OPERATOR
-                            row = result_row(spec, spec.command, result, reason, 0.0, "", "not-sent", {})
-                        else:
-                            row = run_serial_command(ser, spec, command or spec.command, args, state)
+                            row = run_serial_command(ser, spec, command or spec.command, args,
+                                                     state | admission.expected_values())
                     results.append(row)
                     update_state(state, row)
-                    record_persistent_write_expectation(row, state)
+                    admission.observe(spec, row)
                     if row.get("wait_reason") == "timeout":
                         break
             finally:
@@ -1385,6 +1466,8 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
 
+    if args.include_persistent_writes:
+        state["maintenance"] = asdict(admission)
     final = verdict(results, args.dry_run)
     aggregate_counts = counts(results)
     write_transcript(log_dir / "serial_transcript.txt", meta, initial_output, results)

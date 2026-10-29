@@ -1,6 +1,14 @@
 # Prompt 01 — Fail closed before persistent HIL commands
 
-**Finding:** HIL-1. **Status: NOT IMPLEMENTED.** Required software defect fix.
+**Finding:** HIL-1. **Status: IMPLEMENTED.** Required software defect fix.
+The runner now gates every persistent send on current target baseline and fresh
+clean diagnostics, retaining the first maintenance failure for the campaign.
+Host regressions include
+`test_main_failed_interval_baseline_blocks_explicit_serial_write` and
+`test_main_maintenance_failure_stays_latched_after_clean_diagnostics`; see the
+[prompt index](README.md) for the full disposition and scope limits. The work
+instructions below are retained for traceability and future verification.
+
 Implement this prompt end to end in EE871-E2. Do not open serial ports, flash,
 run hardware HIL or perform real persistent writes; use host fakes only.
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import contextlib
 import io
+import json
 import pathlib
 import sys
 import tempfile
@@ -42,7 +43,405 @@ sys.modules[SERIAL_SPEC.name] = serial_discriminator
 SERIAL_SPEC.loader.exec_module(serial_discriminator)
 
 
+class MaintenanceSerial:
+    """Host-only CLI fixture exercising the real framing and command sender."""
+
+    OK = "Status: OK (code=0, detail=0)\n"
+    NACK = "Status: NACK (code=8, detail=0)\nMessage: Control byte NACK\n> \n"
+    CLEAN = ("persistentConfigDirty: no\n"
+             "persistentConfigDirtyError: OK (code=0, detail=0)\n"
+             "persistentConfigDirtyError message: <none>\nresyncNeeded: no\n")
+
+    def __init__(self, responses=None):
+        self.responses = {command: list(rows) for command, rows in (responses or {}).items()}
+        self.sent = []
+        self.pending = b""
+        self.closed = False
+        self.values = {"interval": 150, "offset": 0, "gain": 32768}
+
+    @property
+    def in_waiting(self):
+        return len(self.pending)
+
+    def read(self, size):
+        data, self.pending = self.pending[:size], self.pending[size:]
+        return data
+
+    def write(self, payload):
+        command = payload.decode().strip()
+        self.sent.append(command)
+        overrides = self.responses.get(command, [])
+        if overrides:
+            response = overrides.pop(0)
+            if isinstance(response, BaseException):
+                raise response
+            if response is None:
+                return len(payload) - 1
+        else:
+            response = self.response(command)
+        self.pending += response.encode()
+        return len(payload)
+
+    def close(self):
+        self.closed = True
+
+    def response(self, command):
+        if command == "dirty":
+            body = "=== Persistent Config Dirty State ===\n" + self.CLEAN
+        elif command == "drv":
+            body = ("=== Driver Health ===\nState: READY\nOnline: yes\n"
+                    "Consecutive failures: 0\nTotal success: 42\nTotal failures: 0\n"
+                    "Success rate: 100.0%\nLast OK: 5 ms ago (at 1000 ms)\n"
+                    "Last error: never\n" + self.CLEAN)
+        elif command == "version":
+            body = "EE871 library version: 1.0.1\n"
+        elif command == "help":
+            body = "EE871-E2 CLI Help\nselftest\n"
+        elif command in ("read", "co2avg"):
+            body = self.OK + "CO2 avg: 500 ppm\n"
+        elif command == "co2fast":
+            body = self.OK + "CO2 fast: 500 ppm\n"
+        elif command == "selftest":
+            body = "Selftest result: pass=12 fail=0 skip=0\n"
+        elif command.startswith("stress "):
+            count = int(command.split()[1])
+            body = (f"=== Stress Summary ===\nTotal: {count}\nSuccess: {count}\nErrors: 0\n"
+                    f"Success rate: 100.00%\nDuration: 1000 ms\nRate: {count}.00 ops/s\n"
+                    f"Health delta: success +{count}, failures +0\n")
+        elif command == "resync":
+            body = "=== Persistent Config Resync ===\nBefore:\n" + self.CLEAN + self.OK + "After:\n" + self.CLEAN
+        elif command == "interval":
+            value = self.values[command]
+            body = self.OK + f"Interval: {value} deciseconds ({value / 10:.1f} s)\n"
+        elif command == "offset":
+            body = self.OK + f"CO2 offset: {self.values[command]} ppm\n"
+        elif command == "gain":
+            value = self.values[command]
+            body = self.OK + f"CO2 gain: {value} (factor={value / 32768:.4f})\n"
+        elif command.split()[0] in self.values:
+            target, value = command.split()
+            self.values[target] = int(value)
+            body = self.OK
+        else:
+            body = self.OK
+        return body + "> \n"
+
+
 class HilRunnerParserTest(unittest.TestCase):
+    def run_maintenance(self, values=(), responses=None, niche_interval=False):
+        ser = MaintenanceSerial(responses)
+        with tempfile.TemporaryDirectory() as folder, contextlib.ExitStack() as stack:
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            stack.enter_context(mock.patch.object(runner, "open_serial", return_value=ser))
+            stack.enter_context(mock.patch.object(runner, "git_value", return_value="fixture"))
+            confirm = stack.enter_context(mock.patch("builtins.input", return_value=runner.PERSISTENT_RUNTIME_CONFIRM_TEXT))
+            if niche_interval:
+                # Exercise the real niche interval spec before the current maintenance baseline.
+                interval_spec = next(spec for spec in runner.niche_specs() if spec.command == "interval")
+                stack.enter_context(mock.patch.object(runner, "niche_specs", return_value=[interval_spec]))
+            args = ["--port", "HOST_FAKE", "--idle", "0", "--command-timeout", "0.01",
+                    "--output-dir", folder, "--include-persistent-writes",
+                    "--confirm-persistent-writes", runner.PERSISTENT_CONFIRM_TEXT, *values]
+            if niche_interval:
+                args.append("--include-niche")
+            code = runner.main(args)
+            confirm.assert_called_once()
+            self.assertIn(runner.PERSISTENT_RUNTIME_CONFIRM_TEXT, confirm.call_args.args[0])
+            summary = json.loads(next(pathlib.Path(folder).glob("*/summary.json")).read_text(encoding="utf-8"))
+        self.assertTrue(ser.closed)
+        safe_rows = [row for row in summary["commands"] if row["group"] == "safe"]
+        self.assertTrue(safe_rows)
+        self.assertTrue(all(row["result"] == runner.RESULT_PASS for row in safe_rows), safe_rows)
+        return ser, summary, code
+
+    def test_main_failed_interval_baseline_blocks_explicit_serial_write(self):
+        ser, summary, code = self.run_maintenance(
+            ["--maintenance-interval", "160"], {"interval": [MaintenanceSerial.NACK]},
+        )
+        self.assertEqual(1, code)
+        self.assertNotIn("interval 160", ser.sent)
+        failed = next(row for row in summary["commands"]
+                      if row["group"] == "maintenance" and row["command"] == "interval")
+        self.assertEqual(runner.RESULT_FAIL, failed["result"])
+        self.assertEqual("prompt", failed["wait_reason"])
+        self.assertIn("NACK", failed["reason"])
+
+    def test_main_dynamic_interval_needs_current_not_niche_baseline(self):
+        for niche, explicit in ((False, False), (True, False), (True, True)):
+            with self.subTest(niche=niche, explicit=explicit):
+                responses = [MaintenanceSerial.NACK]
+                if niche:
+                    responses.insert(0, MaintenanceSerial.OK + "Interval: 150 deciseconds (15.0 s)\n> \n")
+                values = ["--maintenance-interval", "160"] if explicit else []
+                ser, summary, code = self.run_maintenance(values, {"interval": responses}, niche_interval=niche)
+                self.assertEqual(1, code)
+                self.assertFalse(any(command.startswith("interval ") for command in ser.sent))
+                blocked = [row for row in summary["commands"] if row.get("destructive")]
+                self.assertTrue(blocked)
+                self.assertTrue(all(row["wait_reason"] == "not-sent" for row in blocked))
+
+    def test_main_each_target_requires_complete_successful_baseline(self):
+        cases = (
+            ("interval", "--maintenance-interval", "160", "Interval: 150 deciseconds (15.0 s)"),
+            ("offset", "--write-co2-offset", "10", "CO2 offset: 0 ppm"),
+            ("gain", "--write-co2-gain", "33000", "CO2 gain: 32768 (factor=1.0000)"),
+        )
+        for target, flag, value, line in cases:
+            invalid = (
+                MaintenanceSerial.NACK,
+                line + "\n> \n",  # Value without an authoritative successful status.
+                MaintenanceSerial.OK + line.split(":")[0] + ": invalid\n> \n",
+                MaintenanceSerial.OK + line + " trailing garbage\n> \n",
+                MaintenanceSerial.OK + line + "\n" + line + "\n> \n",
+                MaintenanceSerial.OK + line + "\n" + line.lower() + "\n> \n",
+                "Status: NACK (code=8, detail=0)\n" + MaintenanceSerial.OK + line + "\n> \n",
+                "status: NACK (code=8, detail=0)\n" + MaintenanceSerial.OK + line + "\n> \n",
+            )
+            for response in invalid:
+                with self.subTest(target=target, response=response):
+                    ser, summary, code = self.run_maintenance([flag, value], {target: [response]})
+                    self.assertNotEqual(0, code)
+                    self.assertNotIn(f"{target} {value}", ser.sent)
+                    row = next(row for row in summary["commands"]
+                               if row["command"] == f"{target} {value}")
+                    self.assertEqual("not-sent", row["wait_reason"])
+                    self.assertTrue(row["reason"])
+
+    def test_main_maintenance_failure_stays_latched_after_clean_diagnostics(self):
+        clean = "=== Persistent Config Dirty State ===\n" + MaintenanceSerial.CLEAN + "> \n"
+        dirty = clean.replace("persistentConfigDirty: no", "persistentConfigDirty: yes").replace(
+            "resyncNeeded: no", "resyncNeeded: yes")
+        cases = {
+            "write": {"interval 160": [MaintenanceSerial.NACK]},
+            "readback": {"interval": [MaintenanceSerial.OK + "Interval: 150 deciseconds (15.0 s)\n> \n",
+                                        MaintenanceSerial.OK + "Interval: 161 deciseconds (16.1 s)\n> \n"]},
+            "dirty": {"dirty": [clean] * 4 + [dirty]},
+            "resync": {"resync": [MaintenanceSerial.NACK]},
+            "incomplete_resync": {"resync": ["=== Persistent Config Resync ===\nBefore:\n" +
+                                               MaintenanceSerial.CLEAN + MaintenanceSerial.OK + "After:\n> \n"]},
+        }
+        for cause, responses in cases.items():
+            with self.subTest(cause=cause):
+                ser, summary, code = self.run_maintenance(
+                    ["--maintenance-interval", "160", "--write-co2-offset", "10", "--write-co2-gain", "33000"],
+                    responses,
+                )
+                self.assertNotEqual(0, code)
+                self.assertEqual(1, ser.sent.count("interval 160"))
+                self.assertNotIn("offset 10", ser.sent)
+                self.assertNotIn("gain 33000", ser.sent)
+                # Read-only evidence continues after complete failed responses.
+                self.assertIn("offset", ser.sent)
+                self.assertIn("gain", ser.sent)
+                rows = summary["commands"]
+                later_clean = [row for row in rows if row["command"] == "dirty"]
+                self.assertEqual(runner.RESULT_PASS, later_clean[-1]["result"])
+                blocked = [row for row in rows if row["command"] in ("offset 10", "gain 33000")]
+                self.assertTrue(all(row["wait_reason"] == "not-sent" for row in blocked))
+
+    def test_main_out_of_range_baselines_cannot_authorize_typed_writes(self):
+        cases = (
+            ("interval", "--maintenance-interval", "160", "Interval: 149 deciseconds (14.9 s)"),
+            ("interval", "--maintenance-interval", "160", "Interval: 36001 deciseconds (3600.1 s)"),
+            ("offset", "--write-co2-offset", "10", "CO2 offset: -32769 ppm"),
+            ("offset", "--write-co2-offset", "10", "CO2 offset: 32768 ppm"),
+            ("gain", "--write-co2-gain", "33000", "CO2 gain: 65536 (factor=2.0000)"),
+        )
+        for target, flag, value, payload in cases:
+            with self.subTest(target=target, payload=payload):
+                ser, summary, code = self.run_maintenance(
+                    [flag, value], {target: [MaintenanceSerial.OK + payload + "\n> \n"]},
+                )
+                self.assertNotEqual(0, code)
+                self.assertNotIn(f"{target} {value}", ser.sent)
+        ser, summary, code = self.run_maintenance(
+            responses={"interval": [MaintenanceSerial.OK + "Interval: 149 deciseconds (14.9 s)\n> \n"]},
+        )
+        self.assertNotEqual(0, code)
+        self.assertFalse(any(command.startswith("interval ") for command in ser.sent))
+
+    def test_main_stale_clean_diagnostics_do_not_admit_maintenance(self):
+        clean = "=== Persistent Config Dirty State ===\n" + MaintenanceSerial.CLEAN + "> \n"
+        incomplete = "=== Persistent Config Dirty State ===\npersistentConfigDirty: no\nresyncNeeded: no\n> \n"
+        ser, summary, code = self.run_maintenance(
+            ["--maintenance-interval", "160"], {"dirty": [clean] * 3 + [incomplete]},
+        )
+        self.assertNotEqual(0, code)
+        self.assertNotIn("interval 160", ser.sent)
+
+    def test_main_mixed_case_duplicate_evidence_cannot_admit_write(self):
+        clean = "=== Persistent Config Dirty State ===\n" + MaintenanceSerial.CLEAN + "> \n"
+        disguised_dirty = clean.replace(
+            "persistentConfigDirty: no\n", "persistentConfigDirty: yes\npersistentconfigdirty: no\n",
+        )
+        cases = (
+            {"dirty": [clean] * 3 + [disguised_dirty]},
+            {"interval": [MaintenanceSerial.OK + "Interval: 150 deciseconds (15.0 s)\n"
+                          "interval: 160 deciseconds (16.0 s)\n> \n"]},
+        )
+        for responses in cases:
+            with self.subTest(responses=responses):
+                ser, summary, code = self.run_maintenance(["--maintenance-interval", "160"], responses)
+                self.assertNotEqual(0, code)
+                self.assertNotIn("interval 160", ser.sent)
+
+    def test_main_message_labels_do_not_replace_authoritative_baselines(self):
+        cases = (
+            ("interval", [], 150, "Interval: 150 deciseconds (15.0 s)",
+             "Interval: 160 deciseconds (16.0 s)", "interval 150"),
+            ("offset", ["--write-co2-offset", "10"], 0, "CO2 offset: 0 ppm",
+             "CO2 offset: 20 ppm", "offset 10"),
+            ("gain", ["--write-co2-gain", "33000"], 32768, "CO2 gain: 32768 (factor=1.0000)",
+             "CO2 gain: 40000 (factor=1.2207)", "gain 33000"),
+        )
+        for target, options, baseline, payload, embedded, command in cases:
+            with self.subTest(target=target):
+                response = MaintenanceSerial.OK + payload + "\nMessage: " + embedded + "\n> \n"
+                ser, summary, code = self.run_maintenance(options, {target: [response]})
+                self.assertEqual(0, code, summary)
+                self.assertEqual(1, ser.sent.count(command))
+                self.assertEqual(baseline, summary["parsed_state"]["maintenance"]["targets"][target]["baseline"])
+                if target == "interval":
+                    self.assertNotIn("interval 160", ser.sent)
+
+    def test_main_embedded_message_labels_cannot_mask_failure_or_dirty_state(self):
+        clean = "=== Persistent Config Dirty State ===\n" + MaintenanceSerial.CLEAN + "> \n"
+        dirty = ("=== Persistent Config Dirty State ===\npersistentConfigDirty: yes\n"
+                 "persistentConfigDirtyError: NACK (code=8, detail=0)\nresyncNeeded: yes\n"
+                 "persistentConfigDirtyError message: persistentConfigDirty: no; resyncNeeded: no\n> \n")
+        failed_baseline = ("Status: NACK (code=8, detail=0)\n"
+                           "Message: Status: OK (code=0, detail=0)\n"
+                           "Interval: 150 deciseconds (15.0 s)\n> \n")
+        cases = (("dirty", {"dirty": [clean] * 3 + [dirty]}),
+                 ("interval", {"interval": [failed_baseline]}))
+        for command, responses in cases:
+            with self.subTest(command=command):
+                ser, summary, code = self.run_maintenance(["--maintenance-interval", "160"], responses)
+                self.assertEqual(1, code)
+                self.assertNotIn("interval 160", ser.sent)
+                row = next(row for row in summary["commands"]
+                           if row["group"] == "maintenance" and row["command"] == command)
+                self.assertEqual(runner.RESULT_FAIL, row["result"])
+                if command == "dirty":
+                    self.assertTrue(row["parsed"]["persistent_config_dirty"])
+                    self.assertTrue(row["parsed"]["resync_needed"])
+                else:
+                    self.assertEqual("NACK", row["parsed"]["status"]["name"])
+
+    def test_maintenance_resync_requires_complete_unique_after_fields(self):
+        args = runner.parse_args(["--dry-run", "--include-persistent-writes", "--confirm-persistent-writes"])
+        spec = next(spec for spec in runner.maintenance_specs(args) if spec.command == "resync")
+        good = MaintenanceSerial().response("resync")
+        before, after = good.split("After:\n")
+        fields = MaintenanceSerial.CLEAN.splitlines(keepends=True)
+        invalid = [good.replace("After:\n", ""), good + "After:\n",
+                   good.replace("Before:\n", ""), good.replace("Before:\n", "Before:\nBefore:\n"),
+                   good.replace("=== Persistent Config Resync ===\n", ""),
+                   good.replace(MaintenanceSerial.OK, MaintenanceSerial.OK * 2)]
+        for field in fields:
+            invalid.append(before + "After:\n" + after.replace(field, ""))
+            invalid.append(before + "After:\n" + field + after)
+        self.assertEqual(runner.RESULT_PASS, runner.classify_response(
+            spec, good, False, runner.parse_response("resync", good),
+        )[0])
+        for capture in invalid:
+            with self.subTest(capture=capture):
+                self.assertNotEqual(runner.RESULT_PASS, runner.classify_response(
+                    spec, capture, False, runner.parse_response("resync", capture),
+                )[0])
+
+    def test_main_authorized_write_has_separate_baseline_and_expected_evidence(self):
+        ser, summary, code = self.run_maintenance(["--maintenance-interval", "160"])
+        self.assertEqual(0, code, summary)
+        self.assertEqual(1, ser.sent.count("interval 160"))
+        self.assertEqual(160, summary["parsed_state"]["measurement_interval_ds"])
+        evidence = summary["parsed_state"]["maintenance"]["targets"]["interval"]
+        self.assertEqual(150, evidence["baseline"])
+        self.assertEqual(160, evidence["expected"])
+
+    def test_main_persistent_target_boundaries_and_default_rewrite(self):
+        cases = (
+            ("interval", "--maintenance-interval", 150),
+            ("interval", "--maintenance-interval", 36000),
+            ("offset", "--write-co2-offset", -32768),
+            ("offset", "--write-co2-offset", 32767),
+            ("gain", "--write-co2-gain", 0),
+            ("gain", "--write-co2-gain", 65535),
+        )
+        for target, flag, value in cases:
+            with self.subTest(target=target, value=value):
+                ser, summary, code = self.run_maintenance([flag, str(value)])
+                self.assertEqual(0, code, summary)
+                self.assertEqual(1, ser.sent.count(f"{target} {value}"))
+        ser, summary, code = self.run_maintenance()
+        self.assertEqual(0, code, summary)
+        self.assertEqual(1, ser.sent.count("interval 150"))
+
+    def test_main_operator_abort_never_passes_or_sends_later_write(self):
+        ser, summary, code = self.run_maintenance(
+            ["--maintenance-interval", "160"], {"interval": [KeyboardInterrupt("fixture abort")]},
+        )
+        self.assertEqual(3, code)
+        self.assertEqual(runner.VERDICT_INCOMPLETE, summary["final_verdict"])
+        self.assertNotIn("interval 160", ser.sent)
+        self.assertEqual("aborted", summary["commands"][-1]["wait_reason"])
+
+    def test_main_baseline_framing_timeout_stops_plan(self):
+        ser, summary, code = self.run_maintenance(
+            ["--maintenance-interval", "160"], {"interval": [MaintenanceSerial.OK + "Interval: 150 deciseconds (15.0 s)\n"]},
+        )
+        self.assertEqual(1, code)
+        self.assertEqual("interval", ser.sent[-1])
+        self.assertEqual("timeout", summary["commands"][-1]["wait_reason"])
+
+    def test_main_persistent_dry_run_opens_no_port_and_never_passes(self):
+        with tempfile.TemporaryDirectory() as folder, contextlib.redirect_stdout(io.StringIO()), \
+                mock.patch.object(runner, "open_serial") as open_port, \
+                mock.patch("builtins.input") as confirm:
+            code = runner.main(["--dry-run", "--output-dir", folder,
+                                "--include-persistent-writes", "--confirm-persistent-writes",
+                                "--maintenance-interval", "160"])
+            summary = json.loads(next(pathlib.Path(folder).glob("*/summary.json")).read_text(encoding="utf-8"))
+        self.assertEqual(3, code)
+        self.assertEqual(runner.VERDICT_INCOMPLETE, summary["final_verdict"])
+        open_port.assert_not_called()
+        confirm.assert_not_called()
+
+    def test_main_wrong_runtime_confirmation_opens_no_port(self):
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()), \
+                mock.patch.object(runner, "open_serial") as open_port, \
+                mock.patch("builtins.input", return_value="yes"):
+            with self.assertRaises(SystemExit) as caught:
+                runner.main(["--port", "HOST_FAKE", "--include-persistent-writes",
+                             "--confirm-persistent-writes", runner.PERSISTENT_CONFIRM_TEXT])
+        self.assertEqual(2, caught.exception.code)
+        open_port.assert_not_called()
+
+    def test_nonpersistent_plans_require_no_confirmation_or_destructive_commands(self):
+        for options in ([], ["--include-extended"], ["--include-niche"]):
+            with self.subTest(options=options), mock.patch("builtins.input") as confirm:
+                args = runner.parse_args(["--port", "HOST_FAKE", *options])
+                runner.confirm_persistent_runtime(args)
+                self.assertFalse(any(spec.destructive for spec in runner.build_plan(args)))
+                confirm.assert_not_called()
+
+    def test_main_rejects_invalid_persistent_arguments_before_sender(self):
+        common = ["--port", "HOST_FAKE", "--include-persistent-writes", "--confirm-persistent-writes"]
+        invalid = (["--port", "HOST_FAKE", "--include-persistent-writes"],
+                   [*common, "wrong"],
+                   *([*common, flag, str(value)] for flag, value in (
+                       ("--maintenance-interval", 149), ("--maintenance-interval", 36001),
+                       ("--write-co2-offset", -32769), ("--write-co2-offset", 32768),
+                       ("--write-co2-gain", -1), ("--write-co2-gain", 65536))))
+        for args in invalid:
+            with self.subTest(args=args), contextlib.redirect_stderr(io.StringIO()), \
+                    mock.patch.object(runner, "open_serial") as open_port, \
+                    mock.patch("builtins.input") as confirm:
+                with self.assertRaises(SystemExit):
+                    runner.main(args)
+                open_port.assert_not_called()
+                confirm.assert_not_called()
+
     def test_health_requires_each_complete_current_line(self) -> None:
         lines = [
             "=== Driver Health ===", "State: READY", "Online: yes",
@@ -615,46 +1014,54 @@ After:
                     ]
                 )
 
-    def test_maintenance_writes_are_gated_by_clean_dirty_state(self) -> None:
-        spec = runner.CommandSpec(
-            "interval 150",
-            "write interval",
-            group="maintenance",
-            destructive=True,
-        )
+    def observe_maintenance(self, admission, spec, text):
+        parsed = runner.parse_response(spec.command, text)
+        result, reason = runner.classify_response(spec, text, False, parsed, admission.expected_values())
+        row = runner.result_row(spec, spec.command, result, reason, 0, text, "prompt", parsed)
+        admission.observe(spec, row)
+        return row
 
-        self.assertIsNotNone(runner.maintenance_write_block_reason(spec, {}))
-        self.assertIsNotNone(
-            runner.maintenance_write_block_reason(
-                spec,
-                {"persistent_config_dirty": True, "resync_needed": True},
-            )
-        )
-        self.assertIsNone(
-            runner.maintenance_write_block_reason(
-                spec,
-                {"persistent_config_dirty": False, "resync_needed": False},
-            )
-        )
+    def test_maintenance_admission_requires_current_target_baseline_and_fresh_clean(self):
+        args = runner.parse_args(["--dry-run", "--include-persistent-writes", "--confirm-persistent-writes",
+                                  "--maintenance-interval", "160", "--write-co2-offset", "10"])
+        specs = runner.maintenance_specs(args)
+        dirty = next(spec for spec in specs if spec.command == "dirty")
+        baseline = next(spec for spec in specs if spec.command == "interval")
+        other_baseline = next(spec for spec in specs if spec.command == "offset")
+        write = next(spec for spec in specs if spec.command == "interval 160")
+        fixture = MaintenanceSerial()
+        for observed in ([], [dirty], [baseline], [dirty, other_baseline]):
+            with self.subTest(observed=[spec.command for spec in observed]):
+                admission = runner.MaintenanceAdmission()
+                for spec in observed:
+                    self.observe_maintenance(admission, spec, fixture.response(spec.command))
+                command, reason = admission.prepare(write)
+                self.assertIsNone(command)
+                self.assertTrue(reason)
+        admission = runner.MaintenanceAdmission()
+        for spec in (dirty, baseline):
+            self.observe_maintenance(admission, spec, fixture.response(spec.command))
+        self.assertEqual(("interval 160", None), admission.prepare(write))
+        # An admitted mutation consumes the diagnostic observation.
+        command, reason = admission.prepare(write)
+        self.assertIsNone(command)
+        self.assertIn("clean", reason)
 
-    def test_record_persistent_write_expectation(self) -> None:
-        state: dict[str, object] = {}
-        runner.record_persistent_write_expectation(
-            {"result": runner.RESULT_PASS, "destructive": True, "command": "interval 150"},
-            state,
-        )
-        runner.record_persistent_write_expectation(
-            {"result": runner.RESULT_PASS, "destructive": True, "command": "offset -15"},
-            state,
-        )
-        runner.record_persistent_write_expectation(
-            {"result": runner.RESULT_PASS, "destructive": True, "command": "gain 32768"},
-            state,
-        )
-
-        self.assertEqual(150, state["expected_measurement_interval_ds"])
-        self.assertEqual(-15, state["expected_co2_offset_ppm"])
-        self.assertEqual(32768, state["expected_co2_gain"])
+    def test_maintenance_dynamic_rewrite_preserves_baseline_after_later_observation(self):
+        args = runner.parse_args(["--dry-run", "--include-persistent-writes", "--confirm-persistent-writes"])
+        specs = runner.maintenance_specs(args)
+        admission = runner.MaintenanceAdmission()
+        fixture = MaintenanceSerial()
+        dirty = next(spec for spec in specs if spec.command == "dirty")
+        baseline = next(spec for spec in specs if spec.command == "interval")
+        write = next(spec for spec in specs if spec.destructive)
+        for spec in (dirty, baseline):
+            self.observe_maintenance(admission, spec, fixture.response(spec.command))
+        # Even another valid observation cannot replace the captured original value.
+        fixture.values["interval"] = 170
+        self.observe_maintenance(admission, baseline, fixture.response("interval"))
+        self.assertEqual(("interval 150", None), admission.prepare(write))
+        self.assertEqual({"expected_measurement_interval_ds": 150}, admission.expected_values())
 
     def test_non_pass_verdicts_have_nonzero_exit_codes(self) -> None:
         self.assertEqual(0, runner.exit_code_for_verdict(runner.VERDICT_PASS))

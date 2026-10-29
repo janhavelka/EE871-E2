@@ -1,7 +1,8 @@
 # EE871-E2 software implementation prompts
 
-**Status: NOT IMPLEMENTED.** These are executable work instructions, not claims
-that the work has run. Prepared on 2026-10-25 after source/test review of clean,
+**Status: PARTIALLY IMPLEMENTED.** Prompt 01 implements HIL-1; prompts 02..06
+remain NOT IMPLEMENTED and were not selected with this fix. These executable
+instructions were prepared on 2026-10-25 after source/test review of clean,
 fetched `main` at `d37b586e35e553af2a65197282d6d478e554733b`.
 The underlying [retained branch audit](../RETAINED_BRANCH_AUDIT.md) compares
 implementation at `43168fcc60616cb62daf28224fdbf22864849bb9` with historical
@@ -13,12 +14,25 @@ to overwrite subsequent fixes.
 
 | Finding | Prompt | Selection | State |
 | --- | --- | --- | --- |
-| HIL-1: stale clean state admits persistent writes after failed preflight | [01 — Persistent HIL admission](01_persistent_hil_admission.md) | Required defect correction; host-side implementation only. | NOT IMPLEMENTED |
+| HIL-1: stale clean state admits persistent writes after failed preflight | [01 — Persistent HIL admission](01_persistent_hil_admission.md) | Required defect correction; host-side implementation only. | IMPLEMENTED: current target baseline and fresh clean diagnostics gate every destructive send; campaign failures remain latched. |
 | CAP-1: checked value/status sample result | [02 — Checked CO2 samples](02_checked_co2_samples.md) | Optional additive feature; invoking this prompt selects the feature. Raw API absence is not a bug. | NOT IMPLEMENTED |
 | CAP-2: cooperative long waits | [03 — Cooperative maintenance waits](03_cooperative_maintenance_waits.md) | Optional additive callbacks; invoking this prompt selects the feature. Current waits are bounded. | NOT IMPLEMENTED |
 | CAP-4: richer persistent operation evidence/admission | [04 — Persistent operation evidence](04_persistent_operation_evidence.md) | Optional fixed-size evidence and application admission; invoking it selects the feature. Current dirty tracking already exists. | NOT IMPLEMENTED |
 | CAP-3: programmatic operation timing bounds | [05 — Requested-delay bounds](05_requested_delay_bounds.md) | Optional additive pure API and real example consumer; invoking it selects the feature. Current manual bounds are not automatically incorrect. | NOT IMPLEMENTED |
 | CAP-5: permissive absent startup in older branch | [06 — Software closeout](06_software_closeout.md) | Integrated closeout preserves strict startup; no new feature or mandatory duplicate test batch. | NOT IMPLEMENTED |
+
+Prompt 01 regression evidence in `test/test_hil_runner_parser.py`:
+`test_main_failed_interval_baseline_blocks_explicit_serial_write` reproduces
+the original forbidden send through the real `main()` loop;
+`test_main_dynamic_interval_needs_current_not_niche_baseline` rejects stale
+cached values; `test_main_each_target_requires_complete_successful_baseline`
+covers interval/offset/gain preflight;
+`test_main_maintenance_failure_stays_latched_after_clean_diagnostics` covers
+continued admission closure; and
+`test_main_authorized_write_has_separate_baseline_and_expected_evidence`
+covers the authorized success path. These are host tests, not physical
+qualification. Requested-value success does not restore the baseline, and
+uncertain writes require operator-owned reconciliation outside the runner.
 
 For the required defect fix and closeout, execute **01, then 06**. For the optional full
 software feature set, execute **01 → 02 → 03 → 04 → 05 → 06**. Prompt 05 must
@@ -41,7 +55,11 @@ are excluded from every prompt. Existing hardware evidence remains in the
 [validation matrix](../EE871_E2_HARDWARE_VALIDATION_MATRIX.md); do not turn those
 rows into software implementation requirements or claim host tests close them.
 
-## Current code audit supporting the prompts
+## Preparation code audit supporting the prompts
+
+The following observations describe the preparation baseline above. HIL-1 is
+superseded by the implementation disposition and regression evidence in the
+coverage table; the optional capability observations remain unchanged.
 
 - HIL `main()` continues after a prompt-framed failure and stops only on a
   framing timeout. `update_state()` keeps older parsed values and clean flags;
@@ -141,6 +159,6 @@ generated version consistency, Doxygen, local Markdown links, referenced commit
 objects, fenced blocks and whitespace. Doxygen exposed existing relative links
 to the source-only retained audit; those and the new prompt-index links use
 GitHub source URLs without expanding inputs or weakening warnings. These checks
-validate the instructions/documents only; all implementation statuses remain
-NOT IMPLEMENTED. Native/firmware builds, hardware runs and remote CI were not
-run for this prompt-drafting change.
+validate the instructions/documents only; all implementation statuses were
+NOT IMPLEMENTED at preparation. Native/firmware builds, hardware runs and remote
+CI were not run for this prompt-drafting change.
