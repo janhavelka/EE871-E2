@@ -323,16 +323,8 @@ static void waitAfterWriteMs(const Config& cfg, uint32_t remainingMs) {
   }
 }
 
-} // namespace
-
-Status EE871::begin(const Config& config) {
-  // Prevent double-init without explicit end()
-  if (_initialized) {
-    return Status::Error(Err::ALREADY_INITIALIZED, "Call end() first");
-  }
-
-  _resetStoppedState();
-
+// Shared pure validation. Only begin requires callback pointers; neither path invokes them.
+static Status validateConfig(const Config& config, bool requireCallbacks) {
   if (config.readNackRetries > cmd::READ_NACK_RETRIES_MAX) {
     return Status::Error(Err::INVALID_CONFIG, "Read NACK retries must be <=3");
   }
@@ -340,9 +332,9 @@ Status EE871::begin(const Config& config) {
     return Status::Error(Err::INVALID_CONFIG, "Long delay slice must be 1-50 ms");
   }
 
-  if (config.setScl == nullptr || config.setSda == nullptr ||
+  if (requireCallbacks && (config.setScl == nullptr || config.setSda == nullptr ||
       config.readScl == nullptr || config.readSda == nullptr ||
-      config.delayUs == nullptr) {
+      config.delayUs == nullptr)) {
     return Status::Error(Err::INVALID_CONFIG, "Missing E2 callbacks");
   }
   if (config.deviceAddress > cmd::DEVICE_ADDRESS_MAX) {
@@ -384,6 +376,160 @@ Status EE871::begin(const Config& config) {
       config.flashStretchTimeoutUs > cmd::INTERVAL_WRITE_DELAY_MAX_MS * 1000U) {
     return Status::Error(Err::INVALID_CONFIG, "Flash stretch timeout outside safe limits");
   }
+  return Status::Ok();
+}
+
+static bool addRequestedDelay(uint64_t& total, uint64_t cost, uint64_t count) {
+  if (count != 0 && cost > (std::numeric_limits<uint64_t>::max() - total) / count) {
+    return false;
+  }
+  total += cost * count;
+  return true;
+}
+
+} // namespace
+
+Status EE871::operationTimingBound(const Config& config, OperationKind operation,
+                                    OperationTimingBound& out, uint16_t target, size_t count) {
+  const Status validation = validateConfig(config, false);
+  if (!validation.ok()) return validation;
+
+  if (count == 0 || (operation != OperationKind::CUSTOM_READ && count != 1)) {
+    return Status::Error(Err::INVALID_PARAM, "Operation requires one item or a nonempty custom read");
+  }
+  if (operation == OperationKind::CONTROL_READ) {
+    if (target > 0x0F) return Status::Error(Err::INVALID_PARAM, "Invalid main command", target);
+    if (!cmd::isReadMainCommandSupported(static_cast<uint8_t>(target))) {
+      return Status::Error(Err::NOT_SUPPORTED, "Unsupported EE871 main command", target);
+    }
+  } else if (operation == OperationKind::CUSTOM_POINTER ||
+             operation == OperationKind::CUSTOM_READ || operation == OperationKind::CUSTOM_WRITE) {
+    if (target >= cmd::CUSTOM_MEMORY_SIZE ||
+        count > static_cast<size_t>(cmd::CUSTOM_MEMORY_SIZE - target)) {
+      return Status::Error(Err::OUT_OF_RANGE, "Operation exceeds custom memory map");
+    }
+  } else if (target != 0) {
+    return Status::Error(Err::INVALID_PARAM, "Operation does not accept a target");
+  }
+
+  // Counts describe the current public paths, reserving supported capability
+  // branches and all pending targets. They do not execute protocol operations.
+  uint16_t reads = 0;
+  uint16_t retryableReads = 0;
+  uint16_t pointers = 0;
+  uint16_t writes = 0;
+  uint16_t writeWaits = 0;
+  uint16_t intervalWaits = 0;
+  uint16_t resets = 0;
+  switch (operation) {
+    case OperationKind::CONTROL_READ:
+      if (permitsReadNackRetry(cmd::makeControlRead(static_cast<uint8_t>(target), config.deviceAddress))) {
+        retryableReads = 1;
+      } else {
+        reads = 1;
+      }
+      break;
+    case OperationKind::CO2_PAIR_READ:
+      retryableReads = 2;
+      break;
+    case OperationKind::CUSTOM_POINTER:
+      pointers = 1;
+      break;
+    case OperationKind::CUSTOM_READ:
+      pointers = 1;
+      reads = static_cast<uint16_t>(count);
+      break;
+    case OperationKind::CUSTOM_WRITE:
+      if (target == cmd::CUSTOM_INTERVAL_L || target == cmd::CUSTOM_INTERVAL_H) {
+        // Read the companion byte, then the same pair path as INTERVAL_WRITE.
+        pointers = 2; reads = 3; writes = 2; intervalWaits = 1;
+      } else {
+        pointers = 1; reads = 1; writes = 1; writeWaits = 1;
+      }
+      break;
+    case OperationKind::INTERVAL_WRITE:
+      pointers = 1; reads = 2; writes = 2; intervalWaits = 1;
+      break;
+    case OperationKind::CO2_ADJUSTMENT_READ:
+      pointers = 2; reads = 3; // Support byte, then offset/gain pair.
+      break;
+    case OperationKind::CO2_CAL_POINTS_READ:
+      pointers = 2; reads = 5; // Support byte, then four adjustment-point bytes.
+      break;
+    case OperationKind::CO2_ADJUSTMENT_WRITE:
+      pointers = 3; reads = 3; writes = 2; writeWaits = 2;
+      break;
+    case OperationKind::PART_NAME_WRITE:
+      pointers = reads = writes = writeWaits = cmd::CUSTOM_PART_NAME_LEN;
+      break;
+    case OperationKind::AUTO_ADJUST_START:
+      pointers = 2; reads = 2; writes = 1; writeWaits = 1;
+      break;
+    case OperationKind::BEGIN:
+    case OperationKind::RECOVER:
+      resets = 1; pointers = 1; reads = 7; // Four identity and three capability bytes.
+      break;
+    case OperationKind::PROBE:
+      reads = 4;
+      break;
+    case OperationKind::BUS_RESET:
+      resets = 1;
+      break;
+    case OperationKind::PERSISTENT_RESYNC: {
+      const uint16_t pointTargets = cmd::CUSTOM_CO2_POINT_U_H - cmd::CUSTOM_CO2_POINT_L_L + 1;
+      // Interval(2), preflight idle(1), support(1), calibration(4), part name(16),
+      // every pending target, and fresh support for each adjustment-point target.
+      pointers = 5 + cmd::CUSTOM_MEMORY_SIZE + pointTargets;
+      reads = 8 + cmd::CUSTOM_PART_NAME_LEN + cmd::CUSTOM_MEMORY_SIZE + pointTargets;
+      break;
+    }
+    case OperationKind::CO2_CHECKED_SAMPLE:
+      retryableReads = 3; pointers = 1; reads = 1; // Value pair, status, optional error code.
+      break;
+    default:
+      return Status::Error(Err::INVALID_PARAM, "Unknown operation kind");
+  }
+
+  // Validated primitive fields are bounded well below uint64_t capacity. A byte
+  // deadline already includes every setup/high/low phase; do not add them again.
+  const uint64_t start = config.bitTimeoutUs + 2ULL * config.startHoldUs + config.clockLowUs;
+  const uint64_t stopPhases = config.clockLowUs + uint64_t{kDataSetupUs} + 2ULL * config.stopHoldUs;
+  const uint64_t ordinaryStop = stopPhases + config.bitTimeoutUs;
+  const uint64_t flashStop = stopPhases + config.flashStretchTimeoutUs;
+  const uint64_t read = start + 3ULL * config.byteTimeoutUs + ordinaryStop;
+  const uint64_t pointer = start + 4ULL * config.byteTimeoutUs + ordinaryStop;
+  const uint64_t write = start + 4ULL * config.byteTimeoutUs + flashStop;
+  const uint64_t nack = start + config.byteTimeoutUs + ordinaryStop;
+  // Only prior control-NACK frames can lead to another attempt. The final frame
+  // may consume a full read, including cleanup; veto/idle/cleanup failures stop early.
+  const uint64_t retryableRead = read + config.readNackRetries * (nack + cmd::READ_NACK_RETRY_DELAY_US);
+  const uint64_t reset = cmd::BUS_RESET_CLOCKS *
+      (uint64_t{config.clockLowUs} + config.clockHighUs + config.flashStretchTimeoutUs) + flashStop;
+
+  uint64_t total = 0;
+  if (!addRequestedDelay(total, read, reads) ||
+      !addRequestedDelay(total, retryableRead, retryableReads) ||
+      !addRequestedDelay(total, pointer, pointers) ||
+      !addRequestedDelay(total, write, writes) ||
+      !addRequestedDelay(total, 1000ULL * config.writeDelayMs, writeWaits) ||
+      !addRequestedDelay(total, 1000ULL * config.intervalWriteDelayMs, intervalWaits) ||
+      !addRequestedDelay(total, reset, resets)) {
+    return Status::Error(Err::OUT_OF_RANGE, "Requested-delay bound overflow");
+  }
+  out.requestedDelayUs = total;
+  return Status::Ok();
+}
+
+Status EE871::begin(const Config& config) {
+  // Prevent double-init without explicit end()
+  if (_initialized) {
+    return Status::Error(Err::ALREADY_INITIALIZED, "Call end() first");
+  }
+
+  _resetStoppedState();
+
+  const Status validation = validateConfig(config, true);
+  if (!validation.ok()) return validation;
 
   Config normalized = config;
   if (normalized.offlineThreshold == 0) {

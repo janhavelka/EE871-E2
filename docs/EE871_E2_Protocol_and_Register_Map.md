@@ -106,6 +106,34 @@ START and byte transfers retain their ordinary bit/byte limits. The flash
 STOP allowance does not replace the bounded post-write delay and readback
 verification described in Section 10.
 
+### 3.5 Requested-delay calculation
+
+`EE871::operationTimingBound()` is a pure calculation from explicit `Config`,
+available before initialization with no callbacks installed. It returns a
+checked `uint64_t` microsecond sum in `OperationTimingBound::requestedDelayUs`,
+without issuing protocol operations. The [README derivation](../README.md#programmatic-requested-delay-bounds)
+maps every selector to current transfer paths, including address/range checks.
+Both example CLIs expose this calculation through `bounds`; their `timing`
+command remains a live bus test.
+
+The contract is the sum of maximum requested protocol waits/delays under the
+configured callback contract. Byte budgets already include nominal setup,
+high/low and ACK/NACK phases. Ordinary STOP includes a full low phase and uses
+the bit timeout; direct-write STOP uses the separate flash allowance. Failure
+cleanup also contributes STOP. Reset reserves nine flash-tolerant releases and
+one flash-tolerant STOP. Quiet-wait slices retain their exact configured sum.
+
+Default bounds are 155,610 us per ordinary read, 190,610 us per volatile
+pointer write, and 3,502,110 us per reset. Each allowed control-NACK retry adds
+at most 85,610 us plus its fixed 1,000 us pause to an eligible final read;
+identity/custom reads and writes do not acquire retries. Compound selectors
+include support checks, readback, the checked sample's possible error-detail
+path, and every one of 256 potential resync targets. Unknown capabilities use
+the conservative supported path. Callback execution and optional callback
+overhead, scheduler preemption and latency are outside the sum; applications
+own those additional bounds for any wall-clock admission decision. No measured
+electrical timing, sensor readiness or completed calibration is implied.
+
 ---
 
 ## 4) Layer 2: Byte framing, ACK/NACK, PEC

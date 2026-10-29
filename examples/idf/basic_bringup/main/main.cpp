@@ -791,13 +791,68 @@ void printHelp() {
   printHelpItem("pintest", "Test pin toggle (MCU bus control)");
   printHelpItem("clocktest", "Generate clock pulses and verify");
   printHelpItem("sniff", "Toggle sniffer (diagnostic; perturbs bus timing)");
-  printHelpItem("timing", "Try different clock frequencies");
+  printHelpItem("bounds", "Show requested-delay bounds (no bus I/O)");
+  printHelpItem("timing", "Try different clock frequencies (bus transactions)");
   printHelpItem("busreset", "Send 9 clocks to recover stuck bus");
   printHelpItem("tx <hex>", "Test transaction with control byte");
   printHelpItem("libtest", "Test library control-byte read path");
   printHelpItem("caps", "Print feature capability booleans");
   printHelpItem("trace stats", "Show bus trace buffer stats");
   printHelpItem("trace clear", "Clear buffered trace events");
+}
+
+void printRequestedDelayBounds(const EE871::Config& config) {
+  using EE871::OperationKind;
+  struct Request {
+    const char* label;
+    OperationKind operation;
+    uint16_t target;
+    size_t count;
+  };
+  static constexpr Request requests[] = {
+      {"Control read (group low)", OperationKind::CONTROL_READ, EE871::cmd::MAIN_TYPE_LO, 1},
+      {"Status read (configured retries)", OperationKind::CONTROL_READ, EE871::cmd::MAIN_STATUS, 1},
+      {"Raw MV3/MV4 pair", OperationKind::CO2_PAIR_READ, 0, 1},
+      {"Checked sample (including error detail)", OperationKind::CO2_CHECKED_SAMPLE, 0, 1},
+      {"Volatile custom pointer", OperationKind::CUSTOM_POINTER, 0, 1},
+      {"Custom block read (0x00..0xFF)", OperationKind::CUSTOM_READ, 0, 256},
+      {"Verified custom byte (filter)", OperationKind::CUSTOM_WRITE, EE871::cmd::CUSTOM_FILTER_CO2, 1},
+      {"Raw interval byte (companion + pair)", OperationKind::CUSTOM_WRITE, EE871::cmd::CUSTOM_INTERVAL_L, 1},
+      {"Interval pair write", OperationKind::INTERVAL_WRITE, 0, 1},
+      {"Offset/gain read (including support)", OperationKind::CO2_ADJUSTMENT_READ, 0, 1},
+      {"Calibration points read (including support)", OperationKind::CO2_CAL_POINTS_READ, 0, 1},
+      {"Offset/gain write (including support)", OperationKind::CO2_ADJUSTMENT_WRITE, 0, 1},
+      {"Part-name write (16 bytes)", OperationKind::PART_NAME_WRITE, 0, 1},
+      {"Auto-adjust preflight + request", OperationKind::AUTO_ADJUST_START, 0, 1},
+      {"Begin (including possible reset)", OperationKind::BEGIN, 0, 1},
+      {"Probe", OperationKind::PROBE, 0, 1},
+      {"Recover", OperationKind::RECOVER, 0, 1},
+      {"Bus reset", OperationKind::BUS_RESET, 0, 1},
+      {"Persistent resync (all 256 pending targets)", OperationKind::PERSISTENT_RESYNC, 0, 1},
+  };
+  std::printf("=== Requested-delay bounds (us; no bus I/O) ===\n");
+  std::printf("  Sum of maximum requested protocol waits/delays under the configured callback contract.\n");
+  std::printf("  Not a wall-clock bound: callback overhead, scheduler/preemption and latency are caller-owned.\n");
+  std::printf("  Conservative supported paths; no operations are performed and no capabilities are read.\n");
+  std::printf("  Stored setup Config: low=%u us, high=%u us, readNackRetries=%u\n",
+                static_cast<unsigned>(config.clockLowUs), static_cast<unsigned>(config.clockHighUs),
+                static_cast<unsigned>(config.readNackRetries));
+  std::printf("  Timeouts: bit=%lu us, byte=%lu us, flash=%lu us; quiet waits=%lu/%lu ms\n",
+                static_cast<unsigned long>(config.bitTimeoutUs), static_cast<unsigned long>(config.byteTimeoutUs),
+                static_cast<unsigned long>(config.flashStretchTimeoutUs), static_cast<unsigned long>(config.writeDelayMs),
+                static_cast<unsigned long>(config.intervalWriteDelayMs));
+  for (const auto& request : requests) {
+    EE871::OperationTimingBound bound;
+    const auto st = EE871::EE871::operationTimingBound(config, request.operation, bound,
+                                                      request.target, request.count);
+    if (!st.ok()) {
+      std::printf("  %s: bound unavailable\n", request.label);
+      printStatus(st);
+      return;
+    }
+    std::printf("  %s: %llu us\n", request.label,
+                  static_cast<unsigned long long>(bound.requestedDelayUs));
+  }
 }
 
 void printVersionInfo() {
@@ -2591,6 +2646,8 @@ void processCommand(const char* input) {
     }
   } else if (std::strcmp(trimmed, "scan") == 0) {
     diag::scanAddresses(deviceCfg);
+  } else if (std::strcmp(trimmed, "bounds") == 0) {
+    printRequestedDelayBounds(deviceCfg);
   } else if (std::strcmp(trimmed, "timing") == 0) {
     diag::discoverTiming(deviceCfg);
   } else if (std::strcmp(trimmed, "busreset") == 0) {

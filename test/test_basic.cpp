@@ -3864,6 +3864,761 @@ void test_maintenance_wait_readback_failures_retain_dirty_and_exact_status() {
   }
 }
 
+// This recorder observes requested delays at the public callback boundary.
+// Stretch schedules name physical SCL releases, independently of the bound API.
+struct RequestedDelayBus {
+  struct Stretch { uint32_t release; uint32_t us; };
+  FakeE2Transport fake;
+  Config hal = fake.makeConfig();
+  uint64_t requestedUs = 0;
+  uint32_t callbackCalls = 0;
+  uint32_t releases = 0;
+  uint32_t taskDelayCalls = 0;
+  uint32_t yieldCalls = 0;
+  Stretch stretches[96] = {};
+  size_t stretchCount = 0;
+  uint32_t scheduledReleases = 0;
+
+  void record(std::initializer_list<Stretch> schedule = {}) {
+    requestedUs = 0;
+    callbackCalls = 0;
+    releases = 0;
+    taskDelayCalls = 0;
+    yieldCalls = 0;
+    stretchCount = 0;
+    scheduledReleases = 0;
+    for (const Stretch& stretch : schedule) {
+      TEST_ASSERT_LESS_THAN_UINT32(96, stretchCount);
+      stretches[stretchCount++] = stretch;
+    }
+  }
+
+  void appendDefaultFrame(uint8_t bytes, uint32_t stopStretch = 25000) {
+    // One START release, nine releases per byte, one STOP release. A default
+    // byte reaches 35 ms with 25 ms on bit 1 and 8,110 us on bit 2.
+    TEST_ASSERT_LESS_OR_EQUAL_UINT32(96, stretchCount + 2U + 2U * bytes);
+    stretches[stretchCount++] = {++scheduledReleases, 25000};
+    for (uint8_t byte = 0; byte < bytes; ++byte) {
+      stretches[stretchCount++] = {scheduledReleases + 1U, 25000};
+      stretches[stretchCount++] = {scheduledReleases + 2U, 8110};
+      scheduledReleases += 9;
+    }
+    stretches[stretchCount++] = {++scheduledReleases, stopStretch};
+  }
+
+  Config config(bool taskWaits = false) {
+    Config cfg; // Real public defaults, not the fake's accelerated timing.
+    cfg.busUser = this;
+    cfg.setScl = [](bool level, void* user) {
+      auto& bus = *static_cast<RequestedDelayBus*>(user);
+      ++bus.callbackCalls;
+      if (level) {
+        ++bus.releases;
+        for (size_t i = 0; i < bus.stretchCount; ++i) {
+          if (bus.stretches[i].release == bus.releases) {
+            bus.fake.stretchClockReleaseAfter(1, bus.stretches[i].us);
+          }
+        }
+      }
+      bus.hal.setScl(level, bus.hal.busUser);
+    };
+    cfg.setSda = [](bool level, void* user) {
+      auto& bus = *static_cast<RequestedDelayBus*>(user);
+      ++bus.callbackCalls;
+      bus.hal.setSda(level, bus.hal.busUser);
+    };
+    cfg.readScl = [](void* user) {
+      auto& bus = *static_cast<RequestedDelayBus*>(user);
+      ++bus.callbackCalls;
+      return bus.hal.readScl(bus.hal.busUser);
+    };
+    cfg.readSda = [](void* user) {
+      auto& bus = *static_cast<RequestedDelayBus*>(user);
+      ++bus.callbackCalls;
+      return bus.hal.readSda(bus.hal.busUser);
+    };
+    cfg.delayUs = [](uint32_t us, void* user) {
+      auto& bus = *static_cast<RequestedDelayBus*>(user);
+      ++bus.callbackCalls;
+      bus.requestedUs += us;
+      bus.hal.delayUs(us, bus.hal.busUser);
+    };
+    cfg.allowReadRetry = [](void* user) {
+      auto& bus = *static_cast<RequestedDelayBus*>(user);
+      ++bus.callbackCalls;
+      return bus.fake.allowReadRetry();
+    };
+    if (taskWaits) {
+      cfg.delayMs = [](uint32_t ms, void* user) {
+        auto& bus = *static_cast<RequestedDelayBus*>(user);
+        ++bus.callbackCalls;
+        ++bus.taskDelayCalls;
+        bus.requestedUs += uint64_t{ms} * 1000U;
+        bus.hal.delayUs(ms * 1000U, bus.hal.busUser);
+      };
+      cfg.yield = [](void* user) {
+        auto& bus = *static_cast<RequestedDelayBus*>(user);
+        ++bus.callbackCalls;
+        ++bus.yieldCalls;
+      };
+    }
+    return cfg;
+  }
+};
+
+static uint64_t requestedBound(const Config& cfg, OperationKind kind,
+                               uint16_t target = 0, size_t count = 1) {
+  OperationTimingBound out;
+  TEST_ASSERT_TRUE(EE871::EE871::operationTimingBound(cfg, kind, out, target, count).ok());
+  return out.requestedDelayUs;
+}
+
+static void setRequestedDelayProfile(Config& cfg, uint8_t profile) {
+  if (profile == 1) {
+    cfg.startHoldUs = 4;
+    cfg.stopHoldUs = 4;
+    cfg.bitTimeoutUs = 1;
+    cfg.byteTimeoutUs = 1891;
+    cfg.flashStretchTimeoutUs = 300000;
+    cfg.writeDelayMs = 0;
+    cfg.intervalWriteDelayMs = 0;
+  } else if (profile == 2) {
+    cfg.clockLowUs = 1890;
+    cfg.clockHighUs = 100;
+    cfg.startHoldUs = 65535;
+    cfg.stopHoldUs = 65535;
+    cfg.bitTimeoutUs = 25000;
+    cfg.byteTimeoutUs = 35000;
+    cfg.flashStretchTimeoutUs = 5000000;
+    cfg.writeDelayMs = 5000;
+    cfg.intervalWriteDelayMs = 5000;
+  }
+}
+
+void test_requested_delay_bounds_match_independent_operation_examples() {
+  // Derived before implementing the calculator from START, byte deadlines,
+  // command-specific STOPs and the public call graph. Values are microseconds.
+  struct Case {
+    OperationKind kind;
+    uint16_t target;
+    size_t count;
+    uint64_t expected[3]; // defaults, minimum accepted waits, maximum waits
+  };
+  const Case cases[] = {
+      {OperationKind::CONTROL_READ, cmd::MAIN_TYPE_LO, 1, {155610, 5901, 420930}},
+      {OperationKind::CO2_PAIR_READ, 0, 1, {311220, 11802, 841860}},
+      {OperationKind::CUSTOM_POINTER, 255, 1, {190610, 7792, 455930}},
+      {OperationKind::CUSTOM_READ, 255, 1, {346220, 13693, 876860}},
+      {OperationKind::CUSTOM_READ, 0, 256, {40026770, 1518448, 108214010}},
+      {OperationKind::CUSTOM_WRITE, cmd::CUSTOM_FILTER_CO2, 1, {1011830, 321484, 11307790}},
+      {OperationKind::CUSTOM_WRITE, cmd::CUSTOM_INTERVAL_L, 1, {2179270, 648869, 18036510}},
+      {OperationKind::CUSTOM_WRITE, cmd::CUSTOM_INTERVAL_H, 1, {2179270, 648869, 18036510}},
+      {OperationKind::INTERVAL_WRITE, 0, 1, {1833050, 635176, 17159650}},
+      {OperationKind::CO2_ADJUSTMENT_READ, 0, 1, {848050, 33287, 2174650}},
+      {OperationKind::CO2_CAL_POINTS_READ, 0, 1, {1159270, 45089, 3016510}},
+      {OperationKind::CO2_ADJUSTMENT_WRITE, 0, 1, {2369880, 656661, 23492440}},
+      {OperationKind::PART_NAME_WRITE, 0, 1, {16189280, 5143744, 180924640}},
+      {OperationKind::AUTO_ADJUST_START, 0, 1, {1358050, 335177, 12184650}},
+      {OperationKind::BEGIN, 0, 1, {4781990, 3051017, 53553320}},
+      {OperationKind::PROBE, 0, 1, {622440, 23604, 1683720}},
+      {OperationKind::RECOVER, 0, 1, {4781990, 3051017, 53553320}},
+      {OperationKind::BUS_RESET, 0, 1, {3502110, 3001918, 50150880}},
+      {OperationKind::PERSISTENT_RESYNC, 0, 1, {94704890, 3740764, 240365570}},
+      {OperationKind::CO2_CHECKED_SAMPLE, 0, 1, {813050, 31396, 2139650}},
+  };
+  for (uint8_t profile = 0; profile < 3; ++profile) {
+    RequestedDelayBus bus;
+    Config cfg = bus.config(true);
+    setRequestedDelayProfile(cfg, profile);
+    for (const Case& entry : cases) {
+      TEST_ASSERT_EQUAL_UINT64(entry.expected[profile],
+          requestedBound(cfg, entry.kind, entry.target, entry.count));
+    }
+    TEST_ASSERT_EQUAL_UINT32(0, bus.callbackCalls);
+    TEST_ASSERT_EQUAL_UINT64(0, bus.requestedUs);
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+  }
+  // No adapter is needed for planning before begin().
+  TEST_ASSERT_EQUAL_UINT64(155610,
+      requestedBound(Config{}, OperationKind::CONTROL_READ, cmd::MAIN_TYPE_LO));
+}
+
+void test_requested_delay_bounds_reject_selectors_counts_and_ranges_without_output() {
+  const Config cfg;
+  struct Case { OperationKind kind; uint16_t target; size_t count; Err error; };
+  const Case cases[] = {
+      {static_cast<OperationKind>(255), 0, 1, Err::INVALID_PARAM},
+      {OperationKind::CONTROL_READ, 16, 1, Err::INVALID_PARAM},
+      {OperationKind::CONTROL_READ, cmd::MAIN_MV1_LO, 1, Err::NOT_SUPPORTED},
+      {OperationKind::CONTROL_READ, cmd::MAIN_MV2_HI, 1, Err::NOT_SUPPORTED},
+      {OperationKind::CUSTOM_POINTER, 256, 1, Err::OUT_OF_RANGE},
+      {OperationKind::CUSTOM_READ, 256, 1, Err::OUT_OF_RANGE},
+      {OperationKind::CUSTOM_WRITE, 256, 1, Err::OUT_OF_RANGE},
+      {OperationKind::CUSTOM_READ, 0, 0, Err::INVALID_PARAM},
+      {OperationKind::CUSTOM_READ, 0, 257, Err::OUT_OF_RANGE},
+      {OperationKind::CUSTOM_READ, 255, 2, Err::OUT_OF_RANGE},
+      {OperationKind::CUSTOM_READ, 1, 256, Err::OUT_OF_RANGE},
+      {OperationKind::CUSTOM_READ, 0, static_cast<size_t>(-1), Err::OUT_OF_RANGE},
+      {OperationKind::PART_NAME_WRITE, 0, 16, Err::INVALID_PARAM},
+      {OperationKind::CO2_PAIR_READ, 0, 2, Err::INVALID_PARAM},
+      {OperationKind::PERSISTENT_RESYNC, 0, 256, Err::INVALID_PARAM},
+      {OperationKind::INTERVAL_WRITE, 1, 1, Err::INVALID_PARAM},
+  };
+  for (const Case& entry : cases) {
+    OperationTimingBound out;
+    out.requestedDelayUs = UINT64_MAX;
+    const Status st = EE871::EE871::operationTimingBound(
+        cfg, entry.kind, out, entry.target, entry.count);
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(entry.error), static_cast<uint8_t>(st.code));
+    TEST_ASSERT_EQUAL_UINT64(UINT64_MAX, out.requestedDelayUs);
+  }
+  for (uint8_t operation = 0; operation <= static_cast<uint8_t>(OperationKind::CO2_CHECKED_SAMPLE);
+       ++operation) {
+    const auto kind = static_cast<OperationKind>(operation);
+    const uint16_t target = kind == OperationKind::CONTROL_READ ? cmd::MAIN_TYPE_LO : 0;
+    OperationTimingBound out;
+    out.requestedDelayUs = 123;
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_PARAM),
+        static_cast<uint8_t>(EE871::EE871::operationTimingBound(cfg, kind, out, target, 0).code));
+    TEST_ASSERT_EQUAL_UINT64(123, out.requestedDelayUs);
+    if (kind != OperationKind::CONTROL_READ && kind != OperationKind::CUSTOM_POINTER &&
+        kind != OperationKind::CUSTOM_READ && kind != OperationKind::CUSTOM_WRITE) {
+      TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_PARAM),
+          static_cast<uint8_t>(EE871::EE871::operationTimingBound(cfg, kind, out, 1).code));
+      TEST_ASSERT_EQUAL_UINT64(123, out.requestedDelayUs);
+    }
+  }
+}
+
+void test_requested_delay_validation_agrees_with_begin_and_preserves_zero_waits() {
+  using Change = void (*)(Config&);
+  const Change invalid[] = {
+      [](Config& c) { c.readNackRetries = 4; },
+      [](Config& c) { c.longDelaySliceMs = 0; },
+      [](Config& c) { c.longDelaySliceMs = 51; },
+      [](Config& c) { c.deviceAddress = 8; },
+      [](Config& c) { c.clockLowUs = 99; },
+      [](Config& c) { c.clockHighUs = 99; },
+      [](Config& c) { c.clockLowUs = 1000; c.clockHighUs = 1000; },
+      [](Config& c) { c.clockLowUs = UINT16_MAX; c.clockHighUs = UINT16_MAX; },
+      [](Config& c) { c.startHoldUs = 3; },
+      [](Config& c) { c.stopHoldUs = 3; },
+      [](Config& c) { c.bitTimeoutUs = 0; },
+      [](Config& c) { c.byteTimeoutUs = 0; },
+      [](Config& c) { c.bitTimeoutUs = 25001; },
+      [](Config& c) { c.byteTimeoutUs = 35001; },
+      [](Config& c) { c.byteTimeoutUs = 24999; },
+      [](Config& c) { c.bitTimeoutUs = 1; c.byteTimeoutUs = 1890; },
+      [](Config& c) { c.writeDelayMs = 5001; },
+      [](Config& c) { c.intervalWriteDelayMs = 5001; },
+      [](Config& c) { c.writeDelayMs = UINT32_MAX; },
+      [](Config& c) { c.intervalWriteDelayMs = UINT32_MAX; },
+      [](Config& c) { c.flashStretchTimeoutUs = 299999; },
+      [](Config& c) { c.flashStretchTimeoutUs = 5000001; },
+      [](Config& c) { c.flashStretchTimeoutUs = UINT32_MAX; },
+  };
+  for (Change change : invalid) {
+    RequestedDelayBus bus;
+    Config cfg = bus.config(true);
+    change(cfg);
+    OperationTimingBound out;
+    out.requestedDelayUs = UINT64_MAX;
+    const Status calculated = EE871::EE871::operationTimingBound(
+        cfg, OperationKind::BEGIN, out);
+    EE871::EE871 dev;
+    const Status begun = dev.begin(cfg);
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_CONFIG),
+                            static_cast<uint8_t>(calculated.code));
+    assertSameStatus(begun, calculated);
+    TEST_ASSERT_EQUAL_UINT64(UINT64_MAX, out.requestedDelayUs);
+    TEST_ASSERT_EQUAL_UINT32(0, bus.callbackCalls);
+  }
+  for (uint8_t slice : {1, 50}) {
+    RequestedDelayBus bus;
+    Config cfg = bus.config(true);
+    cfg.offlineThreshold = 0;
+    cfg.longDelaySliceMs = slice;
+    cfg.writeDelayMs = 0;
+    cfg.intervalWriteDelayMs = 0;
+    TEST_ASSERT_EQUAL_UINT64(861830,
+        requestedBound(cfg, OperationKind::CUSTOM_WRITE, cmd::CUSTOM_FILTER_CO2));
+    TEST_ASSERT_EQUAL_UINT64(1533050, requestedBound(cfg, OperationKind::INTERVAL_WRITE));
+    TEST_ASSERT_EQUAL_UINT32(0, bus.callbackCalls);
+    TEST_ASSERT_EQUAL_UINT8(0, cfg.offlineThreshold);
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+    TEST_ASSERT_EQUAL_UINT8(1, dev.getConfig().offlineThreshold);
+    bus.record();
+    TEST_ASSERT_TRUE(dev.writeCo2Filter(42).ok());
+    TEST_ASSERT_TRUE(dev.writeMeasurementInterval(300).ok());
+    TEST_ASSERT_EQUAL_UINT32(0, bus.taskDelayCalls);
+    TEST_ASSERT_EQUAL_UINT32(0, bus.yieldCalls);
+  }
+}
+
+void test_requested_delay_primitives_reach_their_hand_derived_bounds() {
+  const uint64_t readExpected[] = {155610, 5901, 420930};
+  const uint64_t pointerExpected[] = {190610, 7792, 455930};
+  for (uint8_t profile = 0; profile < 3; ++profile) {
+    RequestedDelayBus bus;
+    Config cfg = bus.config();
+    setRequestedDelayProfile(cfg, profile);
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+    for (bool pointer : {false, true}) {
+      if (profile == 0) {
+        bus.record({{1, 25000}, {2, 25000}, {3, 8110}, {11, 25000}, {12, 8110},
+                    {20, 25000}, {21, 8110}, {29, 25000}, {30, 8110}, {38, 25000}});
+      } else if (profile == 1) {
+        bus.record({{1, 1}, {2, 1}, {11, 1}, {20, 1}, {29, 1}, {38, 1}});
+      } else {
+        bus.record({{1, 25000}, {2, 17000}, {11, 17000}, {20, 17000},
+                    {29, pointer ? 17000U : 25000U}, {38, 25000}});
+      }
+      uint8_t byte = 0;
+      const Status st = pointer ? dev.setCustomPointer(255)
+                                : dev.readControlByte(cmd::MAIN_TYPE_LO, byte);
+      TEST_ASSERT_TRUE(st.ok());
+      const uint64_t expected = pointer ? pointerExpected[profile] : readExpected[profile];
+      TEST_ASSERT_EQUAL_UINT64(expected, bus.requestedUs);
+      TEST_ASSERT_EQUAL_UINT64(expected, requestedBound(cfg,
+          pointer ? OperationKind::CUSTOM_POINTER : OperationKind::CONTROL_READ,
+          pointer ? 255 : cmd::MAIN_TYPE_LO));
+    }
+  }
+  // A PEC error still consumes the complete read and ordinary STOP allowance.
+  RequestedDelayBus bus;
+  const Config cfg = bus.config();
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+  bus.fake.setCorruptReadPec(true);
+  bus.record({{1, 25000}, {2, 25000}, {3, 8110}, {11, 25000}, {12, 8110},
+              {20, 25000}, {21, 8110}, {29, 25000}});
+  uint8_t byte = 0;
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::PEC_MISMATCH),
+      static_cast<uint8_t>(dev.readStatus(byte).code));
+  TEST_ASSERT_EQUAL_UINT64(155610, bus.requestedUs);
+}
+
+void test_requested_delay_retry_bounds_cover_last_success_exhaustion_and_high_latch() {
+  const uint64_t successful[] = {155610, 242220, 328830, 415440};
+  const uint64_t exhausted[] = {85610, 172220, 258830, 345440};
+  const uint64_t pairs[] = {311220, 484440, 657660, 830880};
+  const uint64_t checked[] = {813050, 1072880, 1332710, 1592540};
+  for (uint8_t retries = 0; retries <= 3; ++retries) {
+    for (bool exhaust : {false, true}) {
+      RequestedDelayBus bus;
+      Config cfg = bus.config();
+      cfg.readNackRetries = retries;
+      EE871::EE871 dev;
+      TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+      bus.fake.nackNextReadMainCommand(cmd::MAIN_STATUS, retries + (exhaust ? 1 : 0));
+      bus.record();
+      for (uint8_t frame = 0; frame < retries; ++frame) bus.appendDefaultFrame(1);
+      bus.appendDefaultFrame(exhaust ? 1 : 3);
+      uint8_t status = 0;
+      const Status st = dev.readStatus(status);
+      TEST_ASSERT_EQUAL(!exhaust, st.ok());
+      if (exhaust) TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NACK), static_cast<uint8_t>(st.code));
+      TEST_ASSERT_EQUAL_UINT64(exhaust ? exhausted[retries] : successful[retries], bus.requestedUs);
+      TEST_ASSERT_EQUAL_UINT64(successful[retries],
+          requestedBound(cfg, OperationKind::CONTROL_READ, cmd::MAIN_STATUS));
+      TEST_ASSERT_EQUAL_UINT64(pairs[retries], requestedBound(cfg, OperationKind::CO2_PAIR_READ));
+      TEST_ASSERT_EQUAL_UINT64(checked[retries], requestedBound(cfg, OperationKind::CO2_CHECKED_SAMPLE));
+      TEST_ASSERT_EQUAL_UINT64(155610,
+          requestedBound(cfg, OperationKind::CONTROL_READ, cmd::MAIN_TYPE_LO));
+      TEST_ASSERT_EQUAL_UINT64(346220,
+          requestedBound(cfg, OperationKind::CUSTOM_READ, cmd::CUSTOM_FILTER_CO2));
+      TEST_ASSERT_EQUAL_UINT64(1011830,
+          requestedBound(cfg, OperationKind::CUSTOM_WRITE, cmd::CUSTOM_FILTER_CO2));
+      TEST_ASSERT_EQUAL_UINT64(4781990, requestedBound(cfg, OperationKind::BEGIN));
+      TEST_ASSERT_EQUAL_UINT64(94704890, requestedBound(cfg, OperationKind::PERSISTENT_RESYNC));
+      TEST_ASSERT_EQUAL_UINT32(retries, dev.readRetryDiagnostics().retries);
+    }
+  }
+  for (bool fast : {false, true}) {
+    RequestedDelayBus bus;
+    Config cfg = bus.config();
+    cfg.readNackRetries = 3;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+    const uint8_t highCommand = fast ? cmd::MAIN_MV3_HI : cmd::MAIN_MV4_HI;
+    bus.fake.nackNextReadMainCommand(highCommand, 3);
+    bus.record();
+    bus.appendDefaultFrame(3); // Latched low byte is read only once.
+    for (uint8_t frame = 0; frame < 3; ++frame) bus.appendDefaultFrame(1);
+    bus.appendDefaultFrame(3);
+    uint16_t value = 0;
+    TEST_ASSERT_TRUE((fast ? dev.readCo2Fast(value) : dev.readCo2Average(value)).ok());
+    TEST_ASSERT_EQUAL_UINT64(571050, bus.requestedUs);
+    TEST_ASSERT_LESS_OR_EQUAL_UINT64(requestedBound(cfg, OperationKind::CO2_PAIR_READ), bus.requestedUs);
+    TEST_ASSERT_EQUAL_UINT32(1, bus.fake.controlCount(fast ? 0xC1 : 0xE1));
+    TEST_ASSERT_EQUAL_UINT32(4, bus.fake.controlCount(fast ? 0xD1 : 0xF1));
+    TEST_ASSERT_EQUAL_UINT16(fast ? 600 : 650, value);
+  }
+}
+
+void test_requested_delay_bounds_cover_failed_cleanup_veto_and_later_timeout() {
+  for (uint8_t scenario = 0; scenario < 6; ++scenario) {
+    RequestedDelayBus bus;
+    Config cfg = bus.config();
+    cfg.readNackRetries = 3;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+    bus.fake.nackNextReadMainCommand(cmd::MAIN_STATUS, scenario == 5 ? 1 : 4);
+    bus.record();
+    if (scenario < 3) bus.fake.vetoReadRetryOnCall(scenario + 1);
+    if (scenario == 3) bus.fake.stretchClockReleaseAfter(11, 25001); // NACK cleanup timeout.
+    if (scenario == 4) bus.fake.stretchClockReleaseAfter(2, 25001); // First byte timeout.
+    if (scenario == 5) bus.fake.stretchClockReleaseAfter(13, 25001); // First retried byte.
+    uint8_t byte = 0;
+    const Status st = dev.readStatus(byte);
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(scenario >= 4 ? Err::TIMEOUT : Err::NACK),
+                            static_cast<uint8_t>(st.code));
+    TEST_ASSERT_LESS_OR_EQUAL_UINT64(
+        requestedBound(cfg, OperationKind::CONTROL_READ, cmd::MAIN_STATUS), bus.requestedUs);
+    if (scenario < 3) {
+      TEST_ASSERT_TRUE(dev.readRetryDiagnostics().retryVetoed);
+      TEST_ASSERT_EQUAL_UINT64(scenario == 0 ? 2500 : 3500, bus.requestedUs);
+    }
+    if (scenario == 3) TEST_ASSERT_TRUE(dev.readRetryDiagnostics().cleanupBlocked);
+    TEST_ASSERT_EQUAL_UINT32(scenario == 5 ? 1 : 0, dev.readRetryDiagnostics().retries);
+  }
+}
+
+void test_requested_delay_verified_write_reaches_bound_including_flash_stop_and_quiet_wait() {
+  for (bool taskWaits : {false, true}) {
+    RequestedDelayBus bus;
+    Config cfg = bus.config(taskWaits);
+    cfg.longDelaySliceMs = 7;
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+    bus.record();
+    bus.appendDefaultFrame(4, 350000);
+    bus.appendDefaultFrame(4);
+    bus.appendDefaultFrame(3);
+    TEST_ASSERT_TRUE(dev.writeCo2Filter(42).ok());
+    TEST_ASSERT_EQUAL_UINT64(1011830, bus.requestedUs);
+    TEST_ASSERT_EQUAL_UINT64(1011830,
+        requestedBound(cfg, OperationKind::CUSTOM_WRITE, cmd::CUSTOM_FILTER_CO2));
+    TEST_ASSERT_EQUAL_UINT32(taskWaits ? 22 : 0, bus.taskDelayCalls);
+    TEST_ASSERT_EQUAL_UINT32(taskWaits ? 22 : 0, bus.yieldCalls);
+  }
+  RequestedDelayBus bus;
+  const Config cfg = bus.config(true);
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+  bus.record();
+  bus.appendDefaultFrame(4, 350001);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::TIMEOUT),
+      static_cast<uint8_t>(dev.writeCo2Filter(42).code));
+  TEST_ASSERT_EQUAL_UINT64(515410, bus.requestedUs);
+  TEST_ASSERT_LESS_OR_EQUAL_UINT64(
+      requestedBound(cfg, OperationKind::CUSTOM_WRITE, cmd::CUSTOM_FILTER_CO2), bus.requestedUs);
+  TEST_ASSERT_TRUE(dev.persistentConfigDirty());
+  TEST_ASSERT_EQUAL_UINT32(0, bus.taskDelayCalls);
+}
+
+void test_requested_delay_compound_bounds_cover_executed_operations_and_failures() {
+  struct Case { OperationKind kind; uint16_t target; uint32_t writes; uint32_t pointers;
+                uint32_t reads; uint32_t quietMs; };
+  const Case cases[] = {
+      {OperationKind::CUSTOM_WRITE, cmd::CUSTOM_BUS_ADDRESS, 1, 1, 1, 150},
+      {OperationKind::CUSTOM_WRITE, cmd::CUSTOM_OPERATING_MODE, 1, 1, 1, 150},
+      {OperationKind::CUSTOM_WRITE, cmd::CUSTOM_CO2_INTERVAL_FACTOR, 1, 1, 1, 150},
+      {OperationKind::CUSTOM_WRITE, cmd::CUSTOM_FILTER_CO2, 1, 1, 1, 150},
+      {OperationKind::INTERVAL_WRITE, 0, 2, 1, 2, 300},
+      {OperationKind::CUSTOM_WRITE, cmd::CUSTOM_INTERVAL_L, 2, 2, 3, 300},
+      {OperationKind::CUSTOM_WRITE, cmd::CUSTOM_INTERVAL_H, 2, 2, 3, 300},
+      {OperationKind::CO2_ADJUSTMENT_WRITE, 0, 2, 3, 3, 300},
+      {OperationKind::PART_NAME_WRITE, 0, 16, 16, 16, 2400},
+      {OperationKind::AUTO_ADJUST_START, 0, 1, 2, 2, 150},
+      {OperationKind::CO2_ADJUSTMENT_READ, 0, 0, 2, 3, 0},
+      {OperationKind::CO2_CAL_POINTS_READ, 0, 0, 2, 5, 0},
+  };
+  for (uint8_t profile : {0, 2}) {
+    for (uint8_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+      const Case& entry = cases[i];
+      RequestedDelayBus bus;
+      Config cfg = bus.config(true);
+      setRequestedDelayProfile(cfg, profile);
+      cfg.readNackRetries = 3;
+      EE871::EE871 dev;
+      TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+      const uint32_t pointersBefore = bus.fake.controlCount(0x50);
+      const uint32_t readsBefore = bus.fake.controlCount(0x51);
+      bus.record();
+      uint8_t name[16] = {};
+      int16_t offset = 0;
+      uint16_t lower = 0, upper = 0;
+      Status st;
+      switch (i) {
+        case 0: st = dev.writeBusAddress(3); break;
+        case 1: st = dev.writeOperatingMode(1); break;
+        case 2: st = dev.writeCo2IntervalFactor(-2); break;
+        case 3: st = dev.writeCo2Filter(42); break;
+        case 4: st = dev.writeMeasurementInterval(300); break;
+        case 5: st = dev.customWrite(cmd::CUSTOM_INTERVAL_L, 151); break;
+        case 6: st = dev.customWrite(cmd::CUSTOM_INTERVAL_H, 1); break;
+        case 7: st = dev.writeCo2Offset(-123); break;
+        case 8: st = dev.writePartName(name); break;
+        case 9: st = dev.startAutoAdjust(); break;
+        case 10: st = dev.readCo2Offset(offset); break;
+        default: st = dev.readCo2CalPoints(lower, upper); break;
+      }
+      TEST_ASSERT_TRUE(st.ok());
+      TEST_ASSERT_LESS_OR_EQUAL_UINT64(requestedBound(cfg, entry.kind, entry.target), bus.requestedUs);
+      TEST_ASSERT_EQUAL_UINT32(entry.writes, bus.fake.controlCount(0x10));
+      TEST_ASSERT_EQUAL_UINT32(entry.pointers, bus.fake.controlCount(0x50) - pointersBefore);
+      TEST_ASSERT_EQUAL_UINT32(entry.reads, bus.fake.controlCount(0x51) - readsBefore);
+      TEST_ASSERT_EQUAL_UINT32(0, dev.readRetryDiagnostics().retries);
+      const uint32_t quietMs = profile == 0 ? entry.quietMs
+          : (i == 4 || i == 5 || i == 6 ? 5000U : entry.writes * 5000U);
+      TEST_ASSERT_EQUAL_UINT32(quietMs / 10U, bus.taskDelayCalls);
+      TEST_ASSERT_EQUAL_UINT32(bus.taskDelayCalls, bus.yieldCalls);
+    }
+  }
+  // Late failures retain all earlier requests, waits, and readback work.
+  for (uint8_t scenario = 0; scenario < 4; ++scenario) {
+    RequestedDelayBus bus;
+    const Config cfg = bus.config(true);
+    EE871::EE871 dev;
+    TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+    bus.record();
+    if (scenario == 0) bus.fake.corruptNextCustomReadPec(cmd::CUSTOM_INTERVAL_H);
+    if (scenario == 1) bus.fake.failNextWriteToAddress(cmd::CUSTOM_CO2_GAIN_H);
+    if (scenario == 2) bus.fake.failNextWriteToAddress(cmd::CUSTOM_PART_NAME_START + 15);
+    if (scenario == 3) bus.fake.setMemory(cmd::CUSTOM_AUTO_ADJUST, 1);
+    uint8_t name[16] = {};
+    Status st;
+    if (scenario == 0) st = dev.writeMeasurementInterval(300);
+    if (scenario == 1) st = dev.writeCo2Gain(100);
+    if (scenario == 2) st = dev.writePartName(name);
+    if (scenario == 3) st = dev.startAutoAdjust();
+    const OperationKind kinds[] = {OperationKind::INTERVAL_WRITE, OperationKind::CO2_ADJUSTMENT_WRITE,
+                                   OperationKind::PART_NAME_WRITE, OperationKind::AUTO_ADJUST_START};
+    const Err errors[] = {Err::PEC_MISMATCH, Err::NACK, Err::NACK, Err::BUSY};
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(errors[scenario]), static_cast<uint8_t>(st.code));
+    TEST_ASSERT_LESS_OR_EQUAL_UINT64(requestedBound(cfg, kinds[scenario]), bus.requestedUs);
+    if (scenario == 3) TEST_ASSERT_EQUAL_UINT32(0, bus.fake.controlCount(0x10));
+  }
+}
+
+void test_requested_delay_lifecycle_bounds_include_reset_identity_and_capabilities() {
+  for (uint8_t operation = 0; operation < 4; ++operation) {
+    RequestedDelayBus bus;
+    Config cfg = bus.config();
+    cfg.readNackRetries = 3;
+    EE871::EE871 dev;
+    if (operation != 0) TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+    const uint32_t pointersBefore = bus.fake.controlCount(0x50);
+    const uint32_t readsBefore = bus.fake.controlCount(0x51);
+    bus.record();
+    if (operation != 1) {
+      // Nine reset releases and its STOP all reach the flash allowance.
+      for (uint32_t release = 1; release <= 10; ++release) {
+        bus.stretches[bus.stretchCount++] = {release, 350000};
+      }
+      bus.scheduledReleases = 10;
+    }
+    if (operation != 3) {
+      for (uint8_t frame = 0; frame < 4; ++frame) bus.appendDefaultFrame(3);
+      if (operation != 1) {
+        bus.appendDefaultFrame(4);
+        for (uint8_t frame = 0; frame < 3; ++frame) bus.appendDefaultFrame(3);
+      }
+    }
+    if (operation == 0) bus.fake.releaseSdaAfterClockRises(9);
+    Status st;
+    if (operation == 0) st = dev.begin(cfg);
+    if (operation == 1) st = dev.probe();
+    if (operation == 2) st = dev.recover();
+    if (operation == 3) st = dev.busReset();
+    TEST_ASSERT_TRUE(st.ok());
+    const OperationKind kinds[] = {OperationKind::BEGIN, OperationKind::PROBE,
+                                   OperationKind::RECOVER, OperationKind::BUS_RESET};
+    const uint64_t expected[] = {4781990, 622440, 4781990, 3502110};
+    TEST_ASSERT_EQUAL_UINT64(expected[operation], bus.requestedUs);
+    TEST_ASSERT_EQUAL_UINT64(expected[operation], requestedBound(cfg, kinds[operation]));
+    TEST_ASSERT_EQUAL_UINT32(operation == 0 || operation == 2 ? 1 : 0,
+        bus.fake.controlCount(0x50) - pointersBefore);
+    TEST_ASSERT_EQUAL_UINT32(operation == 0 || operation == 2 ? 3 : 0,
+        bus.fake.controlCount(0x51) - readsBefore);
+  }
+  for (uint8_t fault = 0; fault < 3; ++fault) {
+    RequestedDelayBus bus;
+    const Config cfg = bus.config();
+    if (fault == 0) bus.fake.setDevicePresent(false);
+    if (fault == 1) bus.fake.setHoldSclLow(true);
+    if (fault == 2) bus.fake.setMemory(cmd::CUSTOM_SPECIAL_FEATURES, 0x80);
+    EE871::EE871 dev;
+    TEST_ASSERT_FALSE(dev.begin(cfg).ok());
+    TEST_ASSERT_FALSE(dev.isInitialized());
+    TEST_ASSERT_LESS_OR_EQUAL_UINT64(requestedBound(cfg, OperationKind::BEGIN), bus.requestedUs);
+  }
+}
+
+void test_requested_delay_checked_sample_bound_covers_optional_error_detail_and_failures() {
+  for (bool fast : {false, true}) {
+    for (uint8_t outcome = 0; outcome < 4; ++outcome) {
+      RequestedDelayBus bus;
+      Config cfg = bus.config();
+      cfg.readNackRetries = 3;
+      if (outcome == 3) {
+        bus.fake.setMemory(cmd::CUSTOM_OPERATING_FUNCTIONS,
+            bus.fake.memory(cmd::CUSTOM_OPERATING_FUNCTIONS) & ~cmd::FEATURE_ERROR_CODE);
+      }
+      EE871::EE871 dev;
+      TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+      if (outcome != 0) bus.fake.setStatus(cmd::STATUS_CO2_ERROR_MASK);
+      bus.fake.setMemory(cmd::CUSTOM_ERROR_CODE, 201);
+      if (outcome == 2) bus.fake.corruptNextCustomReadPec(cmd::CUSTOM_ERROR_CODE);
+      const uint32_t pointersBefore = bus.fake.controlCount(0x50);
+      bus.record();
+      Co2ReadResult result;
+      const Status st = fast ? dev.readCo2FastSample(result) : dev.readCo2AverageSample(result);
+      TEST_ASSERT_EQUAL(outcome == 0, st.ok());
+      TEST_ASSERT_TRUE(result.valueValid);
+      TEST_ASSERT_TRUE(result.statusValid);
+      TEST_ASSERT_EQUAL(outcome == 1 || outcome == 2, result.errorCodeReadAttempted);
+      TEST_ASSERT_EQUAL_UINT32(outcome == 1 || outcome == 2 ? 1 : 0,
+          bus.fake.controlCount(0x50) - pointersBefore);
+      TEST_ASSERT_LESS_OR_EQUAL_UINT64(requestedBound(cfg, OperationKind::CO2_CHECKED_SAMPLE), bus.requestedUs);
+      TEST_ASSERT_EQUAL_UINT64(1592540, requestedBound(cfg, OperationKind::CO2_CHECKED_SAMPLE));
+    }
+  }
+}
+
+void test_requested_delay_resync_bound_covers_no_targets_and_all_256_targets() {
+  RequestedDelayBus bus;
+  Config cfg = bus.config();
+  cfg.writeDelayMs = 0;
+  cfg.intervalWriteDelayMs = 0;
+  EE871::EE871 dev;
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+  uint32_t pointersBefore = bus.fake.controlCount(0x50);
+  uint32_t readsBefore = bus.fake.controlCount(0x51);
+  bus.record();
+  TEST_ASSERT_TRUE(dev.resyncPersistentConfig().ok());
+  TEST_ASSERT_EQUAL_UINT32(4, bus.fake.controlCount(0x50) - pointersBefore);
+  TEST_ASSERT_EQUAL_UINT32(23, bus.fake.controlCount(0x51) - readsBefore);
+  TEST_ASSERT_EQUAL_UINT64(177120, bus.requestedUs);
+  TEST_ASSERT_LESS_OR_EQUAL_UINT64(requestedBound(cfg, OperationKind::PERSISTENT_RESYNC), bus.requestedUs);
+
+  // Fail verification after each same-value write through the public API.
+  // This retains every target while preserving valid support/baseline fields.
+  for (uint16_t address = 0; address < 256; ++address) {
+    const uint8_t target = static_cast<uint8_t>(address);
+    bus.fake.corruptReadPecAfterNextWrite(target);
+    const Status st = dev.customWrite(target, bus.fake.memory(target));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::PEC_MISMATCH), static_cast<uint8_t>(st.code));
+    TEST_ASSERT_TRUE(dev.persistentConfigDirty());
+  }
+  const Status original = dev.persistentConfigDirtyError();
+  const auto evidence = dev.getLastPersistentOperation();
+  for (bool failLast : {true, false}) {
+    if (failLast) bus.fake.corruptNextCustomReadPec(255);
+    pointersBefore = bus.fake.controlCount(0x50);
+    readsBefore = bus.fake.controlCount(0x51);
+    bus.record();
+    const Status st = dev.resyncPersistentConfig();
+    TEST_ASSERT_EQUAL(!failLast, st.ok());
+    TEST_ASSERT_EQUAL_UINT32(265, bus.fake.controlCount(0x50) - pointersBefore);
+    TEST_ASSERT_EQUAL_UINT32(284, bus.fake.controlCount(0x51) - readsBefore);
+    TEST_ASSERT_EQUAL_UINT64(3948570, bus.requestedUs);
+    TEST_ASSERT_EQUAL_UINT64(94704890, requestedBound(cfg, OperationKind::PERSISTENT_RESYNC));
+    TEST_ASSERT_LESS_OR_EQUAL_UINT64(requestedBound(cfg, OperationKind::PERSISTENT_RESYNC), bus.requestedUs);
+    TEST_ASSERT_EQUAL(failLast, dev.persistentConfigDirty());
+    if (failLast) assertSameStatus(original, dev.persistentConfigDirtyError());
+    assertSamePersistentOperation(evidence, dev.getLastPersistentOperation());
+  }
+}
+
+void test_requested_delay_queries_preserve_state_config_health_and_persistent_evidence() {
+  for (uint8_t state = 0; state < 4; ++state) {
+    RequestedDelayBus bus;
+    Config cfg = bus.config(true);
+    cfg.readNackRetries = 1;
+    cfg.offlineThreshold = state == 3 ? 1 : 5;
+    EE871::EE871 dev;
+    if (state != 0) {
+      TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+      dev.tick(1234);
+      bus.fake.nackNextReadMainCommand(cmd::MAIN_STATUS);
+      uint8_t status = 0;
+      TEST_ASSERT_TRUE(dev.readStatus(status).ok());
+      bus.fake.corruptReadPecAfterNextWrite(cmd::CUSTOM_FILTER_CO2);
+      TEST_ASSERT_FALSE(dev.writeCo2Filter(42).ok());
+      if (state == 1) TEST_ASSERT_TRUE(dev.readStatus(status).ok());
+    }
+    const DriverState expected[] = {DriverState::UNINIT, DriverState::READY,
+                                    DriverState::DEGRADED, DriverState::OFFLINE};
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(expected[state]), static_cast<uint8_t>(dev.state()));
+    const SettingsSnapshot before = dev.getSettings();
+    const auto evidence = dev.getLastPersistentOperation();
+    bus.record();
+    for (uint8_t repeat = 0; repeat < 3; ++repeat) {
+      for (uint8_t operation = 0; operation <= static_cast<uint8_t>(OperationKind::CO2_CHECKED_SAMPLE);
+           ++operation) {
+        const auto kind = static_cast<OperationKind>(operation);
+        const uint16_t target = kind == OperationKind::CONTROL_READ ? cmd::MAIN_STATUS : 0;
+        (void)requestedBound(cfg, kind, target);
+      }
+    }
+    TEST_ASSERT_EQUAL_UINT32(0, bus.callbackCalls);
+    TEST_ASSERT_EQUAL_UINT64(0, bus.requestedUs);
+    const SettingsSnapshot after = dev.getSettings();
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(before.state), static_cast<uint8_t>(after.state));
+    TEST_ASSERT_EQUAL(before.initialized, after.initialized);
+    TEST_ASSERT_EQUAL_UINT32(before.nowMs, after.nowMs);
+    TEST_ASSERT_EQUAL_UINT32(before.lastOkMs, after.lastOkMs);
+    TEST_ASSERT_EQUAL_UINT32(before.lastErrorMs, after.lastErrorMs);
+    TEST_ASSERT_EQUAL_UINT8(before.consecutiveFailures, after.consecutiveFailures);
+    TEST_ASSERT_EQUAL_UINT32(before.totalSuccess, after.totalSuccess);
+    TEST_ASSERT_EQUAL_UINT32(before.totalFailures, after.totalFailures);
+    TEST_ASSERT_EQUAL_HEX8(before.operatingFunctions, after.operatingFunctions);
+    TEST_ASSERT_EQUAL_HEX8(before.operatingModeSupport, after.operatingModeSupport);
+    TEST_ASSERT_EQUAL_HEX8(before.specialFeatures, after.specialFeatures);
+    assertSameStatus(before.lastError, after.lastError);
+    TEST_ASSERT_EQUAL(before.persistentConfigDirty, after.persistentConfigDirty);
+    assertSameStatus(before.persistentConfigDirtyError, after.persistentConfigDirtyError);
+    TEST_ASSERT_EQUAL_UINT32(before.readRetry.controlNacks, after.readRetry.controlNacks);
+    TEST_ASSERT_EQUAL_UINT32(before.readRetry.retries, after.readRetry.retries);
+    TEST_ASSERT_EQUAL_UINT32(before.readRetry.recovered, after.readRetry.recovered);
+    TEST_ASSERT_EQUAL_UINT32(before.readRetry.exhausted, after.readRetry.exhausted);
+    TEST_ASSERT_EQUAL_UINT8(before.readRetry.lastControlByte, after.readRetry.lastControlByte);
+    TEST_ASSERT_EQUAL_UINT8(before.readRetry.lastRetriesUsed, after.readRetry.lastRetriesUsed);
+    TEST_ASSERT_EQUAL(before.readRetry.cleanupBlocked, after.readRetry.cleanupBlocked);
+    TEST_ASSERT_EQUAL(before.readRetry.retryVetoed, after.readRetry.retryVetoed);
+    TEST_ASSERT_EQUAL(before.readRetry.lastRecovered, after.readRetry.lastRecovered);
+    assertSameStatus(before.readRetry.lastError, after.readRetry.lastError);
+    assertSameStatus(before.readRetry.lastCleanupError, after.readRetry.lastCleanupError);
+    // Compare fields rather than unspecified structure padding.
+    const Config& a = before.config;
+    const Config& b = after.config;
+    TEST_ASSERT_TRUE(a.setScl == b.setScl && a.setSda == b.setSda);
+    TEST_ASSERT_TRUE(a.readScl == b.readScl && a.readSda == b.readSda);
+    TEST_ASSERT_TRUE(a.delayUs == b.delayUs && a.busUser == b.busUser);
+    TEST_ASSERT_TRUE(a.delayMs == b.delayMs && a.yield == b.yield);
+    TEST_ASSERT_TRUE(a.allowReadRetry == b.allowReadRetry);
+    TEST_ASSERT_EQUAL_UINT8(a.deviceAddress, b.deviceAddress);
+    TEST_ASSERT_EQUAL_UINT16(a.clockLowUs, b.clockLowUs);
+    TEST_ASSERT_EQUAL_UINT16(a.clockHighUs, b.clockHighUs);
+    TEST_ASSERT_EQUAL_UINT16(a.startHoldUs, b.startHoldUs);
+    TEST_ASSERT_EQUAL_UINT16(a.stopHoldUs, b.stopHoldUs);
+    TEST_ASSERT_EQUAL_UINT32(a.bitTimeoutUs, b.bitTimeoutUs);
+    TEST_ASSERT_EQUAL_UINT32(a.byteTimeoutUs, b.byteTimeoutUs);
+    TEST_ASSERT_EQUAL_UINT32(a.flashStretchTimeoutUs, b.flashStretchTimeoutUs);
+    TEST_ASSERT_EQUAL_UINT32(a.writeDelayMs, b.writeDelayMs);
+    TEST_ASSERT_EQUAL_UINT32(a.intervalWriteDelayMs, b.intervalWriteDelayMs);
+    TEST_ASSERT_EQUAL_UINT8(a.offlineThreshold, b.offlineThreshold);
+    TEST_ASSERT_EQUAL_UINT8(a.readNackRetries, b.readNackRetries);
+    TEST_ASSERT_EQUAL_UINT8(a.longDelaySliceMs, b.longDelaySliceMs);
+    assertSamePersistentOperation(evidence, dev.getLastPersistentOperation());
+  }
+}
+
 static void legacySetScl(bool, void*) {}
 static void legacySetSda(bool, void*) {}
 static bool legacyReadScl(void*) { return true; }
@@ -3891,6 +4646,18 @@ void test_legacy_config_aggregate_retains_original_member_bindings() {
 
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(test_requested_delay_bounds_match_independent_operation_examples);
+  RUN_TEST(test_requested_delay_bounds_reject_selectors_counts_and_ranges_without_output);
+  RUN_TEST(test_requested_delay_validation_agrees_with_begin_and_preserves_zero_waits);
+  RUN_TEST(test_requested_delay_primitives_reach_their_hand_derived_bounds);
+  RUN_TEST(test_requested_delay_retry_bounds_cover_last_success_exhaustion_and_high_latch);
+  RUN_TEST(test_requested_delay_bounds_cover_failed_cleanup_veto_and_later_timeout);
+  RUN_TEST(test_requested_delay_verified_write_reaches_bound_including_flash_stop_and_quiet_wait);
+  RUN_TEST(test_requested_delay_compound_bounds_cover_executed_operations_and_failures);
+  RUN_TEST(test_requested_delay_lifecycle_bounds_include_reset_identity_and_capabilities);
+  RUN_TEST(test_requested_delay_checked_sample_bound_covers_optional_error_detail_and_failures);
+  RUN_TEST(test_requested_delay_resync_bound_covers_no_targets_and_all_256_targets);
+  RUN_TEST(test_requested_delay_queries_preserve_state_config_health_and_persistent_evidence);
   RUN_TEST(test_maintenance_wait_fallback_preserves_one_micro_delay_per_millisecond);
   RUN_TEST(test_maintenance_wait_callbacks_cover_slice_boundaries_and_order);
   RUN_TEST(test_maintenance_wait_config_rejects_invalid_without_io_and_preserves_active_session);

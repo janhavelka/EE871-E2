@@ -49,6 +49,159 @@ class CliContractTests(unittest.TestCase):
             self.assertEqual(0, arduino.main())
             self.assertEqual(0, idf.main())
 
+    def test_requested_delay_contract_rejects_bus_calls_and_wall_time_claims(self) -> None:
+        for relative in (
+            "examples/01_basic_bringup_cli/main.cpp",
+            "examples/idf/basic_bringup/main/main.cpp",
+        ):
+            source = (ROOT / relative).read_text(encoding="utf-8")
+            mutations = (
+                (
+                    "void printRequestedDelayBounds(const EE871::Config& config) {",
+                    "void printRequestedDelayBounds(const EE871::Config& config) { config.readScl(config.busUser);",
+                    "must not invoke driver or transport callbacks",
+                ),
+                (
+                    "void printRequestedDelayBounds(const EE871::Config& config) {",
+                    "void printRequestedDelayBounds(const EE871::Config& config) { device.recover();",
+                    "must not invoke driver or transport callbacks",
+                ),
+                ("Not a wall-clock bound:", "Wall-clock bound:", "must explain"),
+                ("EE871::EE871::operationTimingBound(config,", "calculateFakeBound(config,", "pure explicit-config calculator"),
+                ("bound.requestedDelayUs", "0", "wide microsecond result"),
+            )
+            for old, new, expected in mutations:
+                with self.subTest(source=relative, mutation=old):
+                    self.assertIn(old, source)
+                    errors = arduino.requested_delay_cli_errors(source.replace(old, new, 1))
+                    self.assertTrue(any(expected in error for error in errors), errors)
+
+    def test_requested_delay_formatters_use_real_calculator_without_io(self) -> None:
+        # Compile the actual helpers against the real core, without a device
+        # object. GPIO, delay, yield and retry callbacks are counter traps.
+        compiler = shutil.which("g++")
+        self.assertIsNotNone(compiler, "Native bounds formatter regression requires g++")
+        source = r'''
+#include "EE871/EE871.h"
+#include <cassert>
+#include <cstdarg>
+#include <cstdio>
+#include <cstring>
+struct FakeSerial {
+  void printf(const char* format, ...) {
+    va_list args; va_start(args, format); std::vprintf(format, args); va_end(args);
+  }
+} Serial;
+unsigned callbackCalls = 0;
+unsigned statusPrints = 0;
+void setLine(bool, void*) { ++callbackCalls; }
+bool readLine(void*) { ++callbackCalls; return true; }
+void delayTime(uint32_t, void*) { ++callbackCalls; }
+void yieldTask(void*) { ++callbackCalls; }
+bool allowRetry(void*) { ++callbackCalls; return true; }
+void printStatus(const EE871::Status& status) {
+  ++statusPrints;
+  assert(status.code == EE871::Err::INVALID_CONFIG);
+  std::printf("  Status: INVALID_CONFIG (code=%u, detail=%ld)\n",
+              static_cast<unsigned>(status.code), static_cast<long>(status.detail));
+}
+'''
+        for name, relative in (
+            ("arduino", "examples/01_basic_bringup_cli/main.cpp"),
+            ("idf", "examples/idf/basic_bringup/main/main.cpp"),
+        ):
+            text = (ROOT / relative).read_text(encoding="utf-8")
+            formatter = arduino.extract_section(text, "void printRequestedDelayBounds", "void printVersionInfo")
+            source += f"namespace {name} {{\n" + formatter + "\n}\n"
+        source += r'''
+int main() {
+  void (*formatters[])(const EE871::Config&) = {
+      arduino::printRequestedDelayBounds, idf::printRequestedDelayBounds};
+  for (unsigned implementation = 0; implementation < 2; ++implementation) {
+    for (unsigned scenario = 0; scenario < 5; ++scenario) {
+      EE871::Config config;
+      if (scenario != 3) {
+        config.setScl = config.setSda = setLine;
+        config.readScl = config.readSda = readLine;
+        config.delayUs = config.delayMs = delayTime;
+        config.yield = yieldTask;
+        config.allowReadRetry = allowRetry;
+      }
+      if (scenario == 1) config.readNackRetries = 3;
+      if (scenario == 2) config.writeDelayMs = config.intervalWriteDelayMs = 0;
+      if (scenario == 4) config.longDelaySliceMs = 0;
+      unsigned char before[sizeof(config)];
+      std::memcpy(before, &config, sizeof(config));
+      for (unsigned repeat = 0; repeat < 2; ++repeat) {
+        std::printf("CASE %u:%u:%u\n", implementation, scenario, repeat);
+        statusPrints = 0;
+        formatters[implementation](config);
+        assert(statusPrints == (scenario == 4 ? 1U : 0U));
+        assert(callbackCalls == 0);
+        assert(std::memcmp(before, &config, sizeof(config)) == 0);
+      }
+    }
+  }
+}
+'''
+        with tempfile.TemporaryDirectory(prefix="ee871-bounds-cli-") as directory:
+            cpp = pathlib.Path(directory) / "bounds.cpp"
+            executable = pathlib.Path(directory) / "bounds.exe"
+            cpp.write_text(source, encoding="utf-8")
+            build = subprocess.run(
+                [compiler, "-std=c++17", "-I", str(ROOT / "include"), str(cpp),
+                 str(ROOT / "src" / "EE871.cpp"), "-o", str(executable)],
+                capture_output=True, text=True, timeout=60,
+            )
+            self.assertEqual(0, build.returncode, build.stdout + build.stderr)
+            run = subprocess.run([str(executable)], capture_output=True, text=True, timeout=10)
+            self.assertEqual(0, run.returncode, run.stdout + run.stderr)
+        captures = re.split(r"CASE \d:\d:\d\n", run.stdout)[1:]
+        self.assertEqual(20, len(captures))
+        for scenario in range(5):
+            capture = captures[scenario * 2]
+            self.assertEqual(capture, captures[scenario * 2 + 1])
+            self.assertEqual(capture, captures[10 + scenario * 2])
+            self.assertEqual(capture, captures[11 + scenario * 2])
+            self.assertIn("no bus I/O", capture)
+            self.assertIn("Not a wall-clock bound:", capture)
+            values = {label: int(value) for label, value in re.findall(r"^  (.+): (\d+) us$", capture, re.M)}
+            if scenario == 4:
+                self.assertEqual({}, values)
+                self.assertIn("bound unavailable", capture)
+                self.assertEqual("INVALID_CONFIG", runner.parse_status(capture)["status"]["name"])
+                continue
+            # Independent review of the operation graph gives START 25,300 us,
+            # ordinary STOP 25,310 us, read 155,610 us and pointer 190,610 us.
+            # A retry adds one control-NACK frame (85,610 us) plus a 1,000 us pause.
+            # Persistent pairs differ: interval shares one readback pointer,
+            # while offset/gain verify each byte with its own pointer/read.
+            expected = {
+                "Control read (group low)": 155610,
+                "Status read (configured retries)": 415440 if scenario == 1 else 155610,
+                "Raw MV3/MV4 pair": 830880 if scenario == 1 else 311220,
+                "Checked sample (including error detail)": 1592540 if scenario == 1 else 813050,
+                "Volatile custom pointer": 190610,
+                "Custom block read (0x00..0xFF)": 40026770,
+                "Verified custom byte (filter)": 861830 if scenario == 2 else 1011830,
+                "Raw interval byte (companion + pair)": 1879270 if scenario == 2 else 2179270,
+                "Interval pair write": 1533050 if scenario == 2 else 1833050,
+                "Offset/gain read (including support)": 848050,
+                "Calibration points read (including support)": 1159270,
+                "Offset/gain write (including support)": 2069880 if scenario == 2 else 2369880,
+                "Part-name write (16 bytes)": 13789280 if scenario == 2 else 16189280,
+                "Auto-adjust preflight + request": 1208050 if scenario == 2 else 1358050,
+                "Begin (including possible reset)": 4781990,
+                "Probe": 622440,
+                "Recover": 4781990,
+                "Bus reset": 3502110,
+                # Baseline interval, auto-adjust idle, adjustment support and
+                # calibration/name blocks, 256 pending reads, four point-support reads.
+                "Persistent resync (all 256 pending targets)": 94704890,
+            }
+            self.assertEqual(expected, values)
+            self.assertEqual([], runner.parse_status(capture).get("statuses", []))
+
     def test_checked_sample_commands_remain_manual(self) -> None:
         for options in ([], ["--include-niche"], ["--include-extended"],
                         ["--include-niche", "--include-extended"]):

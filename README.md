@@ -349,14 +349,116 @@ scheduler delay and callback/yield overhead can lengthen the actual wait and
 are excluded from requested-delay sums. Ownership remains with the calling
 application; no background task or asynchronous engine is introduced.
 
-A reset has nine clock releases plus STOP, so its maximum stretch allowance is
-`10 * flashStretchTimeoutUs` plus nominal phases. Transaction bounds include
-START, three read or four write byte budgets, and the command's STOP budget.
-With default timing, an ordinary read's requested-delay bound is 155,610 us;
-a volatile pointer write's is 190,610 us. Fast/averaged value plus status uses
-three reads (466,830 us), or 813,050 us when followed by an error-code pointer
-write and read, with retries disabled. These are
-budgets for requested callback delays; callbacks must themselves remain bounded.
+### Programmatic requested-delay bounds
+
+`EE871::operationTimingBound(config, kind, out, target, count)` calculates the
+**sum of maximum requested protocol waits/delays under the configured callback
+contract**, in `OperationTimingBound::requestedDelayUs` (`uint64_t`). The static
+query works before `begin()`, including with null transport callbacks. It shares
+the numeric configuration checks with `begin()`; only `begin()` requires the
+transport callbacks to be installed. Calculation invokes no callback, accesses
+no GPIO and changes no driver state. It does not sleep, retry or reset.
+
+```cpp
+EE871::Config planned; // Default timing; no GPIO callbacks needed for this query.
+EE871::OperationTimingBound bound;
+EE871::Status st = EE871::EE871::operationTimingBound(
+    planned, EE871::OperationKind::CO2_CHECKED_SAMPLE, bound);
+if (st.ok()) {
+  const uint64_t requestedUs = bound.requestedDelayUs; // 813050 with defaults.
+  // Add application-owned runtime margins before admitting the operation.
+  (void)requestedUs;
+}
+```
+
+The result is an integer microsecond sum without intermediate rounding. GPIO
+callback execution, optional delay/yield/retry-guard overhead, scheduler
+preemption and latency are outside this bound. A caller needing a wall-clock
+deadline must supply and own bounds for those costs too. This query does not
+predict sensor readiness, sample freshness, calibration completion or device
+presence. Both diagnostic CLIs provide `bounds` to display calculations from
+their configured settings without performing any selected operation. The
+existing `timing` command performs live bus tests and remains separate.
+
+`target` defaults to zero and `count` to one. Only these uses accept other
+values:
+
+| Operation selector | Target and count contract |
+| --- | --- |
+| `CONTROL_READ` | Target is a supported main-command nibble. Status/MV3/MV4 include configured control-NACK retries; identity/custom reads do not. Count is one. |
+| `CUSTOM_POINTER`, `CUSTOM_WRITE` | Target is a custom address 0..255; count is one. `CUSTOM_WRITE` includes verification and handles the special interval-byte path at `0xC6`/`0xC7`. |
+| `CUSTOM_READ` | Target is a custom address 0..255; count is 1..`256 - target`, including the initial pointer update. |
+| All other selectors | Target is zero and count is one; the selected operation has a fixed size. |
+
+Unknown selectors, zero count, non-unit counts for fixed operations and
+inappropriate targets return `INVALID_PARAM`; unsupported EE871 command
+nibbles return `NOT_SUPPORTED`. An address or custom-read span outside the
+memory map, or arithmetic overflow, returns `OUT_OF_RANGE`. Invalid numeric settings return
+`INVALID_CONFIG`. The output is unchanged on any error. Numeric validation
+preserves zero post-write waits and validates `longDelaySliceMs` even when its
+callbacks are absent. Capability-dependent selectors conservatively include
+every supported branch because capabilities are unknown before initialization.
+
+The derivation follows the current transfer helpers. All quantities below are
+microseconds; `B = byteTimeoutUs` already includes nominal setup/high/low phases
+and ACK/NACK. STOP budgets include cleanup after transfer failure. A failed
+START returns earlier, while later failures consume only a prefix plus STOP.
+
+| Primitive | Requested-delay formula | Default |
+| --- | --- | ---: |
+| START `S` | `bitTimeoutUs + 2*startHoldUs + clockLowUs` | 25,300 |
+| Ordinary STOP `T` | `clockLowUs + 10 + bitTimeoutUs + 2*stopHoldUs` | 25,310 |
+| Flash STOP `Tf` | `clockLowUs + 10 + flashStretchTimeoutUs + 2*stopHoldUs` | 350,310 |
+| Ordinary read `R` | `S + 3*B + T` | 155,610 |
+| Volatile pointer `P` | `S + 4*B + T` | 190,610 |
+| Direct persistent frame `F` | `S + 4*B + Tf` | 515,610 |
+| Control-NACK frame `N` | `S + B + T` | 85,610 |
+| Eligible read `Q` | `R + readNackRetries*(N + 1000)` | 155,610 |
+| Custom block `C(n)` | `P + n*R` | `C(1) = 346,220` |
+| Verified direct byte `D` | `F + 1000*writeDelayMs + C(1)` | 1,011,830 |
+| Reset `Z` | `9*(clockLowUs + flashStretchTimeoutUs + clockHighUs) + Tf` | 3,502,110 |
+
+The full operation compositions below use those primitives and default
+settings with retries disabled. They cover early failure and cleanup paths as
+well as success; they are conservative budgets, not measured execution times.
+
+| Operation selector / API | Composition | Default requested us |
+| --- | --- | ---: |
+| `CO2_PAIR_READ` / raw MV3 or MV4 | `2*Q` | 311,220 |
+| `CO2_CHECKED_SAMPLE` / checked fast or average | `3*Q + C(1)`, including optional error detail | 813,050 |
+| `CUSTOM_READ`, address 0, count 256 | `C(256)` | 40,026,770 |
+| `CUSTOM_WRITE`, ordinary byte | `D` | 1,011,830 |
+| `INTERVAL_WRITE` | `I = 2*F + 1000*intervalWriteDelayMs + C(2)` | 1,833,050 |
+| `CUSTOM_WRITE`, address `0xC6` or `0xC7` | `C(1) + I`, including companion read | 2,179,270 |
+| `CO2_ADJUSTMENT_READ` / offset or gain | `C(1) + C(2)`, including support read | 848,050 |
+| `CO2_CAL_POINTS_READ` | `C(1) + C(4)`, including support read | 1,159,270 |
+| `CO2_ADJUSTMENT_WRITE` / offset or gain | `C(1) + 2*D`, each byte verified | 2,369,880 |
+| `PART_NAME_WRITE` | `16*D` | 16,189,280 |
+| `AUTO_ADJUST_START` | `C(1) + D`, including status preflight | 1,358,050 |
+| `PROBE` | `4*R`, strict identity and CO2 capability | 622,440 |
+| `BEGIN`, `RECOVER` | `Z + 4*R + C(3)` | 4,781,990 |
+| `BUS_RESET` | `Z` | 3,502,110 |
+| `PERSISTENT_RESYNC` | `C(2) + C(4) + C(16) + 262*C(1)` | 94,704,890 |
+
+Address, mode, factor and filter writes use `CUSTOM_WRITE` with their register
+address. Their capability checks do not add bus traffic. `BEGIN` reserves a
+reset for an initially non-idle bus; `RECOVER` always attempts it. `PROBE`
+does not reset or reload feature flags. Resync reserves all 256 pending target
+reads, four individual adjustment-point support reads, the possible auto-adjust
+idle preflight, and baseline interval/support/calibration/part-name reads. The
+bound neither exposes the pending bitmap nor assumes it contains one target.
+Cached status/configuration/evidence getters, `tick()` and `end()` request zero delays
+and are intentionally excluded from the selector. `checkBusIdle()` also
+requests zero delay, but it reads GPIO and is not bus-silent.
+
+Post-write callback slicing preserves the exact configured quiet-wait sum.
+Changing slice size or callback presence therefore does not change these
+results. With maximum accepted settings (low/high 1890/100 us, START/STOP holds
+65535 us, bit/byte 25000/35000 us, flash 5000000 us, both quiet waits 5000 ms),
+the resync bound is 240,365,570 us; checked wide arithmetic rejects overflow
+before publishing a result. At minimum accepted settings (low/high 100/100 us,
+START/STOP holds 4 us, bit/byte 1/1891 us, flash 300000 us, zero quiet waits),
+ordinary read, pointer and resync bounds are 5,901, 7,792 and 3,740,764 us.
 
 The library never owns GPIO pins or an I2C/Wire instance. Applications provide `setScl`, `setSda`, `readScl`, `readSda`, and `delayUs` callbacks.
 
@@ -529,7 +631,7 @@ on the same `EE871` instance recursively.
 - Lifecycle: `begin`, `tick`, `end`
 - Diagnostics: `probe`, `recover`, `resyncPersistentConfig`, `busReset`,
   `checkBusIdle`, `persistentConfigDirty`, `persistentConfigDirtyError`,
-  `getLastPersistentOperation`
+  `getLastPersistentOperation`, pure `operationTimingBound`
 - Identification: `readGroup`, `readSubgroup`, `readFirmwareVersion`, `readE2SpecVersion`
 - Measurements: `readStatus`, raw `readCo2Fast` / `readCo2Average`, checked
   `readCo2FastSample` / `readCo2AverageSample`, `readErrorCode`

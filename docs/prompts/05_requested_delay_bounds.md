@@ -1,12 +1,24 @@
 # Prompt 05 — Expose programmatic requested-delay bounds
 
-**Finding:** CAP-3. **Status: NOT IMPLEMENTED.** Optional additive capability.
+**Finding:** CAP-3. **Status: IMPLEMENTED in the selected software scope.** Selected additive capability.
 Invoking this prompt selects a pure operation-bound API and a real diagnostic
 consumer. Current manual bounds are not automatically wrong. Implement against
 the operations actually present on current HEAD, after any selected sample,
 long-wait or mutation prompts; do not require unselected optional APIs.
 No serial access, hardware timing capture or real protocol transactions are
 authorized for validation. A requested-delay bound is not measured wall time.
+
+Implementation disposition: static `operationTimingBound()` accepts explicit
+`Config`, an `OperationKind`, output `OperationTimingBound`, and bounded target/
+count arguments. It returns an integer microsecond requested-delay sum, shares
+numeric configuration validation with `begin()`, and requires no installed
+callbacks for calculation. `bounds` in both Arduino and native IDF diagnostics
+is the real bus-silent consumer. The [README derivation](../../README.md#programmatic-requested-delay-bounds)
+records primitive and compound formulas, including current checked samples,
+quiet waits, interval-byte special handling and all 256 possible resync targets.
+Exact test, build and final-commit CI results belong in the execution handoff;
+no hardware qualification is claimed. The instructions below retain the
+selected scope and acceptance criteria.
 
 ## Re-audit the operation graph
 

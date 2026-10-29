@@ -150,6 +150,56 @@ outcomes or branch retirement are claimed. The remaining decision and tables
 retain the historical audit baseline; their then-missing CAP-4 description is
 superseded by this disposition.
 
+## CAP-3 disposition after the audit - 2026-10-29
+
+**CAP-3 is implemented in the selected software scope.** Static
+`operationTimingBound()` accepts explicit `Config`, a small
+`OperationKind` selector and bounded target/count arguments. The result is the
+sum of maximum requested protocol waits/delays under the configured callback
+contract, in `OperationTimingBound::requestedDelayUs` (`uint64_t`). Numeric
+configuration checks are shared with `begin()`. The calculation works before
+initialization without installed callbacks, invokes no callbacks and changes
+no driver state. Invalid selections/ranges/configuration or overflow leave
+the output unchanged. Both Arduino and native IDF CLIs expose the bus-silent
+`bounds` command as a concrete diagnostic consumer.
+
+The derivation was rebuilt from the current helpers and compound operations.
+The historical `d6100b0` and `dae9bea` formulas cannot be transplanted: their
+volatile pointer completion window, old reset allowance, capability-load count,
+address-write path and limited resync composition do not match current code.
+Current bounds distinguish ordinary versus flash STOP, include failure cleanup,
+charge retries only to eligible control-NACK frames, and retain high-byte retry
+as one frame. Calibration includes on-demand support reads; raw interval-byte
+writes include the companion read and pair commit. Resync reserves every one
+of 256 potential pending targets, four adjustment-point support reads, optional
+auto-adjust idle checks and supported baseline fields. Checked samples include
+possible error-code access. Quiet-wait callback slices retain the exact
+configured requested sum.
+
+The [README derivation](../README.md#programmatic-requested-delay-bounds) records
+independent primitive and compound examples: ordinary read 155,610 us, volatile
+pointer 190,610 us, reset 3,502,110 us, strict begin/recover 4,781,990 us and
+all-target resync 94,704,890 us at defaults. The maximum accepted timing settings
+give a 240,365,570 us resync budget. Native fake execution and constructed fault/
+retry paths supplement these formulas; a successful trace alone is not proof
+of a maximum. Exact local checks, builds and final-commit CI evidence belong
+in the implementation handoff.
+
+`test_requested_delay_primitives_reach_their_hand_derived_bounds` exercises
+constructed primitive maxima, while
+`test_requested_delay_resync_bound_covers_no_targets_and_all_256_targets`
+covers the complete pending-target path. The executable Python regression
+`test_requested_delay_formatters_use_real_calculator_without_io` checks both
+actual CLI consumers. The [prompt index](prompts/README.md) records further
+native retry/failure, settings-boundary and query-purity regressions.
+
+GPIO callback execution, optional callback overhead, scheduler preemption and
+latency remain outside the result. Applications own those additional bounds
+for wall-clock admission. No serial access, hardware protocol transactions,
+electrical timing qualification, calibration or branch retirement is claimed.
+The remaining decision and tables preserve the historical audit baseline;
+their then-missing CAP-3 description is superseded by this disposition.
+
 ## Decision
 
 [Executable software prompts](prompts/README.md) now map HIL-1 and CAP-1..5 to

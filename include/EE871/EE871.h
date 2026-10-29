@@ -20,6 +20,34 @@ enum class DriverState : uint8_t {
   OFFLINE    ///< Latched; ordinary operations fail fast without bus traffic. Only recover() restores READY.
 };
 
+/// Existing operation paths supported by the pure requested-delay calculator.
+/// A count denotes bytes only for CUSTOM_READ; every other kind is one operation.
+enum class OperationKind : uint8_t {
+  CONTROL_READ,        ///< readControlByte(target): target is the supported main-command nibble.
+  CO2_PAIR_READ,       ///< readCo2Fast()/readCo2Average(), including per-byte eligible retries.
+  CUSTOM_POINTER,      ///< setCustomPointer(target), with ordinary STOP allowance.
+  CUSTOM_READ,         ///< customRead(target, buffer, count); no crossing address 0xFF.
+  CUSTOM_WRITE,        ///< customWrite(target, value); C6/C7 include companion read and interval pair.
+  INTERVAL_WRITE,      ///< writeMeasurementInterval(): two frames, one quiet wait, pair readback.
+  CO2_ADJUSTMENT_READ, ///< readCo2Offset()/readCo2Gain(), including on-demand support read.
+  CO2_CAL_POINTS_READ, ///< readCo2CalPoints(), including on-demand support read.
+  CO2_ADJUSTMENT_WRITE,///< writeCo2Offset()/writeCo2Gain(), support plus two verified byte writes.
+  PART_NAME_WRITE,     ///< writePartName(): all 16 verified bytes.
+  AUTO_ADJUST_START,   ///< startAutoAdjust(): status preflight plus verified request byte.
+  BEGIN,              ///< Strict begin(), reserving possible reset, identity and capability loads.
+  PROBE,              ///< probe(): identity only, without reset or capability load.
+  RECOVER,            ///< recover(): reset, identity and capability loads.
+  BUS_RESET,          ///< busReset(): nine releases plus STOP, allowing pending flash.
+  PERSISTENT_RESYNC,   ///< resyncPersistentConfig(): all 256 pending targets and supported branches.
+  CO2_CHECKED_SAMPLE   ///< Checked fast/average sample, including optional error-code read.
+};
+
+/// Sum of maximum requested protocol waits/delays under the configured callback contract.
+/// This is a conservative budget, not measured elapsed time or a hard wall-time bound.
+struct OperationTimingBound {
+  uint64_t requestedDelayUs = 0; ///< Microseconds, exact integer sum with no intermediate rounding.
+};
+
 /// Session counters for eligible tracked MV3/MV4/status control-byte NACKs.
 /// Counters saturate; end()/begin() reset them, recover() preserves them.
 /// Last-event fields describe the latest eligible frame that encountered a
@@ -191,6 +219,42 @@ public:
   EE871(EE871&&) = delete;
   /// @brief Move assignment is disabled.
   EE871& operator=(EE871&&) = delete;
+
+  /// Calculate a conservative requested-delay budget without invoking callbacks.
+  ///
+  /// Pure and usable before begin(), even with null transport callbacks. Uses the
+  /// same numeric configuration validation as begin(); begin additionally requires
+  /// transport callbacks. Zero post-write waits and offlineThreshold=0 stay valid.
+  /// No GPIO, delay, retry, reset, health, capability or evidence state is touched.
+  /// Unknown capabilities/state reserve every supported branch; early rejection
+  /// and failed transfers consume no more than the returned budget. Full byte
+  /// deadlines include nominal phases, and failure cleanup includes STOP.
+  ///
+  /// CONTROL_READ classifies retries from the actual main command. CUSTOM_WRITE
+  /// also covers typed address/mode/factor/filter writes at their register address;
+  /// an address change budget covers the stored byte only, not a candidate session.
+  /// Simple typed custom reads map to CUSTOM_READ with their address/count;
+  /// readU16() is the sum of its two CONTROL_READ bounds. Cache-only diagnostics,
+  /// tick() and end() request zero delay and are intentionally excluded. checkBusIdle()
+  /// also requests zero delay but reads GPIO and is not a cache-only diagnostic.
+  ///
+  /// Quiet-wait slices sum to the configured milliseconds. GPIO execution time,
+  /// delay overshoot, optional callback/guard/yield overhead, scheduler preemption
+  /// and latency are excluded. The application owns any additional wall-time
+  /// bounds and admission policy. This calculator neither performs an operation
+  /// nor certifies persistent effects, calibration success or physical timing.
+  /// @param config Explicit timing/retry configuration; callbacks need not be installed.
+  /// @param operation Existing operation class to budget.
+  /// @param[out] out Published only on success; unchanged on any error.
+  /// @param target Main-command nibble for CONTROL_READ; custom address 0..255 for
+  /// CUSTOM_POINTER/READ/WRITE; must be zero for every other operation.
+  /// @param count CUSTOM_READ byte count 1..256-target; must be one otherwise.
+  /// @return OK, INVALID_CONFIG for numeric configuration errors, INVALID_PARAM
+  /// for unknown selectors/unsupported arguments, NOT_SUPPORTED for an unsupported
+  /// control command, or OUT_OF_RANGE for address/span/arithmetic overflow.
+  static Status operationTimingBound(const Config& config, OperationKind operation,
+                                      OperationTimingBound& out, uint16_t target = 0,
+                                      size_t count = 1);
 
   // =========================================================================
   // Lifecycle

@@ -1,7 +1,8 @@
 # EE871-E2 software implementation prompts
 
-**Status: PARTIALLY IMPLEMENTED.** Prompts 01 through 04 implement HIL-1,
-CAP-1, CAP-2 and CAP-4. Prompts 05 and 06 remain NOT IMPLEMENTED and were not selected.
+**Status: PARTIALLY IMPLEMENTED.** Prompts 01 through 05 implement HIL-1,
+CAP-1, CAP-2, CAP-4 and CAP-3 in the selected software scope.
+Prompt 06 remains NOT IMPLEMENTED and was not selected.
 These executable instructions were prepared on 2026-10-25 after source/test review of clean,
 fetched `main` at `d37b586e35e553af2a65197282d6d478e554733b`.
 The underlying [retained branch audit](../RETAINED_BRANCH_AUDIT.md) compares
@@ -18,7 +19,7 @@ to overwrite subsequent fixes.
 | CAP-1: checked value/status sample result | [02 — Checked CO2 samples](02_checked_co2_samples.md) | Selected additive feature; raw APIs retain their existing contract. | IMPLEMENTED: explicit MV3/MV4 then status/optional detail, per-step evidence, manual Arduino/IDF callers; no product-range or freshness claim. |
 | CAP-2: cooperative long waits | [03 — Cooperative maintenance waits](03_cooperative_maintenance_waits.md) | Selected additive callbacks; existing finite waits retain their settings. | IMPLEMENTED: optional sliced delay/yield only after persistent transfer, exact requested totals and native/Arduino adapters; no physical scheduler claim. |
 | CAP-4: richer persistent operation evidence/admission | [04 — Persistent operation evidence](04_persistent_operation_evidence.md) | Selected fixed-size latest-operation evidence and application admission; existing dirty tracking remains authoritative. | IMPLEMENTED: bounded outer-operation evidence, cache-only CLI diagnostics and explicit CLI/HIL admission; no physical outcome claim. |
-| CAP-3: programmatic operation timing bounds | [05 — Requested-delay bounds](05_requested_delay_bounds.md) | Optional additive pure API and real example consumer; invoking it selects the feature. Current manual bounds are not automatically incorrect. | NOT IMPLEMENTED |
+| CAP-3: programmatic operation timing bounds | [05 — Requested-delay bounds](05_requested_delay_bounds.md) | Selected additive pure API and real example consumer; current manual bounds were not automatically incorrect. | IMPLEMENTED: checked microsecond sums from explicit Config, bounded targets/counts and bus-silent Arduino/IDF diagnostics. |
 | CAP-5: permissive absent startup in older branch | [06 — Software closeout](06_software_closeout.md) | Integrated closeout preserves strict startup; no new feature or mandatory duplicate test batch. | NOT IMPLEMENTED |
 
 Prompt 01 regression evidence in `test/test_hil_runner_parser.py`:
@@ -108,6 +109,38 @@ real host sender and preserve the campaign latch. Exact local/CI results
 belong in the execution handoff. Physical
 write outcomes, address activation and calibration remain unqualified.
 
+Prompt 05 exposes pure `operationTimingBound()` and `OperationTimingBound` with
+integer microsecond sums. Numeric configuration checks are shared with `begin()`;
+queries before initialization require no callbacks and do not invoke them.
+The explicit operation table covers the current checked samples and quiet-wait
+callbacks without speculative APIs. Byte budgets include nominal phases,
+volatile pointers retain ordinary STOP, direct writes use flash STOP, eligible
+frames include only control-NACK retry costs, and resync reserves all 256 pending
+targets plus baseline and conditional support reads. `bounds` in both CLIs
+provides the real consumer without performing those operations. Callback and
+scheduler costs remain application-owned. See the
+[reviewed derivation](../../README.md#programmatic-requested-delay-bounds) and
+execution handoff for exact verification and final commit/CI evidence; no
+physical timing qualification is implied.
+
+The native regressions in `test/test_basic.cpp` include
+`test_requested_delay_bounds_match_independent_operation_examples` for default,
+minimum and maximum settings;
+`test_requested_delay_primitives_reach_their_hand_derived_bounds` for constructed
+maximum requested-delay paths;
+`test_requested_delay_retry_bounds_cover_last_success_exhaustion_and_high_latch`
+and `test_requested_delay_bounds_cover_failed_cleanup_veto_and_later_timeout`
+for retry and failure accounting;
+`test_requested_delay_resync_bound_covers_no_targets_and_all_256_targets` for
+full resync coverage; and
+`test_requested_delay_queries_preserve_state_config_health_and_persistent_evidence`
+for repeated query purity. `test/test_cli_contract.py` adds
+`test_requested_delay_formatters_use_real_calculator_without_io`, which compiles
+and executes both actual CLI formatters, and
+`test_requested_delay_contract_rejects_bus_calls_and_wall_time_claims`, which
+checks the diagnostic boundary. Exact local and final-commit CI results remain
+in the execution handoff.
+
 For the required defect fix and closeout, execute **01, then 06**. For the optional full
 software feature set, execute **01 → 02 → 03 → 04 → 05 → 06**. Prompt 05 must
 describe the operations actually present after any selected optional work.
@@ -131,10 +164,10 @@ rows into software implementation requirements or claim host tests close them.
 
 ## Preparation code audit supporting the prompts
 
-The following observations describe the preparation baseline above. HIL-1,
-CAP-1 and CAP-2 are superseded by the implementation dispositions and regression
-evidence in the coverage table; other optional capability observations remain
-unchanged.
+The following observations describe the preparation baseline above. HIL-1 and
+CAP-1 through CAP-4 are superseded by the implementation dispositions and
+regression evidence in the coverage table. The strict-startup boundary remains
+current; Prompt 06 software closeout is not selected here.
 
 - HIL `main()` continues after a prompt-framed failure and stops only on a
   framing timeout. `update_state()` keeps older parsed values and clean flags;

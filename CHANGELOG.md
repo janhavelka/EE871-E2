@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Pure `operationTimingBound(Config, OperationKind, ...)` calculates conservative
+  requested-delay sums in integer microseconds before initialization, without
+  invoking callbacks or changing driver state. Shared numeric validation,
+  checked wide arithmetic and unchanged output on rejection cover command
+  selectors, bounded custom-memory ranges, retries, verified maintenance,
+  strict lifecycle operations and all 256 possible resync targets. Both
+  bring-up CLIs expose a bus-silent `bounds` diagnostic. Callback execution,
+  scheduler overhead and latency remain application-owned; these budgets are
+  not measured wall-clock or hardware timing qualifications.
 - Cache-only `getLastPersistentOperation()` returns a fixed-size
   `PersistentOperationResult` for the latest raw or typed mutation, preserving
   up to 16 requested/observed bytes, explicit validity and per-byte attempt,

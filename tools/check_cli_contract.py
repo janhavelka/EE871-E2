@@ -57,6 +57,9 @@ REQUIRED_PATTERNS = {
     "dirty command dispatch": r'trimmed\s*==\s*"dirty"',
     "operation command dispatch": r'trimmed\s*==\s*"operation"\s*\)\s*\{\s*printPersistentOperation\(\s*\)',
     "operation help entry": r'printHelpItem\(\s*"operation"\s*,',
+    "bounds help entry": r'printHelpItem\(\s*"bounds"\s*,\s*"Show requested-delay bounds \(no bus I/O\)"\s*\)',
+    "bounds command dispatch": r'trimmed\s*==\s*"bounds"\s*\)\s*\{\s*printRequestedDelayBounds\(\s*deviceCfg\s*\)\s*;\s*\}',
+    "timing help bus effects": r'printHelpItem\(\s*"timing"\s*,\s*"Try different clock frequencies \(bus transactions\)"\s*\)',
     "resync command dispatch": r'trimmed\s*==\s*"resync"',
     "dirty accessor": r"persistentConfigDirty",
     "dirty error accessor": r"persistentConfigDirtyError",
@@ -81,6 +84,7 @@ PROCESS_COMMAND_PATTERNS = {
     "library test dispatch",
     "dirty command dispatch",
     "operation command dispatch",
+    "bounds command dispatch",
     "resync command dispatch",
     "resync before after output",
 }
@@ -136,6 +140,33 @@ def persistent_cli_errors(text: str, process_command: str) -> list[str]:
     return errors
 
 
+def requested_delay_cli_errors(text: str) -> list[str]:
+    """Both shells must report pure explicit-config bounds with honest units."""
+    helpers = extract_section(text, "void printRequestedDelayBounds", "void printVersionInfo")
+    code = strip_cpp_non_code(helpers)
+    errors = []
+    if re.search(
+        r"EE871::EE871::operationTimingBound\s*\(\s*config\s*,\s*request\.operation\s*,"
+        r"\s*bound\s*,\s*request\.target\s*,\s*request\.count\s*\)", code,
+    ) is None:
+        errors.append("bounds diagnostic must call the pure explicit-config calculator")
+    calls = set(re.findall(r"\b(\w+)\s*\.\s*(\w+)\s*\(", code))
+    if calls - {("st", "ok"), ("Serial", "printf")}:
+        errors.append("bounds diagnostic must not invoke driver or transport callbacks")
+    for fragment in (
+        "Requested-delay bounds (us; no bus I/O)",
+        "Sum of maximum requested protocol waits/delays under the configured callback contract.",
+        "Not a wall-clock bound:",
+        "callback overhead, scheduler/preemption and latency are caller-owned.",
+        "no operations are performed and no capabilities are read.",
+    ):
+        if fragment not in helpers:
+            errors.append(f"bounds diagnostic must explain {fragment!r}")
+    if re.search(r"static_cast<unsigned long long>\s*\(\s*bound\.requestedDelayUs\s*\)", code) is None:
+        errors.append("bounds diagnostic must print the wide microsecond result")
+    return errors
+
+
 def main() -> int:
     common_dir = ROOT / "examples" / "common"
     bringup_main = ROOT / "examples" / "01_basic_bringup_cli" / "main.cpp"
@@ -171,6 +202,8 @@ def main() -> int:
             fail(f"missing {label} in {bringup_main.as_posix()}")
 
     for error in persistent_cli_errors(text, process_command):
+        fail(error)
+    for error in requested_delay_cli_errors(text):
         fail(error)
 
     line_reader_pattern = (
