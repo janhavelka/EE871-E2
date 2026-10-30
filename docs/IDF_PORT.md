@@ -167,6 +167,21 @@ with the number of pending targets. Recovery and restarting a session retain
 that record. See the [persistent-write contract](../README.md#persistent-configuration-writes)
 for the resync checks and limits of readback verification.
 
+The `operation` CLI command exposes cache-only `getLastPersistentOperation()`
+evidence: requested/observed bytes, progress and the original result. CLI
+maintenance admission blocks dirty state, possible effects without matching
+readback and possible address changes. Recovery and coherence resync cannot
+verify original intent or bypass that admission. Core writes retain their
+existing ability to accumulate pending targets; application admission is
+separate from that compatibility contract.
+
+Use `bounds` for bus-silent requested-delay calculations from the configured
+settings. It calls the pure `operationTimingBound()` API and performs no
+selected operation. GPIO callback time, scheduler latency and callback overhead
+are excluded; this is not a measured wall-time bound. The `timing` command
+instead performs live bus tests. See the
+[requested-delay contract](../README.md#programmatic-requested-delay-bounds).
+
 ## Verification
 
 Run the framework and CLI checks from the repository root:

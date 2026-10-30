@@ -15,6 +15,18 @@ feature/capability inspection, configuration/calibration helpers, register/raw
 access, diagnostics, bus reset, trace, self-test, stress, and mixed stress
 workflows.
 
+`operation` prints the latest persistent-operation evidence without bus I/O.
+Maintenance commands reject dirty state, unresolved possible effects and
+possible address changes before invoking a write. `resync` checks current
+coherence; it does not prove original intent or automatically reopen admission.
+The [persistent-maintenance guide](../../../docs/EE871_E2_HIL_RUNNER.md#persistent-maintenance)
+describes the evidence and application-owned reconciliation.
+
+`bounds` calculates maximum requested-delay sums from the CLI configuration
+without touching the bus. Callback execution and scheduler overhead are outside
+the result. It does not perform the live tests run by `timing`; see the
+[requested-delay API](../../../README.md#programmatic-requested-delay-bounds).
+
 `co2fastsample` and `co2avgsample` explicitly call the checked MV3/MV4 APIs.
 They report the raw word and its validity, checked validity, status/error-code
 evidence, and each step's attempted flag and exact transfer status. A value

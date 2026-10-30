@@ -14,6 +14,10 @@ Sources: E2 specification v4.1, pp. 7-10; AN1611-1, pp. 2-5.
 The library's `begin()` also validates reserved bits in `0x07..0x09` before
 installing its capability cache. Calibration support at `0x03`/`0x04` is
 queried by typed calibration operations on demand; it adds no startup reads.
+Failed initialization from UNINIT leaves UNINIT with an empty capability cache
+and the precise failure; it does not infer confirmed absence from NACK or a
+transport error. Calling `begin()` on an active session returns
+`ALREADY_INITIALIZED` without changing it. Startup retry remains application-owned.
 
 ## Reset / Pointer State
 
@@ -48,6 +52,13 @@ Absent support for a pending calibration or part-name target prevents clearing.
 A pending auto-adjustment trigger must report idle; `BUSY` preserves dirty
 state. Resync does not restore values or prove a requested calibration ran or
 succeeded. Compare current values with the application's recorded baseline.
+
+`getLastPersistentOperation()` separately retains the latest outer mutation's
+requested/observed bytes and phase evidence. Reads, recovery and resync retain
+it; the next mutation replaces it. Core writes still permit accumulating
+pending targets. The CLI `operation` diagnostic is cache-only, and CLI
+maintenance admission blocks unresolved evidence before another write. See
+the [persistent-write contract](../../README.md#persistent-configuration-writes).
 
 `writeBusAddress()` does not change the session address. The retained vendor
 sources do not establish when the stored address takes effect; locate the

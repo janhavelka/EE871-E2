@@ -13,8 +13,6 @@ results live in one validation matrix, with exact firmware versions and limits.
 | [ESP-IDF guide](IDF_PORT.md) | Native component integration, GPIO adapter, example setup, and build commands. |
 | [HIL runner guide](EE871_E2_HIL_RUNNER.md) | Reproducible serial checks, soak/discriminator tools, and verdict rules. |
 | [Validation matrix](EE871_E2_HARDWARE_VALIDATION_MATRIX.md) | Software checks, retained hardware evidence, and untested scenarios. |
-| [Retained branch review](https://github.com/janhavelka/EE871-E2/blob/main/docs/RETAINED_BRANCH_AUDIT.md) | Historical hardening inventory with current HIL/capability dispositions and the separate retain/retire workflow. |
-| [Software implementation prompts](https://github.com/janhavelka/EE871-E2/blob/main/docs/prompts/README.md) | Completed selected software scopes, implementation commits, regression references and exact verification evidence. |
 | [Contributing](../CONTRIBUTING.md) | Development and validation workflow. |
 
 ## Vendor references
@@ -43,11 +41,14 @@ Consolidate hardware observations in the validation matrix rather than adding
 another campaign report. Record exact source/build identity, measured results,
 failures, and unrun scenarios; software tests are not hardware qualification.
 
-Older completed prompts, audit narratives, implementation plans, and superseded
-summaries were removed after their reusable content was incorporated.
-Their committed versions remain available in Git history. Generated Doxygen
-output and local test captures are not maintained source documents.
+Completed prompts and audit narratives are archived in Git history after their
+usage contracts and verification records are incorporated into maintained
+guides. The completed October work is available at commit `795f970`:
+[implementation prompts and per-finding outcomes](https://github.com/janhavelka/EE871-E2/tree/795f9708754300c6c3f0782998291cfa095e8e40/docs/prompts)
+and [retained-branch audit](https://github.com/janhavelka/EE871-E2/blob/795f9708754300c6c3f0782998291cfa095e8e40/docs/RETAINED_BRANCH_AUDIT.md).
+These are historical records, not pending implementation instructions. Branch
+retirement remains a separate maintenance decision.
 
-The selected software prompt set linked above is complete and retained for
-implementation/verification traceability. Durable usage and compatibility
-contracts live in the README, public headers and maintained guides.
+Generated Doxygen output and local test captures are not maintained source
+documents. Keep lasting usage and compatibility contracts in the README,
+public headers and guides above.

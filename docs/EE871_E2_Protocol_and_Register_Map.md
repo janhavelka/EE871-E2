@@ -1,9 +1,12 @@
 # EE871 E2 Protocol + Register Map (Implementation Reference)
 
-**Target device:** EE871 CO2 probe, E2 interface, **0...5% CO2 (0...50,000 ppm)**.  
+**Target device:** EE871 CO2 probe, E2 interface. The retained wired-product
+guide describes ranges up to **5% CO2 (50,000 ppm)**; confirm the ordered model.
+The driver represents all 16-bit values and leaves product/application range
+validation to the caller.
 This document is a **curated implementation reference** for writing an E2 master library.
 
-Last reviewed: 2026-09-11.
+Last reviewed: 2026-10-30.
 
 This is the curated implementation reference. It condenses the vendor PDFs and
 the driver requirements into one working protocol document. For release or

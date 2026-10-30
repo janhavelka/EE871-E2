@@ -1,6 +1,6 @@
 # EE871-E2 HIL and Soak Tools
 
-Last updated: 2026-10-29
+Last updated: 2026-10-30
 
 `tools/ee871_hil_runner.py` drives the example serial CLI and records
 repeatable hardware-in-the-loop evidence. Its default plan avoids persistent
@@ -124,6 +124,16 @@ representable; apply an application range separately. Status can trigger the
 next measurement and reset its interval counter only when the global interval
 is greater than 15 s and the previous value is older than 10 s. Reading the
 value before status does not establish that a fresh conversion occurred.
+
+## Requested-Delay Diagnostics
+
+Both CLIs provide `bounds`, a bus-silent diagnostic using the configured
+settings and the pure `operationTimingBound()` API. It reports maximum
+requested protocol-delay sums without performing the selected operations.
+Callback execution, scheduler latency and optional callback overhead are not
+included; these are not measured wall-clock limits. The separate `timing`
+command runs live bus tests. See the
+[API contract and derivation](../README.md#programmatic-requested-delay-bounds).
 
 ## Extended and Niche Plans
 

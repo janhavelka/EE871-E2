@@ -1,6 +1,6 @@
 # EE871-E2 Hardware Validation Matrix
 
-Last updated: 2026-09-11
+Last updated: 2026-10-30 (software evidence and documentation; hardware results unchanged).
 
 This is the maintained hardware evidence ledger and repeatable scenario plan.
 Results apply to the recorded firmware, fixture, configuration and exposure.
@@ -11,34 +11,59 @@ for capture commands.
 
 ## Software Validation
 
-Software checks on 2026-09-11 validated implementation
-[`3d32ac30cc4b228299d3f0feaffd538c031f5276`](https://github.com/janhavelka/EE871-E2/commit/3d32ac30cc4b228299d3f0feaffd538c031f5276),
-including the calibration/capability guards, persistent-write uncertainty
-tracking, and auto-adjust preflight. The earlier `a358f92` release-preparation
-run passed 71 native tests; this implementation adds 22 regression cases.
+The Unreleased implementation at
+[`5c920d00b7065a906b8fae7f4bf751a42796e955`](https://github.com/janhavelka/EE871-E2/commit/5c920d00b7065a906b8fae7f4bf751a42796e955)
+includes fail-closed HIL sender admission, checked CO2 samples, cooperative
+post-write waits, latest persistent-operation evidence and requested-delay
+bounds. Strict startup and atomic recovery are preserved. Local checks passed
+on 2026-10-29 and were repeated during the independent audit at
+`1b2582996d80717a2f60b5a18942f303a04031ca`, with unchanged executable source.
+The subsequent `795f970` revision corrects only documentation, including the
+`attemptedMask` header comment; it also has exact-commit CI evidence below.
 
 | Check | Result |
 | --- | --- |
-| `.\scripts\pio.cmd test -e native` | 93/93 native cases passed. |
-| `python -m unittest discover -s test -p "test_*.py"` | 58/58 Python cases passed. |
+| `.\scripts\pio.cmd test -e native` | 134/134 native cases passed. |
+| `python -m unittest discover -s test -p "test_*.py"` | 100/100 Python cases passed. |
 | Timing, Arduino CLI, and native IDF example contract checkers | All passed. |
 | `python scripts/generate_version.py check` | Version.h, IDF manifest and Doxyfile match package version 1.1.0. |
-| `doxygen Doxyfile` and local Markdown target check | Documentation generated without warnings; local links resolve. |
-| `.\scripts\pio.cmd run -e ex_bringup_s3 -e ex_bringup_s2 -e compat_tunnelmonitor_s3` | All three Arduino builds passed; build-only evidence. |
-| [CI run 34605633301](https://github.com/janhavelka/EE871-E2/actions/runs/34605633301) at `3d32ac3` | All six jobs passed: native tests, library validation, Arduino S2/S3, and native ESP-IDF 6.0.1 S2/S3. Build/test evidence only. |
+| `doxygen Doxyfile`, local Markdown/reference checks and `git diff --check` | Passed; documentation generated without warnings. |
+| `.\scripts\pio.cmd run -e ex_bringup_s3`, `ex_bringup_s2`, and `compat_tunnelmonitor_s3` (each with `-e`) | All three Arduino example builds passed; build-only evidence. |
+| [CI run 40915629506](https://github.com/janhavelka/EE871-E2/actions/runs/40915629506) at `5c920d00b7065a906b8fae7f4bf751a42796e955` | All six jobs passed: native tests, library validation, Arduino S2/S3, and native ESP-IDF 6.0.1 S2/S3. |
+| [CI run 40918686590](https://github.com/janhavelka/EE871-E2/actions/runs/40918686590) at `795f9708754300c6c3f0782998291cfa095e8e40` | All six jobs passed again for the later documentation revision. |
+| Local native-IDF 6.0.1 S2/S3 builds | NOT RUN: local SDK unavailable. The CI jobs above supply native-IDF build evidence. |
+
+Representative coverage in the [native suite](../test/test_basic.cpp) and
+[host runner suite](../test/test_hil_runner_parser.py):
+
+| Contract | Regression evidence |
+| --- | --- |
+| Failed preflight cannot send a persistent command | `test_main_failed_interval_baseline_blocks_explicit_serial_write` |
+| Checked samples preserve raw evidence and reject sensor errors | `test_checked_samples_reject_sensor_error_while_raw_reads_still_succeed` |
+| Cooperative waits preserve requested totals and ordering | `test_maintenance_wait_callbacks_cover_slice_boundaries_and_order` |
+| Resync proves coherence, not the requested write outcome | `test_interval_partial_write_resync_proves_coherence_not_requested_value` |
+| Timing bounds cover every pending target | `test_requested_delay_resync_bound_covers_no_targets_and_all_256_targets` |
+| Recovery is atomic and OFFLINE remains latched | `test_failed_recovery_is_atomic_and_keeps_offline_latched` |
+
+These software checks do not qualify physical writes, calibration, timing or
+new hardware behavior. Earlier September software verification at `3d32ac3`
+passed 93 native cases, 58 Python cases, three Arduino builds and
+[all six CI jobs](https://github.com/janhavelka/EE871-E2/actions/runs/34605633301).
+Those earlier counts belong to that revision, including the MCU-hosted fake
+suite described below.
 
 The final release revision must pass the CI workflow, including native
 ESP-IDF 6.0.1 builds for both ESP32-S3 and ESP32-S2. Each workflow run identifies
 the tested commit. Local `idf.py` builds were not run; an earlier green run
 does not establish success for a later candidate.
 
-## September 11 Current-Main Targeted HIL
+## September 11 Targeted HIL at 32dfb06
 
 The COM11 campaign starting at **14:18:21 UTC** exercised exact library source
 [`32dfb0665ac3628a25578ab7a03e1ebc285040d2`](https://github.com/janhavelka/EE871-E2/commit/32dfb0665ac3628a25578ab7a03e1ebc285040d2),
 version `1.1.0`. The temporary Arduino harness copied the core and public
-headers byte-for-byte from clean `main`; fault injection lived in its external
-HAL. Its application image SHA-256 was
+headers byte-for-byte from the then-current clean `main`; fault injection lived
+in its external HAL. Its application image SHA-256 was
 `10fdeeb0a2513285758c0239c285fa53214985ee8bb0de32109d86987d63a270`,
 built September 11 at 16:17:15 local time (Europe/Prague). Platform versions
 were pioarduino `55.03.311`, Arduino `3.3.11`, and IDF libraries `5.5.5`.
@@ -240,7 +265,7 @@ capture or cleanup prevents an overall verdict.
 
 | ID | Scenario and sequence | Expected behavior / retained hardware result |
 | --- | --- | --- |
-| F-01 | Sensor-present boot: `version`, `drv`, `dirty` | Successful initialization yields READY and clean persistent state; failures remain precise and bounded. Historical CLI PASS; current-main targeted harness initialization/capability reads PASS. |
+| F-01 | Sensor-present boot: `version`, `drv`, `dirty` | Successful initialization yields READY; existing persistent uncertainty survives. Failures remain precise and bounded. Historical CLI and September 11 `32dfb06` harness initialization/capability reads PASS from clean state. |
 | F-02 | Diagnostic probe: `drv`, `probe`, `drv` | Probe must not change health counters/state. Historical CLI PASS. |
 | F-03 | Status: `status`, `drv` | Bounded result with tracked health; reading status can trigger a new measurement under the documented interval/age conditions. Historical `0x00` reads and trace PASS. |
 | F-04/F-05/F-06 | MV4/MV3 and PEC: `read`, `co2avg`, `co2fast`, `id`, `features` | Low-before-high paired reads; valid PEC or precise bounded error. Historical CLI PASS; September normal acquisition had one recovered MV3 NACK and no public sensor error. |
@@ -253,7 +278,7 @@ capture or cleanup prevents an overall verdict.
 | F-16/F-17/F-18 | Platform regression / state-only USB / scheduled application retry | H-39 results above are historical PASS within their selected commands and exposure. The 1.5 s application retry is separate from current library retries. |
 | F-20/F-21 | Full standalone CLI / process reattachment | H-311 184/184 HIL and 100/100 process sessions PASS; current standalone CLI HIL NOT RUN. |
 | F-22 | Explicit read retries during normal acquisition | September `a358f92` observation: one `0xC1` NACK recovered on first retry, complete measurement OK, qualification retained. |
-| F-23 | Retry budget exhaustion, veto, STOP/idle failure and non-NACK exclusion | Current-main targeted HAL injections passed exhaustion, veto, PEC/timeout and cleanup exclusions; 12 captured custom-read NACKs also passed no-retry checks. Retain the pending-pointer response and initial failed expectations above. Electrical fault-jig testing NOT RUN. Preserve final transport status, health and retry diagnostics. |
+| F-23 | Retry budget exhaustion, veto, STOP/idle failure and non-NACK exclusion | September 11 `32dfb06` HAL injections passed exhaustion, veto, PEC/timeout and cleanup exclusions; 12 captured custom-read NACKs also passed no-retry checks. Retain the pending-pointer response and initial failed expectations above. Electrical fault-jig testing NOT RUN. Preserve final transport status, health and retry diagnostics. |
 
 ### Persistent Configuration
 
@@ -261,6 +286,9 @@ Record original values and use a bench sensor approved for persistent changes.
 Restore and verify every changed value. Check `dirty` immediately after a
 failed write; clear it only through successful `resyncPersistentConfig()`.
 Recovery restores communication but retains persistent uncertainty.
+Restoration and reconciliation are operator-owned; the runner does not restore
+automatically. Inspect `operation` as well as `dirty`: coherent resync alone
+does not verify the requested outcome or bypass CLI maintenance admission.
 
 | ID | Scenario and sequence | Retained result |
 | --- | --- | --- |
@@ -279,7 +307,7 @@ returned `NOT_SUPPORTED`; these guards passed without changing health counters.
 ### Physical Faults And Recovery
 
 All physical results in this table are historical H-54; they have not been
-repeated against the current retry candidate. Applications own fault injection,
+repeated against the current source. Applications own fault injection,
 retry settings, deadlines and recovery cadence.
 
 | ID | Scenario and sequence | Retained result |
@@ -289,7 +317,7 @@ retry settings, deadlines and recovery cadence.
 | R-03 | Pull SDA low through 470 ohms: `buscheck`, `probe`, read, `libreset`; release and recover | PASS: bus check/reset `BUS_STUCK`, raw and tracked reads `PEC_MISMATCH`, tracked read bounded at 16 ms; recovery restored READY after release. These are observed historical statuses, not a contract requiring PEC mismatch for stuck SDA. |
 | R-04 | Pull SCL low through 470 ohms: `buscheck`, `probe`, read, `libreset`; release and recover | PASS: raw probe TIMEOUT in 31 ms/detail 25000 without health change; tracked read TIMEOUT in 32 ms; reset `BUS_STUCK` in 31 ms; release/recovery restored READY. |
 | R-06 | Idle-bus `busreset`, `buscheck` | PASS: nine recovery clocks, final SCL/SDA high. Physically held-low lines were not falsely reported clear. |
-| R-07 | `timing` | All six corrected library timing configurations passed the current-main targeted harness. Standalone CLI and external waveform timing remain unqualified. |
+| R-07 | `timing` | All six corrected library timing configurations passed the September 11 `32dfb06` harness. Standalone CLI and external waveform timing remain unqualified. |
 | R-08 | `verbose 1`, `status`, `trace stats`, `verbose 0`, `stress_mix 500` | PASS: bounded status trace decoded; pending/dropped zero; following mixed stress 500/500. |
 
 ## Safe Bring-Up Recipe And Recording

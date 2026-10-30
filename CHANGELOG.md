@@ -7,96 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Migration from 1.1.0
+
+- Pin an exact source commit for the new APIs below. Package/version metadata
+  remains `1.1.0` until a release; the version string does not identify these
+  Unreleased additions.
+- Rebuild consumers for appended Config fields and fixed driver storage.
+  Existing positional Config bindings, error values, raw-read behavior and
+  strict startup remain compatible.
+- CLI maintenance now requires clean persistent state and resolved operation
+  evidence. Recovery restores communication; resync proves current coherence,
+  not that a requested write or calibration succeeded. Applications own
+  reconciliation and candidate address sessions.
+
 ### Added
 
-- Pure `operationTimingBound(Config, OperationKind, ...)` calculates conservative
-  requested-delay sums in integer microseconds before initialization, without
-  invoking callbacks or changing driver state. Shared numeric validation,
-  checked wide arithmetic and unchanged output on rejection cover command
-  selectors, bounded custom-memory ranges, retries, verified maintenance,
-  strict lifecycle operations and all 256 possible resync targets. Both
-  bring-up CLIs expose a bus-silent `bounds` diagnostic. Callback execution,
-  scheduler overhead and latency remain application-owned; these budgets are
-  not measured wall-clock or hardware timing qualifications.
-- Cache-only `getLastPersistentOperation()` returns a fixed-size
-  `PersistentOperationResult` for the latest raw or typed mutation, preserving
-  up to 16 requested/observed bytes, explicit validity and per-byte attempt,
-  possible-effect, ACK and matching-readback evidence, plus the original
-  returned status. The outer operation owns the record; partial pairs and
-  part-name writes retain earlier progress. Recovery, end/begin and coherence
-  resync preserve it. Existing pending-target tracking and dirty-state write
-  compatibility remain unchanged; callers retain history across operations.
-- Manual `operation` diagnostics in both bring-up CLIs expose the cached
-  evidence without E2 traffic. Application maintenance admission blocks dirty
-  state, possible effects without matching readback, and possible address
-  changes requiring an explicit candidate-session decision. Resync cannot
-  certify original intent or reopen unresolved admission. Address readback
-  does not prove activation; auto-adjust status does not prove completed
-  calibration. Existing HIL confirmations and campaign failure latch remain.
-  The opted-in persistent plan requires fresh open application admission from
-  `operation` before every destructive send; missing, malformed or blocked
-  admission prevents the send and latches the campaign failure.
-  No hardware writes, address behavior or calibration outcomes were validated
-  for this software addition.
-- Optional task-context `Config::delayMs` and `Config::yield` callbacks for
-  post-write quiet waits, appended after existing configuration members.
-  `longDelaySliceMs` defaults to 10 ms and accepts 1..50 ms; delay precedes
-  yield at each completed slice. Null callbacks retain the per-millisecond
-  microsecond-delay fallback. Zero waits, 150/300 ms defaults, 5000 ms limits,
-  signaling, retry pauses, health and persistent-state behavior are preserved.
-  Arduino and native IDF adapters install cooperative waits; IDF rounds delays
-  conservatively. Callback timing remains application-owned; no scheduler or
-  watchdog latency improvement has been measured on hardware.
-- Explicit `readCo2FastSample()` / `readCo2AverageSample()` helpers read MV3/MV4
-  low/high, then status, then supported error detail only for a CO2 status
-  error. Fixed-size `Co2ReadResult` retains raw evidence, validity, attempted
-  flags and exact per-step statuses; a failed value read skips status entirely.
-  Appended `Err::CO2_SENSOR_ERROR` preserves existing error values and separates
-  sensor status from transport health. Existing raw APIs and frame retry rules
-  are unchanged. Checked success does not certify warm-up, freshness, accuracy
-  or product/application range; all 16-bit values remain representable.
-- Manual `co2fastsample` / `co2avgsample` diagnostics in both Arduino and native
-  ESP-IDF CLIs expose the checked procedure and evidence. Existing automated
-  HIL/soak plans keep their command sequences and measurement side effects.
+- Explicit `readCo2FastSample()` / `readCo2AverageSample()` APIs and fixed-size
+  `Co2ReadResult`: value first, then status and supported error detail when
+  needed, with per-step validity and precise failures. Appended
+  `Err::CO2_SENSOR_ERROR` separates sensor status from transport health.
+  Checked success does not establish freshness, warm-up, accuracy or range.
+- Optional `Config::delayMs`, `yield` and `longDelaySliceMs` for post-write
+  quiet waits. Slices default to 10 ms and accept 1..50 ms; null callbacks
+  retain the microsecond fallback. Zero waits and existing timing limits remain
+  valid. Arduino and native IDF adapters provide cooperative callbacks without
+  changing protocol signaling, retry pauses or flash STOP timing.
+- Cache-only `getLastPersistentOperation()` and `PersistentOperationResult`
+  retain the latest outer mutation's requested/observed bytes, up to the
+  16-byte part name, with partial progress, possible effects, ACK/readback
+  evidence and the original result. Recovery and lifecycle changes preserve
+  the record; the next mutation replaces it. Existing all-target dirty tracking
+  and the core's ability to accumulate pending targets remain authoritative.
+- Pure `operationTimingBound(Config, OperationKind, ...)` calculates checked
+  requested-delay sums in microseconds before initialization, without callbacks
+  or state changes. It covers current retries, maintenance, lifecycle and all
+  256 potential resync targets. Invalid inputs leave output unchanged. Callback
+  execution and scheduler overhead remain outside this budget.
+- Both diagnostic CLIs expose `co2fastsample`, `co2avgsample`, cache-only
+  `operation` and bus-silent `bounds`. Maintenance guards block dirty state,
+  unmatched possible effects and possible address changes. The opted-in HIL
+  persistent plan requires fresh open `operation` admission before every write;
+  default, extended, niche and soak command sequences are unchanged.
 
 ### Changed
 
-- Closed the selected software prompt set with traceable implementation and CI
-  evidence. Strict startup and atomic recovery are preserved and verified by
-  existing regressions; no permissive absence policy was added. Current audit
-  dispositions distinguish completed software from historical findings and
-  hardware qualification, including the intermediate historical NACK policy.
+- Consolidated documentation around the README, integration/protocol guides
+  and validation matrix. Completed implementation prompts and branch audits
+  are archived in Git history. Software verification and historical hardware
+  evidence retain separate commit identities and limits.
 
 ### Fixed
 
-- Clarified that persistent-operation `attemptedMask` includes a direct write
-  procedure whose START fails before a frame is sent. Possible-effect evidence
-  remains separate; driver behavior is unchanged.
-- HIL persistent-write admission requires fresh clean diagnostics and a complete
-  successful current target baseline for interval, offset and gain writes,
-  including explicit values. Baselines remain separate from requested values;
-  failed or incomplete maintenance responses latch a campaign failure so later
-  clean rows cannot admit more writes. Diagnostic fields must share the same
-  current response section; unexpected or duplicate sections, invalid resync
-  marker order, and clean/error disagreement block admission. Host regressions
-  assert actual serial sends, including stale niche values and failed preflight.
-  The runner does not restore settings or reconcile uncertain writes automatically.
-- Example health percentages use a 64-bit sum of lifetime counters, preventing
-  the display from wrapping when the combined count exceeds `UINT32_MAX`.
-- HIL capture checks reject missing, truncated or duplicate health records,
-  missing stress operation/health totals, and partial measurement/status values
-  even when the final CLI prompt arrives. Expected negative responses retain
-  their existing status validation. Incomplete latest summaries cannot reuse
-  previous results, and initial soak synchronization rejects crashes or an
-  incomplete or dirty configuration response.
-- Soak evidence reports the selected scheduled-host-retry policy accurately
-  when retries are disabled.
-- Host serial commands reject short writes and wait for their bounded response
-  instead of calling the serial driver's potentially unbounded drain.
-- The Arduino CLI prompt no longer flushes the USB output queue. Arduino's
-  transient disconnected indication can make that flush discard pending text.
-- HIL status and health parsers recognize error names containing digits,
-  including the driver's `E2_ERROR`, without discarding their code/detail.
+- HIL persistent admission now requires a complete successful current target
+  baseline and fresh clean diagnostics for interval/offset/gain writes,
+  including explicit values. Failed or incomplete maintenance responses latch
+  the campaign failure; later clean responses cannot reopen admission. Section
+  boundaries, duplicate headers, resync ordering and clean/error disagreement
+  are validated before a send. No automatic restoration is performed.
+- Clarified that persistent-operation `attemptedMask` includes a write procedure
+  whose START fails before any frame is sent; possible effects remain separate.
+- Example health percentages use a 64-bit total to avoid counter-sum overflow.
+- HIL capture rejects missing, truncated or duplicate health records, incomplete
+  stress totals and partial measurement/status values even after a CLI prompt.
+  Incomplete summaries cannot reuse earlier results; soak synchronization
+  rejects crashes and incomplete/dirty responses. Error names containing digits,
+  including `E2_ERROR`, retain their code/detail.
+- Soak evidence reports when its scheduled host retry policy is disabled.
+- Host serial commands reject short writes and use bounded response completion
+  without a separate serial drain. The Arduino CLI prompt no longer flushes
+  USB output, which could discard pending text during transient disconnects.
+
+The [software validation record](docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md#software-validation)
+identifies tested commits, local checks and terminal CI runs. These changes add
+no physical timing, persistent-write or calibration qualification.
 
 ## [1.1.0] - 2026-09-11
 

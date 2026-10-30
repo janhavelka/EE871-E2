@@ -14,6 +14,9 @@ examples, and HIL validation evidence.
 - **Explicit checked samples** - MV3/MV4 evidence followed by sensor status
 - **Feature guards** - cached operating capabilities and on-demand calibration checks
 - **Dirty/resync diagnostics** - uncertain single- and multi-byte writes are visible
+- **Persistent-operation evidence** - requested/observed bytes and partial-write progress
+- **Cooperative maintenance waits** - optional callbacks for post-write quiet waits
+- **Requested-delay bounds** - pure calculation from Config, without bus traffic
 - **HIL evidence tooling** - serial runner emits transcript, JSON, and Markdown reports
 
 ## Release And Validation Status
@@ -27,65 +30,29 @@ release tag when consuming the published version.
 ordinary STOP timing, opt-in control-NACK retries, calibration guards, and
 persistent-write uncertainty.
 
-When moving from `v1.1.0` to Unreleased, review the example/HIL evidence and
-serial-framing corrections in the changelog and pin the chosen source commit.
-Rebuild consumers for the appended Config members and fixed driver storage;
-existing positional Config bindings and error values retain their meaning.
-The older migration from `v1.0.1` remains part of the published `1.1.0` notes.
+Checked samples, cooperative quiet waits, latest-operation evidence,
+requested-delay bounds and the HIL admission correction are **Unreleased**.
+Use a pinned source commit for these features; package metadata still reads
+`1.1.0`, so the version string alone does not identify them. Rebuild consumers
+for the appended Config members and fixed driver storage. Existing positional
+Config bindings, error values and raw-read behavior retain their meaning;
+startup remains strict. See the [migration notes](CHANGELOG.md#unreleased).
 
-The selected software work is complete at implementation commit
-`5c920d00b7065a906b8fae7f4bf751a42796e955` (2026-10-29): HIL sender admission,
-checked samples, cooperative maintenance waits, persistent-operation evidence,
-and requested-delay bounds. Strict startup is preserved and verified.
-Local verification passed 134 native tests, 100 Python tests, the timing/CLI/IDF
-contracts, version consistency, Doxygen and all three Arduino builds (S3, S2,
-TunnelMonitor compatibility). [All six CI jobs passed at that exact SHA](https://github.com/janhavelka/EE871-E2/actions/runs/40915629506),
-including native ESP-IDF 6.0.1 S3/S2 builds. Local native-IDF builds were NOT RUN
-because the SDK was unavailable. The later integrated closeout changes only
-documentation and reuses these unchanged implementation results; its checks
-cover documentation separately. [Prompt outcomes and verification details](https://github.com/janhavelka/EE871-E2/blob/main/docs/prompts/README.md)
-retain the implementation traceability. No hardware qualification was added.
+The completed implementation at `5c920d00b7065a906b8fae7f4bf751a42796e955`
+passed 134 native tests, 100 Python tests, required contracts/version checks,
+three Arduino builds, Doxygen, and all six CI jobs including native ESP-IDF
+6.0.1 S2/S3. Later audits and documentation-only revisions are recorded in the
+[software validation record](docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md#software-validation),
+with exact checked commits and CI links. Local native-IDF builds were NOT RUN
+because the SDK was unavailable; the corresponding CI builds passed.
 
-Earlier software verification of implementation commit `3d32ac3` on 2026-09-11 passed
-93 native tests, 58 Python tests, the timing/CLI/IDF contracts, synchronized
-version metadata, Doxygen, and all three local Arduino builds (ESP32-S3,
-ESP32-S2, and the older TunnelMonitor compatibility stack).
-[All six CI jobs passed](https://github.com/janhavelka/EE871-E2/actions/runs/34605633301),
-including native ESP-IDF 6.0.1 builds for S2 and S3. These are software checks;
-hardware results apply only to the revisions and scenarios recorded below.
-
-A September 11 targeted COM11 run tested current library source `32dfb06`:
-407 real sensor/API assertions passed, including calibration-support discovery,
-typed reads, six timing configurations, 100 stress reads, and 61 scheduled
-MV3/MV4/status cycles. There were no natural NACKs or transport failures in
-those real-operation sessions. Retry recovery/exhaustion, OFFLINE behavior,
-vetoes, PEC/timeout rejection and cleanup exclusions passed controlled HAL
-tests. Follow-ups isolated an unexpected response after a custom-pointer
-update: wrong-address frames produced an invalid PEC instead of NACK, which
-the driver safely rejected. The final context comparison passed 303/303
-assertions, including 12 custom-read NACKs without retries. The original failed
-harness expectations remain recorded. All 93 fake-transport regressions also
-passed on the ESP32, separately from real sensor I/O.
-
-Recorded CO2Control ESP32-S3 hardware testing used the exact library commit
-`a358f92`: a ten-minute stress run completed 562 successful owner operations;
-a thirty-minute normal-acquisition run completed 120 successful readings,
-including one real control-byte NACK recovered by its first retry without a
-sensor fault or qualification loss. The subsequent five-minute sensor checks
-also passed, but the overall follow-up harness verdict remains incomplete
-because Web-session cleanup returned HTTP 403.
-
-These observations establish one hardware retry recovery. They do not establish
-a long-term fault rate or the physical cause of the NACK. Retry exhaustion and
-non-NACK fault behavior were not forced in that earlier campaign; the newer
-targeted run adds controlled HAL-injection evidence. Persistent write failures
-and supported auto-adjust operations still have fake-transport coverage only.
-The targeted run made no persistent sensor writes, verified 30 unchanged
-registers, and restored the original healthy production firmware.
-ESP32-S2 and native ESP-IDF hardware remain untested, and no completed long soak
-is claimed for the current candidate. The
-[validation matrix](docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md) records exact
-images, evidence sources, historical results, and remaining coverage gaps.
+Hardware evidence applies only to the recorded revisions and fixtures.
+The September ESP32-S3 campaigns do not qualify these Unreleased additions.
+Persistent-write fault injection, supported calibration outcomes, ESP32-S2 and
+native-IDF runtime, external waveform timing and a completed long soak of the
+current source remain unqualified. The
+[validation matrix](docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md) retains all
+historical results, failed/incomplete verdicts and remaining coverage gaps.
 
 ## E2 Bus, Not Hardware I2C
 
@@ -105,12 +72,15 @@ control byte. It is not an ESP-IDF or Arduino I2C device address.
 
 ### PlatformIO (recommended)
 
-Pin version `1.1.0` in `platformio.ini`:
+For the published API, pin release `1.1.0` in `platformio.ini`:
 
 ```ini
 lib_deps =
   https://github.com/janhavelka/EE871-E2.git#v1.1.0
 ```
+
+For the Unreleased APIs described here, replace `v1.1.0` with a tested full
+commit SHA, such as `5c920d00b7065a906b8fae7f4bf751a42796e955`.
 
 ### Manual
 
@@ -692,23 +662,17 @@ and [native IDF example guide](examples/idf/basic_bringup/README.md).
 
 ## Building And Validation
 
-The repository's Arduino example environments exact-pin pioarduino
-`platform-espressif32` `55.03.311`, which supplies Arduino-ESP32 `3.3.11` and
-ESP-IDF `5.5.5`. This supersedes the earlier TunnelMonitor-node parity pin
-`54.03.20` / Arduino-ESP32 `3.2.0` for repository examples and HIL because
-3.3.11 retains the upstream HWCDC lost-wakeup fix introduced in 3.3.9 and
-includes later framework fixes. Historical `54.03.20` and `55.03.39` evidence
-remains labeled with its exact stack.
-Consuming applications retain control of their own platform pin; the
-framework-neutral EE871 core does not depend on Arduino USB.
+The Arduino example environments in [platformio.ini](platformio.ini) pin
+pioarduino `platform-espressif32` `55.03.311` (Arduino-ESP32 `3.3.11`, IDF
+libraries `5.5.5`). Consuming applications choose their own platform pin;
+the framework-neutral core does not depend on Arduino USB.
 The S3 flash/PSRAM settings in this repository describe the tested 4 MB flash /
 2 MB QSPI-PSRAM board; override them for a different ESP32-S3 module.
 
-`compat_tunnelmonitor_s3` is a build-only compatibility environment pinned to
-TunnelMonitor-node commit `0f240ab` and its older `54.03.20` stack. The current
-`1.1.0` source builds under both pins without compatibility shims.
-TunnelMonitor-node's production console uses ESP-IDF USB Serial/JTAG APIs
-directly, so the Arduino HWCDC bug does not apply to that console path.
+`compat_tunnelmonitor_s3` builds this repository's S3 example against the older
+`54.03.20` stack (Arduino-ESP32 `3.2.0`) recorded for TunnelMonitor-node. It is a
+build-only compatibility check; it does not check out or build that consuming
+application. The Unreleased library source builds under both platform pins.
 
 On Windows, use `.\scripts\pio.cmd` in place of `pio`; it selects the existing
 VS Code-managed PlatformIO installation.
@@ -769,8 +733,6 @@ why the sensor NACKed.
 
 ## Documentation
 
-- [Software implementation prompts](https://github.com/janhavelka/EE871-E2/blob/main/docs/prompts/README.md) - executable software follow-ups, optional feature scopes, and final closeout.
-- [Retained branch review](https://github.com/janhavelka/EE871-E2/blob/main/docs/RETAINED_BRANCH_AUDIT.md) - remaining HIL preflight gap, capability decisions, and retain/retire workflow.
 - [Documentation index](docs/README.md) - maintained guides and vendor references.
 - [Changelog](CHANGELOG.md) - release history and migration notes.
 - [Validation matrix](docs/EE871_E2_HARDWARE_VALIDATION_MATRIX.md) - current and historical evidence, with coverage limits.
