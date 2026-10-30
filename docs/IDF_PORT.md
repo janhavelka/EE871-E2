@@ -104,83 +104,46 @@ retained vendor documentation for the full electrical requirements.
 
 ## Timing, ownership, and recovery
 
-Public bus operations are synchronous, bounded, and task-context only.
 Use one owner task or externally serialize every driver operation and all
-other users of the physical E2 lines. The adapter does not provide a mutex.
-Persistent writes can occupy the caller through flash stretching, commit waits,
-and verification; include that duration in application scheduling and watchdog
-budgets.
+other users of the physical E2 lines. The adapter provides no mutex. Retain
+ownership throughout synchronous calls, including quiet waits and callbacks.
+Bus operations are task-context only; persistent writes can occupy the caller
+through flash stretching, commit waits and verification.
 
 The diagnostic example uses 100 us clock-low/high times, a 25 ms per-bit
-stretch limit, a 35 ms byte deadline, a 150 ms custom-write wait, and a 300 ms
-interval-pair wait. It inherits `Config::flashStretchTimeoutUs = 350000` for
-flash-write STOP and explicit bus reset. Ordinary reads and volatile custom-read
-pointer writes use `bitTimeoutUs` for STOP. The flash allowance does not extend
-ordinary bit or byte transfer limits.
+stretch limit, a 35 ms byte deadline, 150/300 ms custom/interval write waits,
+and the default 350 ms flash STOP/reset allowance. Ordinary reads and volatile
+pointer writes keep the ordinary STOP limit. `readNackRetries` remains zero.
 
-Only the quiet wait after a successful persistent transfer uses the optional
-long-wait callbacks. `Config::longDelaySliceMs` defaults to 10 ms and accepts
-1..50 ms; invalid values are rejected before GPIO traffic. The driver requests
-positive slices whose sum is exactly `writeDelayMs` or `intervalWriteDelayMs`,
-then verifies the write. `delayMs` runs first, or the microsecond fallback when
-absent, followed by optional `yield` after each completed slice, including the
-final partial slice. A zero wait performs no callbacks; existing zero settings,
-150/300 ms defaults and 5000 ms maxima are preserved.
-
-Keep ownership and external serialization throughout the synchronous call,
-including callbacks. Callbacks are application-owned, task-context only,
-bounded and non-reentrant; they must not call the same driver recursively.
-`delayMs` must wait at least its requested milliseconds. Its void signature
-cannot report failure, and the driver cannot independently measure callback
-adherence, cancel a wait or guarantee watchdog latency. FreeRTOS tick rounding,
-scheduling and callback/yield overhead can increase elapsed time beyond the
-requested-delay sum. Host callback tests establish software placement and
-requested durations, not measured scheduler behavior on a device.
-
-`readNackRetries` defaults to zero, including in this example. An application
-may explicitly allow up to three additional MV3/MV4/status attempts after a
-control-byte NACK, successful STOP, idle-line checks, and a fixed 1 ms HAL pause.
-Identity reads, custom reads, writes, PEC failures, and timeouts are never
-retried. The optional `allowReadRetry` callback can veto attempts for a deadline,
-cancellation, or a latched adapter error. See
-[Config.h](../include/EE871/Config.h) for the callback contract.
+Only post-write quiet waits use the optional millisecond/yield callbacks.
+The default 10 ms slices preserve the configured requested total; valid slice
+sizes are 1..50 ms. Delay precedes yield, including the final partial slice;
+zero waits invoke neither. Protocol signaling, flash STOP stretching and the
+fixed retry pause still use microsecond timing. The adapter's tick rounding
+above avoids under-waiting, but scheduler and callback overhead can increase
+elapsed time. Void callbacks cannot report failure or let the core verify
+elapsed time; no hardware scheduler or watchdog improvement is established.
 
 The CLI calls `device.tick(nowMs())` using `esp_timer_get_time()` and yields
-between command-loop iterations with `vTaskDelay()`. The application owns
-sampling cadence, warm-up and freshness policy, and explicit recovery. An
-OFFLINE session stays latched until `recover()` succeeds; ordinary bus
-operations return the latched error. `probe()` is health-neutral diagnostics.
-Status reads can trigger a measurement under the sensor's documented timing
-conditions, so account for that side effect in a sampling design.
+between command-loop iterations with `vTaskDelay()`. It does not implement a
+production sampling or automatic recovery policy. The application owns
+warm-up, freshness, status-read side effects and explicit recovery. OFFLINE
+remains latched until full identity/capability recovery succeeds.
 
-Typed offset/gain and calibration-point operations read their support byte
-on demand before accessing calibration; include that pointer/read pair in the
-operation budget. `startAutoAdjust()` validates status first and returns
-`BUSY` if adjustment is already running. These checks are shared core behavior
-for both framework adapters.
+The framework-independent contracts are maintained in the library README:
 
-Treat `persistentConfigDirty()` independently of transport health. An
-uncertain single-byte, multi-byte, or raw custom write can leave hardware
-changed even when later communication succeeds. `resyncPersistentConfig()`
-reads the affected registers before clearing dirty state; its traffic grows
-with the number of pending targets. Recovery and restarting a session retain
-that record. See the [persistent-write contract](../README.md#persistent-configuration-writes)
-for the resync checks and limits of readback verification.
+- [Timing and blocking](../README.md#timing-and-blocking): callback limits,
+  bounded read retries and caller-owned scheduling overhead.
+- [Persistent configuration writes](../README.md#persistent-configuration-writes):
+  dirty-state retention, cache-only operation evidence, and coherence resync
+  versus verification of the requested outcome. CLI admission remains separate
+  from the core's ability to accumulate pending targets.
+- [Requested-delay bounds](../README.md#programmatic-requested-delay-bounds):
+  pure calculation behind `bounds`; the separate `timing` command performs
+  live bus tests.
 
-The `operation` CLI command exposes cache-only `getLastPersistentOperation()`
-evidence: requested/observed bytes, progress and the original result. CLI
-maintenance admission blocks dirty state, possible effects without matching
-readback and possible address changes. Recovery and coherence resync cannot
-verify original intent or bypass that admission. Core writes retain their
-existing ability to accumulate pending targets; application admission is
-separate from that compatibility contract.
-
-Use `bounds` for bus-silent requested-delay calculations from the configured
-settings. It calls the pure `operationTimingBound()` API and performs no
-selected operation. GPIO callback time, scheduler latency and callback overhead
-are excluded; this is not a measured wall-time bound. The `timing` command
-instead performs live bus tests. See the
-[requested-delay contract](../README.md#programmatic-requested-delay-bounds).
+See the [HIL/CLI guide](EE871_E2_HIL_RUNNER.md) for checked-sample commands,
+maintenance admission and diagnostic evidence.
 
 ## Verification
 

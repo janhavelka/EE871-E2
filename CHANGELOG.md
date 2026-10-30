@@ -55,6 +55,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and validation matrix. Completed implementation prompts and branch audits
   are archived in Git history. Software verification and historical hardware
   evidence retain separate commit identities and limits.
+- Removed duplicate chapter notes, generated PDF transcriptions and the
+  out-of-scope wireless-system guide. Kept the five wired-E2 source PDFs and
+  folded useful reference notes into the protocol guide. IDF example setup
+  links to the maintained integration and command contracts.
 
 ### Fixed
 

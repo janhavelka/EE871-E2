@@ -35,8 +35,6 @@ INPUT                  = README.md \
                          CHANGELOG.md \
                          CONTRIBUTING.md \
                          docs/README.md \
-                         docs/extracted-md/README.md \
-                         docs/pdf-extracted-md/README.md \
                          examples/idf/basic_bringup/README.md \
                          include/EE871 \
                          docs/EE871_E2_Protocol_and_Register_Map.md \

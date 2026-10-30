@@ -17,22 +17,22 @@ results live in one validation matrix, with exact firmware versions and limits.
 
 ## Vendor references
 
-The original PDFs are retained as the authority for device behavior:
+Keep the original wired-E2 sources as the authority for device behavior. The
+protocol guide above is the single maintained summary; separate chapter notes
+and generated PDF transcriptions are not maintained.
 
-- [E2 interface specification v4.1](E2_interface_specification_v4_1.pdf)
-- [E2 interface application note AN0105](E2_interface_utilising_AN0105.pdf)
-- [EE871 CO2 application note AN1611-1](EE871_E2_CO2_interface_AN1611-1.pdf)
-- [EE871 E2 interface addendum](EE871_E2_interface_addendum.pdf)
-- [EE871 digital interface user guide](EE871_digital_interface_user_guide.pdf)
-- [EE871/EE240 wireless user guide](EE871_EE240_wireless_user_guide.pdf)
+| Source | Purpose |
+| --- | --- |
+| [E2 interface specification v4.1](E2_interface_specification_v4_1.pdf) | Generic physical layer, framing, commands and custom memory. |
+| [Application note AN0105](E2_interface_utilising_AN0105.pdf) | Vendor master examples and device-specific communication exceptions. |
+| [CO2 application note AN1611-1](EE871_E2_CO2_interface_AN1611-1.pdf) | CO2 values, triggering, intervals, flash timing and power modes. |
+| [EE871 E2 addendum](EE871_E2_interface_addendum.pdf) | EE871 identity, supported fields and electrical/timing requirements. |
+| [EE871 digital interface user guide](EE871_digital_interface_user_guide.pdf) | Wired product variants, connector, supply and range. |
 
-Searchable versions are kept alongside the originals:
-
-- [Curated notes](extracted-md/README.md) summarize electrical requirements,
-  commands, registers, modes, initialization, and variant differences.
-- [Raw PDF extracts](pdf-extracted-md/README.md) preserve searchable source
-  text. Extraction can disturb tables and notation; verify ambiguous details
-  against the original PDF before changing driver behavior.
+Use the product-specific E2 sources when they qualify the generic protocol.
+Confirm the ordered probe variant; Modbus and EE240 wireless-system facts do
+not define this driver's E2 contract. Search the PDFs directly and check the
+original diagrams and tables when a value is ambiguous.
 
 ## Documentation maintenance
 
@@ -48,6 +48,9 @@ guides. The completed October work is available at commit `795f970`:
 and [retained-branch audit](https://github.com/janhavelka/EE871-E2/blob/795f9708754300c6c3f0782998291cfa095e8e40/docs/RETAINED_BRANCH_AUDIT.md).
 These are historical records, not pending implementation instructions. Branch
 retirement remains a separate maintenance decision.
+
+The redundant chapter notes, raw PDF extracts and wireless-system guide are
+available in the [reference archive at `22d1299`](https://github.com/janhavelka/EE871-E2/tree/22d1299f039e512bd1f8230b5f95f51271124a48/docs).
 
 Generated Doxygen output and local test captures are not maintained source
 documents. Keep lasting usage and compatibility contracts in the README,

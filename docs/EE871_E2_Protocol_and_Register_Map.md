@@ -4,7 +4,6 @@
 guide describes ranges up to **5% CO2 (50,000 ppm)**; confirm the ordered model.
 The driver represents all 16-bit values and leaves product/application range
 validation to the caller.
-This document is a **curated implementation reference** for writing an E2 master library.
 
 Last reviewed: 2026-10-30.
 
@@ -48,6 +47,10 @@ From EE871 user guide ("Modbus / E2" wiring diagram):
 - **Pin 3:** DATA  
 - **Pin 4:** CLOCK
 
+Confirm this mapping against the ordered E2 probe drawing. The Modbus variant
+uses different pin assignments; wireless-system specifications do not define
+the wired E2 driver's range or behavior.
+
 ### 2.3 Voltage levels and limits (E2 spec)
 Let VDD be the E2 bus pull-up voltage.
 
@@ -70,6 +73,17 @@ Let VDD be the E2 bus pull-up voltage.
   - CO2 addendum: **4.7 kΩ...100 kΩ**
 - Clock frequency depends on line capacitance + pull-ups.
 - EE871 E2 cable length guideline: **<= 10 m**.
+
+### 2.5 Probe supply and communication load
+
+The wired EE871 user guide specifies **4.75...7.5 VDC** probe supply and
+average current from **120 uA at a 1 h interval to 4.3 mA at 15 s**. The probe
+supply range is separate from the bus pull-up range above. Use the ordered
+probe's current-peak specification when sizing its supply; product and module
+current profiles in the retained sources are not interchangeable.
+
+AN1611-1 describes communication as a separate power state. Unnecessary bus
+traffic can prevent return to sleep; applications own polling and power policy.
 
 ---
 
@@ -355,8 +369,13 @@ Specific interval factors (signed 8-bit convention described as):
 - `0xCB` Specific interval CO2: Positive = global interval multiplier; Negative = global interval divider  
 (Other quantities are at 0xC8..0xCA; usually irrelevant for EE871 CO2-only.)
 
+The EE871 CO2 notes do not establish the factor's exact signed encoding or
+reset value. Generic map semantics alone are not product qualification.
+
 #### 7.4.7 Measurement value filtering
 - `0xD3` Filter CO2 (details product-specific; see device addendum / datasheet)
+
+The retained EE871 CO2 notes do not define the numeric filter choices.
 
 #### 7.4.8 Runtime operating mode register
 - `0xD8` Operating mode (bitfield):
@@ -540,9 +559,7 @@ For reading multi-byte blocks (like 0xA0..0xAF), do step (1) once, then repeat (
 ## 12) Vendor implementation examples
 
 [AN0105](E2_interface_utilising_AN0105.pdf) includes the original 8051 master
-examples for START/STOP, bytes, ACK/NACK, and checksum handling. The complete
-[searchable extract](https://github.com/janhavelka/EE871-E2/blob/main/docs/pdf-extracted-md/E2_interface_utilising_AN0105.md) is
-retained alongside the PDF.
+examples for START/STOP, bytes, ACK/NACK, and checksum handling.
 
 Those examples demonstrate framing; their broad retry loop and
 processor-dependent delays do not define this library's timing, diagnostics,
@@ -693,5 +710,4 @@ recovery, diagnostic or resync helper replays the request.
 - [AN0105](E2_interface_utilising_AN0105.pdf): vendor master software examples.
 - [EE871 E2 addendum](EE871_E2_interface_addendum.pdf): device parameters and timing.
 - [AN1611-1](EE871_E2_CO2_interface_AN1611-1.pdf): CO2 timing, MV3/MV4 meaning, flash writes, and power modes. Sections 4 and 10 qualify status-trigger behavior; Section 5 specifies flash timing; Sections 7.1-7.2 describe the volatile pointer.
-- [EE240 wireless guide](EE871_EE240_wireless_user_guide.pdf): wireless-network context, 10,000 ppm range, pinout, and interval.
 - [EE871 digital interface guide](EE871_digital_interface_user_guide.pdf): wired device, 50,000 ppm range, pinout, and interval.
