@@ -4,6 +4,7 @@ license: "MIT"
 maintainers:
   - "Jan Havelka (THYMOS Solution s.r.o.) <info@thymos.cz>"
 url: "https://github.com/janhavelka/EE871-E2"
+repository: "https://github.com/janhavelka/EE871-E2.git"
 targets:
   - esp32s2
   - esp32s3
