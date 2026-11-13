@@ -1,6 +1,8 @@
 version: "1.1.0"
 description: "Production-oriented EE871 CO2 sensor driver for GPIO-style E2 bus signaling"
 license: "MIT"
+maintainers:
+  - "Jan Havelka (THYMOS Solution s.r.o.) <info@thymos.cz>"
 url: "https://github.com/janhavelka/EE871-E2"
 targets:
   - esp32s2

@@ -59,6 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   out-of-scope wireless-system guide. Kept the five wired-E2 source PDFs and
   folded useful reference notes into the protocol guide. IDF example setup
   links to the maintained integration and command contracts.
+- Unified author, copyright and contact metadata: THYMOS Solution s.r.o., Jan Havelka, info@thymos.cz.
 
 ### Fixed
 
